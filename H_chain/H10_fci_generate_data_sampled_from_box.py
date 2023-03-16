@@ -8,6 +8,7 @@ import sys
 
 box_edge = float(sys.argv[1])
 basis = int(sys.argv[2]) # 0: local, 1: canonical, 2: split
+number_atoms = int(sys.argv[3])
 
 n_data_points = 1000
 seed = 1
@@ -131,7 +132,7 @@ np.save("S.npy", S)
 np.save("one_RDM.npy", one_RDM)
 np.save("two_RDM.npy", two_RDM)
 
-open("ev_cont_data_{}_{}.txt".format(box_edge, basis_str), "w")
+open("ev_cont_data_{}_{}.txt".format(box_edge, basis_str), "w").close()
 
 for i in range(n_data_points):
     # Sample position
