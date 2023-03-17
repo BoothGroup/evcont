@@ -8,8 +8,8 @@ import sys
 
 box_edge = float(sys.argv[1])
 basis = int(sys.argv[2]) # 0: local, 1: canonical, 2: split
-n_data_points = int(sys.argv[4])
-seed = int(sys.argv[5])
+n_data_points = int(sys.argv[3])
+seed = int(sys.argv[4])
 
 
 number_atoms = 12
