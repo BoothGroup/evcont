@@ -72,7 +72,7 @@ def get_ham(positions):
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, loc_coeff), norb).copy()
     return h1, h2, mol.energy_nuc(), ehf
 
-if load_path == "":
+if load_path == "None":
     if number_atoms == 10:
         equilibrium_dist = 1.78596
     elif number_atoms == 8:
