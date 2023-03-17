@@ -74,72 +74,36 @@ def get_ham(positions):
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, loc_coeff), norb).copy()
     return h1, h2, mol.energy_nuc(), ehf
 
-if load_path == "None":
-    if number_atoms == 10:
-        equilibrium_dist = 1.78596
-    elif number_atoms == 8:
-        equilibrium_dist = 1.76960
-    elif number_atoms == 12:
-        equilibrium_dist = 1.79612
-    else:
-        # Find equilibrium dist
-        left = 1.4
-        right = 1.9
-
-        for j in range(30):
-            dist_range = np.linspace(left, right, num=5, endpoint=True)
-            ens = []
-            for dist in dist_range:
-                cisolver = fci.direct_spin0.FCI()
-                h1, h2, nuc_en, ehf = get_ham([(x*dist, 0., 0.) for x in range(number_atoms)])
-                e, fcivec = cisolver.kernel(h1, h2, norb, (nelec//2, nelec//2))
-                ens.append(e+nuc_en)
-            arg_min = np.argmin(np.array(ens))
-            left = dist_range[arg_min-1]
-            right = dist_range[arg_min+1]
-            equilibrium_dist = dist_range[arg_min]
-            print(equilibrium_dist)
-
-    equilibrium_pos = np.array([(x*equilibrium_dist, 0., 0.) for x in range(number_atoms)])
-
-    training_stretches = np.array([0., -0.25, 0.25, 0.5, -0.5, 1.0, -1.0])
-
-    trainig_dists = equilibrium_dist + training_stretches
-
-    # Generate fci states
-    for i, dist in enumerate(trainig_dists):
-        positions = [(x, 0., 0.) for x in dist*np.arange(number_atoms)]
-        h1, h2, _, _ = get_ham(positions)
-        cisolver = fci.direct_spin0.FCI()
-        e, fcivec = cisolver.kernel(h1, h2, norb, (nelec//2, nelec//2))
-        np.save("fci_vec_{}.npy".format(i), fcivec)
-
-
-    """
-    Create overlap matrix, 1RDM, and 2RDM matrices
-    """
-
-    S = np.zeros((len(trainig_dists), len(trainig_dists)))
-    one_RDM = np.zeros((len(trainig_dists), len(trainig_dists), norb, norb))
-    two_RDM = np.zeros((len(trainig_dists), len(trainig_dists), norb, norb, norb, norb))
-
-    for (i, dist_a) in enumerate(trainig_dists):
-        vec_a = np.load("fci_vec_{}.npy".format(i))
-        for (j, dist_b) in enumerate(trainig_dists):
-            vec_b = np.load("fci_vec_{}.npy".format(j))
-            S[i,j] = vec_a.flatten().dot(vec_b.flatten())
-            cisolver = fci.direct_spin0.FCI()
-            rdm1, rdm2 = cisolver.trans_rdm12(vec_a, vec_b, norb, (nelec//2, nelec//2))
-            one_RDM[i, j, :, :] = rdm1
-            two_RDM[i, j, :, :, :, :] = rdm2
-
-    np.save("S.npy", S)
-    np.save("one_RDM.npy", one_RDM)
-    np.save("two_RDM.npy", two_RDM)
+if number_atoms == 10:
+    equilibrium_dist = 1.78596
+elif number_atoms == 8:
+    equilibrium_dist = 1.76960
+elif number_atoms == 12:
+    equilibrium_dist = 1.79612
 else:
-    S = np.load(load_path + "S.npy")
-    one_RDM = np.load(load_path + "one_RDM.npy")
-    two_RDM = np.load(load_path + "two_RDM.npy")
+    # Find equilibrium dist
+    left = 1.4
+    right = 1.9
+
+    for j in range(30):
+        dist_range = np.linspace(left, right, num=5, endpoint=True)
+        ens = []
+        for dist in dist_range:
+            cisolver = fci.direct_spin0.FCI()
+            h1, h2, nuc_en, ehf = get_ham([(x*dist, 0., 0.) for x in range(number_atoms)])
+            e, fcivec = cisolver.kernel(h1, h2, norb, (nelec//2, nelec//2))
+            ens.append(e+nuc_en)
+        arg_min = np.argmin(np.array(ens))
+        left = dist_range[arg_min-1]
+        right = dist_range[arg_min+1]
+        equilibrium_dist = dist_range[arg_min]
+        print(equilibrium_dist)
+
+equilibrium_pos = np.array([(x*equilibrium_dist, 0., 0.) for x in range(number_atoms)])
+
+S = np.load(load_path + "S.npy")
+one_RDM = np.load(load_path + "one_RDM.npy")
+two_RDM = np.load(load_path + "two_RDM.npy")
 
 open("ev_cont_data_{}_{}.txt".format(box_edge, basis_str), "w").close()
 
