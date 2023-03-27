@@ -8,6 +8,8 @@ import os
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
+import sys
+
 
 box_edge = float(sys.argv[1])
 n_data_points = int(sys.argv[2])
