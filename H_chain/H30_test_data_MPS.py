@@ -14,21 +14,15 @@ n_data_points = int(sys.argv[2])
 seed = int(sys.argv[3])
 
 
-load_path = "/users/k1802890/data/AC/H12/H12_box_displacement_create_quantities/"
-
-
+load_path = "/users/k1802890/data/AC/H30/H30_DMRG_training_data/"
 
 rng = np.random.default_rng(seed)
 
 norb = 30
 nelec = 30
 
-M_max = 500
+M_max = 200
 
-
-
-
-fci_vecs = []
 
 def construct_ham(positions):
     mol = gto.Mole()
