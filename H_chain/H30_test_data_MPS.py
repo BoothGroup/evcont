@@ -54,7 +54,7 @@ open("ev_cont_data_{}.txt".format(box_edge), "w").close()
 
 for i in range(n_data_points):
     # Sample position
-    shifts = (rng.random(size=(number_atoms, 3)) - 0.5) * 2 * box_edge
+    shifts = (rng.random(size=(nelec, 3)) - 0.5) * 2 * box_edge
     sampled_pos = reference_pos + shifts
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2)
     mps_solver.initialize_system(norb, n_elec=nelec)
