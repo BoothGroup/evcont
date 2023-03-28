@@ -60,7 +60,7 @@ for i in range(n_data_points):
     mps_solver.initialize_system(norb, n_elec=nelec)
     h1, h2, nuc_en = construct_ham(sampled_pos)
     mpo = mps_solver.get_qc_mpo(h1e=h1, g2e=h2, iprint=1)
-    ket = mps_solver.get_random_mps(tag="GS_MPS_{}".format(i), bond_dim=M_max, nroots=1)
+    ket = mps_solver.get_random_mps(tag="GS_MPS", bond_dim=M_max, nroots=1)
     en_MPS = mps_solver.dmrg(mpo, ket, n_sweeps=50)
     H = np.sum(one_RDM * h1, axis=(-1,-2)) + 0.5 * np.sum(two_RDM * h2, axis=(-1,-2,-3,-4))
     vals, vecs = eigh(H, S)
