@@ -50,7 +50,7 @@ S = np.load(load_path + "S.npy")
 one_RDM = np.load(load_path + "one_RDM.npy")
 two_RDM = np.load(load_path + "two_RDM.npy")
 
-open("ev_cont_data_{}_{}.txt".format(box_edge, basis_str), "w").close()
+open("ev_cont_data_{}.txt".format(box_edge), "w").close()
 
 for i in range(n_data_points):
     # Sample position
@@ -66,7 +66,7 @@ for i in range(n_data_points):
     vals, vecs = eigh(H, S)
     argmin = np.argmin(vals.real)
     en_approx = vals[argmin].real
-    with open("ev_cont_data_{}_{}.txt".format(box_edge, basis_str), "a") as fl:
+    with open("ev_cont_data_{}.txt".format(box_edge), "a") as fl:
         fl.write("{}  {}  {}\n".format(en_MPS+nuc_en, en_approx+nuc_en, ehf))
 
 
