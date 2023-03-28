@@ -41,7 +41,7 @@ def construct_ham(positions):
     h1 = np.linalg.multi_dot((loc_coeff.T, scf.hf.get_hcore(mol), loc_coeff))
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, loc_coeff), norb)
 
-    return h1, h2, mol.nuc_en()
+    return h1, h2, mol.energy_nuc()
 
 
 reference_pos = np.array([(x*2., 0., 0.) for x in range(nelec)])
