@@ -2,7 +2,7 @@ import numpy as np
 
 from pyscf import scf, gto, ao2mo, fci, lo
 
-from scipy.linalg import eig
+from scipy.linalg import eig, eigh
 
 import os
 
