@@ -41,7 +41,11 @@ def construct_ham(positions):
     h1 = np.linalg.multi_dot((loc_coeff.T, scf.hf.get_hcore(mol), loc_coeff))
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, loc_coeff), norb)
 
-    return h1, h2, mol.energy_nuc()
+    myhf = scf.RHF(mol)
+    ehf = myhf.scf()
+
+
+    return h1, h2, mol.energy_nuc(), ehf
 
 
 reference_pos = np.array([(x*2., 0., 0.) for x in range(nelec)])
@@ -58,7 +62,7 @@ for i in range(n_data_points):
     sampled_pos = reference_pos + shifts
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2)
     mps_solver.initialize_system(norb, n_elec=nelec)
-    h1, h2, nuc_en = construct_ham(sampled_pos)
+    h1, h2, nuc_en, ehf = construct_ham(sampled_pos)
     mpo = mps_solver.get_qc_mpo(h1e=h1, g2e=h2, iprint=1)
     ket = mps_solver.get_random_mps(tag="GS_MPS", bond_dim=M_max, nroots=1)
     en_MPS = mps_solver.dmrg(mpo, ket, n_sweeps=50)
