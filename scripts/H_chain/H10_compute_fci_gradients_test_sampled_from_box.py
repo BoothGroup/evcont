@@ -43,7 +43,9 @@ for i in range(n_data_points):
     shifts = (rng.random(size=(10, 3)) - 0.5) * 2 * box_edge
     sampled_pos = equilibrium_pos + shifts
     mol = get_mol(sampled_pos)
-    en, grad = mcscf.CASCI(mol, 10, 10).nuc_grad_method().as_scanner()(mol)
+    mf = scf.hf_symm.SymAdaptedRHF(mol)
+    en, grad = mcscf.CASCI(mf, 10, 10).nuc_grad_method().as_scanner()(mol)
+
     with open("H10_en_{}.txt".format(box_edge), "a") as fl:
         fl.write("{}\n".format(en))
     grads.append(grad)
