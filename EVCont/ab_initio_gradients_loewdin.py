@@ -96,7 +96,7 @@ def get_two_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
 
     return h2_grad
 
-def get_energy_wit_grad(mol, one_RDM, two_RDM, S):
+def get_energy_with_grad(mol, one_RDM, two_RDM, S):
     # Construct h1 and h2
     ao_mo_trafo = np.array(get_loewdin_trafo(jnp.array(mol.intor("int1e_ovlp"))), dtype=float)
     ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
