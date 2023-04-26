@@ -36,9 +36,9 @@ equilibrium_dist = 1.78596
 
 equilibrium_pos = np.array([(x*equilibrium_dist, 0., 0.) for x in range(10)])
 
-S = np.load("/home/yannic/uni/mountpoints/create/data/AC/H10/H10_box_displacement_r_0.025_local/S.npy")
-one_RDM = np.load("/home/yannic/uni/mountpoints/create/data/AC/H10/H10_box_displacement_r_0.025_local/one_RDM.npy")
-two_RDM = np.load("/home/yannic/uni/mountpoints/create/data/AC/H10/H10_box_displacement_r_0.025_local/two_RDM.npy")
+S = np.load("/users/k1802890/data/AC/H10/H10_box_displacement_r_0.025_local/S.npy")
+one_RDM = np.load("/users/k1802890/data/AC/H10/H10_box_displacement_r_0.025_local/one_RDM.npy")
+two_RDM = np.load("/users/k1802890/data/AC/H10/H10_box_displacement_r_0.025_local/two_RDM.npy")
 
 
 open("H10_en_predicted_{}.txt".format(box_edge), "w").close()
