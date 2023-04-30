@@ -31,7 +31,7 @@ norb = loc_coeff.shape[0]
 h1 = np.linalg.multi_dot((loc_coeff.T, scf.hf.get_hcore(mol), loc_coeff))
 h2 = ao2mo.restore(1, ao2mo.kernel(mol, loc_coeff), norb)
 
-for M_max in [50, 100, 150, 200, 250, 300, 350, 400, 450, 500]:
+for i, M_max in enumerate([50, 100, 150, 200, 250, 300, 350, 400, 450, 500]):
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2)
     mps_solver.initialize_system(norb, n_elec=np.sum(mol.nelec))
 
