@@ -80,7 +80,7 @@ open("DMRG_result.txt", "w").close()
 rank = MPI.COMM_WORLD.Get_rank()
 
 while not converged:
-    mps_solver.dmrg(mpo, ket, bond_dims=[bnd_dim], n_sweeps=1000, iprint=1, noises = [0], tol=1.e-3)
+    mps_solver.dmrg(mpo, ket, bond_dims=[bnd_dim], n_sweeps=1000, iprint=1, noises =  [1e-4] * 4 + [1e-5] * 4 + [0], tol=1.e-3)
     ket.info.save_data("./MPS_{}.bin".format(bnd_dm))
     bnd_dms, _, ens = mps_solver.get_dmrg_results()
     energies.append(ens[-1][0])
