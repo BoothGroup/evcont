@@ -86,7 +86,7 @@ while not converged:
     energies.append(ens[-1][0])
     bnd_dim += 25
     if len(energies) > 1:
-        if np.isclose(energies[-1], energies[-2]):
+        if np.isclose(energies[-1], energies[-2], rtol = 1.e-7):
             converged = True
     if rank == 0:
         print(bnd_dms[-1], energies[-1], len(ens))
