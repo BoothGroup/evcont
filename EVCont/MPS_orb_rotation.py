@@ -1,13 +1,13 @@
 import scipy.linalg
 
-from block2 import QCTypes, OpNamesSet, OpNames, TETypes, VectorUBond
-from block2.su2 import HamiltonianQC, MPOQC, SimplifiedMPO, AntiHermitianRuleQC, RuleQC, TimeEvolution, MovingEnvironment
+from block2 import QCTypes, OpNamesSet, OpNames, TETypes, VectorUBond, VectorDouble, TruncPatternTypes
+from block2.su2 import HamiltonianQC, MPOQC, SimplifiedMPO, AntiHermitianRuleQC, RuleQC, TimeEvolution, MovingEnvironment, TDDMRG
 
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 # Little utility function to apply the single-body orbital rotation to an MPS
-def orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None):
+def orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None, bond_dim=1000):
     if rotation_driver is None:
         rotation_driver = DMRGDriver(symm_type=SymmetryTypes.SU2)
         rotation_driver.initialize_system(orbital_rotation_matrix.shape[0])
@@ -36,13 +36,24 @@ def orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None):
     # Time Evolution (anti-Hermitian)
     # te_type can be TETypes.RK4 or TETypes.TangentSpace (TDVP)
     te_type = TETypes.RK4
-    te = TimeEvolution(me_kappa, VectorUBond([1000]), TETypes.RK4)
+    # te_type = TETypes.TangentSpace
+    te = TimeEvolution(me_kappa, VectorUBond([bond_dim]), te_type)
     te.hermitian = False
-    te.iprint = 2
+    te.iprint = 0
     te.n_sub_sweeps = 2
     te.normalize_mps = False
-    for i in range(n_steps):
-        te.solve(1, dt, ket.center == 0)
-        print("T = %10.5f <E> = %20.15f <Norm^2> = %20.15f" %
-                ((i + 1) * dt, te.energies[-1], te.normsqs[-1]))
+    te.trunc_pattern = TruncPatternTypes.TruncAfterEven
+    te.solve(n_steps, dt, ket.center == 0)
+    return te
 
+def converge_orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None, convergence_thresh=1.e-15):
+    converged = False
+    bond_dim = 10
+    while not converged:
+        ket_temp = ket.deep_copy("tmp_copy")
+        te = orbital_rotation_mps(ket_temp, orbital_rotation, bond_dim=bond_dim)
+        if np.max(np.array(te.discarded_weights)) < convergence_thresh:
+            converged = True
+        else:
+            bond_dim += 10
+    return ket_temp
