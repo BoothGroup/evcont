@@ -12,8 +12,8 @@ from .ab_initio_eigenvector_continuation import approximate_ground_state
 def get_overlap_grad(mol):
     inner_deriv = mol.intor('int1e_ipovlp',comp=3)
 
-    deriv = np.zeros((3, np.sum(mol.nelec), mol.nao, mol.nao))
-    for i in range(np.sum(mol.nelec)):
+    deriv = np.zeros((3, mol.natm, mol.nao, mol.nao))
+    for i in range(mol.natm):
         _, _, x, y = mol.aoslice_by_atom()[i]
         deriv[:,i,x:y,:] -= inner_deriv[:,x:y, :]
 
@@ -38,7 +38,7 @@ def get_derivative_ao_mo_trafo(mol):
 
 def get_one_el_grad_ao(mol):
     hcore_gen = grad.RHF(scf.RHF(mol)).hcore_generator()
-    return_val = np.array([hcore_gen(i) for i in range(np.sum(mol.nelec))])
+    return_val = np.array([hcore_gen(i) for i in range(mol.natm)])
     return np.transpose(return_val, (2,3,0,1))
 
 def get_one_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad = None):
@@ -64,8 +64,8 @@ def get_one_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad = None):
 def get_two_el_grad_ao(mol):
     inner_deriv = mol.intor('int2e_ip1',comp=3)
 
-    deriv = np.zeros((3, np.sum(mol.nelec), mol.nao, mol.nao, mol.nao, mol.nao))
-    for i in range(np.sum(mol.nelec)):
+    deriv = np.zeros((3, mol.natm, mol.nao, mol.nao, mol.nao, mol.nao))
+    for i in range(mol.natm):
         _, _, x, y = mol.aoslice_by_atom()[i]
         deriv[:,i,x:y,:,:,:] -= inner_deriv[:,x:y]
 

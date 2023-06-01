@@ -1,3 +1,5 @@
+import numpy as np
+
 import scipy.linalg
 
 from block2 import QCTypes, OpNamesSet, OpNames, TETypes, VectorUBond, VectorDouble, TruncPatternTypes
@@ -6,8 +8,15 @@ from block2.su2 import HamiltonianQC, MPOQC, SimplifiedMPO, AntiHermitianRuleQC,
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
+def get_reorder_trafo(reorder_idx):
+    reorder_mat = np.eye(reorder_idx.shape[0])[reorder_idx,:]
+    for j in range(reorder_mat.shape[0]):
+        if scipy.linalg.det(reorder_mat[:j+1, :j+1]) < 0:
+            reorder_mat[:, j] *= -1
+    return reorder_mat
+
 # Little utility function to apply the single-body orbital rotation to an MPS
-def orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None, bond_dim=1000):
+def orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None, bond_dim=1000, convergence_thresh=1.e-6):
     if rotation_driver is None:
         rotation_driver = DMRGDriver(symm_type=SymmetryTypes.SU2)
         rotation_driver.initialize_system(orbital_rotation_matrix.shape[0])
@@ -39,21 +48,26 @@ def orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None, b
     # te_type = TETypes.TangentSpace
     te = TimeEvolution(me_kappa, VectorUBond([bond_dim]), te_type)
     te.hermitian = False
-    te.iprint = 0
+    te.iprint = 1
     te.n_sub_sweeps = 2
     te.normalize_mps = False
     te.trunc_pattern = TruncPatternTypes.TruncAfterEven
-    te.solve(n_steps, dt, ket.center == 0)
-    return te
-
-def converge_orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None, convergence_thresh=1.e-15):
     converged = False
-    bond_dim = 10
+    for i in range(n_steps):
+        te.solve(1, dt, ket.center == 0)
+        dw = te.discarded_weights[0]
+        if dw > convergence_thresh:
+            break
+    if dw <= convergence_thresh:
+        converged = True
+    return converged
+
+def converge_orbital_rotation_mps(ket, orbital_rotation_matrix, init_bond_dim=25, bond_dim_incr=25, rotation_driver = None, convergence_thresh=1.e-6):
+    converged = False
+    bond_dim = init_bond_dim
     while not converged:
         ket_temp = ket.deep_copy("tmp_copy")
-        te = orbital_rotation_mps(ket_temp, orbital_rotation, bond_dim=bond_dim)
-        if np.max(np.array(te.discarded_weights)) < convergence_thresh:
-            converged = True
-        else:
-            bond_dim += 10
+        converged = orbital_rotation_mps(ket_temp, orbital_rotation_matrix, bond_dim=bond_dim, rotation_driver=rotation_driver, convergence_thresh=convergence_thresh)
+        if not converged:
+            bond_dim += bond_dim_incr
     return ket_temp
