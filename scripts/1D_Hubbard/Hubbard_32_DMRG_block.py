@@ -5,10 +5,6 @@ import sys
 U = float(sys.argv[1])
 OBC = bool(int(sys.argv[2]))
 
-U=8
-OBC=False
-
-
 L = n_elec = 32
 
 driver = DMRGDriver(symm_type=SymmetryTypes.SU2)
