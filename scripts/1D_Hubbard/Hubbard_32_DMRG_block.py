@@ -7,7 +7,7 @@ OBC = bool(int(sys.argv[2]))
 
 L = n_elec = 32
 
-driver = DMRGDriver(stack_mem=1 << 40, stack_mem_ratio=0.8, symm_type=SymmetryTypes.SU2)
+driver = DMRGDriver(stack_mem=1 << 36, stack_mem_ratio=0.8, symm_type=SymmetryTypes.SU2)
 driver.initialize_system(n_sites=L, n_elec=n_elec, spin=0)
 
 t = 1
