@@ -59,7 +59,7 @@ for i in range(h2.shape[0]):
 mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=True)
 mps_solver.initialize_system(norb, n_elec=np.sum(mol.nelec))
 
-mpo = mps_solver.get_qc_mpo(h1e=h1, g2e=h2, ecore=mol.energy_nuc(), iprint=1, reorder=False)
+mpo = mps_solver.get_qc_mpo(h1e=h1, g2e=h2, ecore=mol.energy_nuc(), iprint=1, reorder=None)
 
 bnd_dim = 25
 
