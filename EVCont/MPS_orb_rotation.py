@@ -2,41 +2,72 @@ import numpy as np
 
 import scipy.linalg
 
-from block2 import QCTypes, OpNamesSet, OpNames, TETypes, VectorUBond, VectorDouble, TruncPatternTypes
-from block2.su2 import HamiltonianQC, MPOQC, SimplifiedMPO, AntiHermitianRuleQC, RuleQC, TimeEvolution, MovingEnvironment, TDDMRG
+from block2 import (
+    QCTypes,
+    OpNamesSet,
+    OpNames,
+    TETypes,
+    VectorUBond,
+    VectorDouble,
+    TruncPatternTypes,
+)
+from block2.su2 import (
+    HamiltonianQC,
+    MPOQC,
+    SimplifiedMPO,
+    AntiHermitianRuleQC,
+    RuleQC,
+    TimeEvolution,
+    MovingEnvironment,
+    TDDMRG,
+)
 
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
-def get_reorder_trafo(reorder_idx):
-    reorder_mat = np.eye(reorder_idx.shape[0])[reorder_idx,:]
-    for j in range(reorder_mat.shape[0]):
-        if scipy.linalg.det(reorder_mat[:j+1, :j+1]) < 0:
-            reorder_mat[:, j] *= -1
-    return reorder_mat
 
 # Little utility function to apply the single-body orbital rotation to an MPS
-def orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None, bond_dim=1000, convergence_thresh=1.e-6):
+def orbital_rotation_mps(
+    ket, orbital_rotation_matrix, rotation_driver=None, bond_dim=1000, dt=0.05, iprint=1
+):
+    assert dt <= 1.0 and dt >= 0.0
+
     if rotation_driver is None:
         rotation_driver = DMRGDriver(symm_type=SymmetryTypes.SU2)
         rotation_driver.initialize_system(orbital_rotation_matrix.shape[0])
 
-    log_orb_rot = scipy.linalg.logm(orbital_rotation_matrix)
+    orbital_rotation_matrix_pos = orbital_rotation_matrix.copy()
+    if scipy.linalg.det(orbital_rotation_matrix_pos) < 0.0:
+        flip_sign = True
+        orbital_rotation_matrix_pos[:,0] *= -1
+        print("sign flip")
+    else:
+        flip_sign = False
 
+    log_orb_rot = scipy.linalg.logm(orbital_rotation_matrix_pos)
 
-    # Hamiltonain for orbital transform
-    hamil_kappa = HamiltonianQC(rotation_driver.vacuum, rotation_driver.n_sites, rotation_driver.orb_sym, rotation_driver.write_fcidump(log_orb_rot, None))
+    assert np.isrealobj(log_orb_rot)
+
+    # perform orbital rotation (with positive det) from old to new basis
+
+    # Hamiltonian for orbital transform
+    hamil_kappa = HamiltonianQC(
+        rotation_driver.vacuum,
+        rotation_driver.n_sites,
+        rotation_driver.orb_sym,
+        rotation_driver.write_fcidump(log_orb_rot, None),
+    )
 
     # MPO (anti-Hermitian)
     mpo_kappa = MPOQC(hamil_kappa, QCTypes.Conventional)
-    mpo_kappa = SimplifiedMPO(mpo_kappa, AntiHermitianRuleQC(RuleQC()), True, True, OpNamesSet((OpNames.R, OpNames.RD)))
+    mpo_kappa = SimplifiedMPO(
+        mpo_kappa,
+        AntiHermitianRuleQC(RuleQC()),
+        True,
+        True,
+        OpNamesSet((OpNames.R, OpNames.RD)),
+    )
 
-
-    # Time Step
-    dt = 0.05
-    # Target time
-    tt = 1.0
-    n_steps = int(abs(tt) / abs(dt) + 0.1)
     me_kappa = MovingEnvironment(mpo_kappa, ket, ket, "DMRG")
     me_kappa.delayed_contraction = OpNamesSet.normal_ops()
     me_kappa.cached_contraction = True
@@ -48,26 +79,68 @@ def orbital_rotation_mps(ket, orbital_rotation_matrix, rotation_driver = None, b
     # te_type = TETypes.TangentSpace
     te = TimeEvolution(me_kappa, VectorUBond([bond_dim]), te_type)
     te.hermitian = False
-    te.iprint = 1
+    te.iprint = iprint
     te.n_sub_sweeps = 2
     te.normalize_mps = False
     te.trunc_pattern = TruncPatternTypes.TruncAfterEven
-    converged = False
-    for i in range(n_steps):
-        te.solve(1, dt, ket.center == 0)
-        dw = te.discarded_weights[0]
-        if dw > convergence_thresh:
-            break
-    if dw <= convergence_thresh:
-        converged = True
-    return converged
 
-def converge_orbital_rotation_mps(ket, orbital_rotation_matrix, init_bond_dim=25, bond_dim_incr=25, rotation_driver = None, convergence_thresh=1.e-6):
+    te.solve(round(1.0 / abs(dt)), dt, ket.center == 0)
+
+    if flip_sign:
+        flip_operator = rotation_driver.expr_builder()
+        flip_operator.add_term("", [], 1)
+        flip_operator.add_term("(C+D)0", [0, 0], -2.0 * np.sqrt(2))
+        flip_operator.add_term("((C+(C+D)0)1+D)0", [0, 0, 0, 0], 4.0)
+        flip_mpo = rotation_driver.get_mpo(flip_operator.finalize(), iprint=iprint)
+        mps_flipped_back = ket.deep_copy("ket_flipped")
+        rotation_driver.multiply(mps_flipped_back, flip_mpo, ket)
+        ket = mps_flipped_back.deep_copy(ket.info.tag)
+
+    return ket
+
+
+# Converges the orbital bon dimension required to match the orbital rotation
+def converge_orbital_rotation_mps(
+    ket,
+    orbital_rotation_matrix,
+    init_bond_dim=25,
+    bond_dim_incr=25,
+    rotation_driver=None,
+    convergence_thresh=1.0e-3,
+    convergence_mpos=None,
+    dt=0.05,
+    iprint = 1,
+):
     converged = False
     bond_dim = init_bond_dim
+
+    if rotation_driver is None:
+        rotation_driver = DMRGDriver(symm_type=SymmetryTypes.SU2)
+        rotation_driver.initialize_system(orbital_rotation_matrix.shape[0])
+
+    if convergence_mpos is None:
+        convergence_mpos = (
+            rotation_driver.get_identity_mpo(),
+            rotation_driver.get_identity_mpo(),
+        )
+
+    reference_expectation = rotation_driver.expectation(ket, convergence_mpos[0], ket, iprint= iprint)
+
     while not converged:
-        ket_temp = ket.deep_copy("tmp_copy")
-        converged = orbital_rotation_mps(ket_temp, orbital_rotation_matrix, bond_dim=bond_dim, rotation_driver=rotation_driver, convergence_thresh=convergence_thresh)
+        rotated_ket = ket.deep_copy("rotated_ket")
+        rotated_ket = orbital_rotation_mps(
+            rotated_ket,
+            orbital_rotation_matrix,
+            bond_dim=bond_dim,
+            rotation_driver=rotation_driver,
+            dt=dt, iprint=iprint
+        )
+        final_expectation = rotation_driver.expectation(
+            rotated_ket, convergence_mpos[1], rotated_ket, iprint=iprint
+        )
+        print(bond_dim, reference_expectation, final_expectation)
+        if abs(reference_expectation - final_expectation) <= convergence_thresh:
+            converged = True
         if not converged:
             bond_dim += bond_dim_incr
-    return ket_temp
+    return rotated_ket
