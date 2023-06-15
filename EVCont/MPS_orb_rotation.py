@@ -126,8 +126,7 @@ def converge_orbital_rotation_mps(
 
     reference_expectation = rotation_driver.expectation(ket, convergence_mpos[0], ket, iprint= iprint)
 
-    with open("orbital_rotation_output_{}_{}.txt".format(ket.info.tag, hash(orbital_rotation_matrix.tobytes())), "w") as fl:
-        fl.write()
+    open("orbital_rotation_output_{}_{}.txt".format(ket.info.tag, hash(orbital_rotation_matrix.tobytes())), "w").close()
 
     while not converged:
         rotated_ket = ket.deep_copy("rotated_ket")
