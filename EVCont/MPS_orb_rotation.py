@@ -133,6 +133,7 @@ def converge_orbital_rotation_mps(
 
     open("orbital_rotation_output_{}_{}.txt".format(ket.info.tag, hash(orbital_rotation_matrix.tobytes())), "w").close()
 
+    converged = False
     while not converged:
         rotated_ket = ket.deep_copy("rotated_ket")
         rotated_ket, converged = orbital_rotation_mps(
