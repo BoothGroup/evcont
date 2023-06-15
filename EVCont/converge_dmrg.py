@@ -26,7 +26,7 @@ def converge_dmrg(h1, h2, nelec, tag, bond_dim_schedule=[2**i for i in range(2,1
 
     for i in range(len(bond_dim_schedule)-1):
         inner_bond_dim_schedule = list(np.round(np.logspace(np.log10(bond_dim_schedule[i]), np.log10(bond_dim_schedule[i+1]), num=2, endpoint=False)).astype(int))
-        mps_solver.dmrg(mpo, ket, bond_dims=inner_bond_dim_schedule, noises = noises, n_sweeps=1000, iprint=1)
+        mps_solver.dmrg(mpo, ket, bond_dims=inner_bond_dim_schedule, noises = noises, n_sweeps=10, iprint=1)
         bnd_dms, dws, ens = mps_solver.get_dmrg_results()
         final_energies.append(ens[-1][0])
         if rank == 0:
