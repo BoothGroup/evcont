@@ -106,7 +106,7 @@ def converge_orbital_rotation_mps(
     init_bond_dim=25,
     bond_dim_incr=25,
     rotation_driver=None,
-    convergence_thresh=1.0e-3,
+    convergence_thresh=1.e-4,
     convergence_mpos=None,
     dt=0.05,
     iprint = 1,
