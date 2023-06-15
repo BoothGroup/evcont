@@ -88,7 +88,7 @@ def orbital_rotation_mps(
 
     for i in range(round(1.0 / abs(dt))):
         te.solve(1, dt, ket.center == 0)
-        if abs(te.normsq[-1] - 1.) > convergence_thresh:
+        if abs(te.normsqs[-1] - 1.) > convergence_thresh:
             converged = False
             break
 
