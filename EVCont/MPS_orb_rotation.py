@@ -143,7 +143,7 @@ def converge_orbital_rotation_mps(
         print(bond_dim, reference_expectation, final_expectation)
 
         with open("orbital_rotation_output_{}_{}.txt".format(ket.info.tag, hash(orbital_rotation_matrix.tobytes())), "a") as fl:
-            fl.write("{}  {}  {}".format(bond_dim, reference_expectation, final_expectation))
+            fl.write("{}  {}  {}\n".format(bond_dim, reference_expectation, final_expectation))
 
         if abs(reference_expectation - final_expectation) <= convergence_thresh:
             converged = True
