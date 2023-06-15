@@ -28,7 +28,7 @@ from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 # Little utility function to apply the single-body orbital rotation to an MPS
 def orbital_rotation_mps(
-    ket, orbital_rotation_matrix, rotation_driver=None, bond_dim=1000, dt=0.05, iprint=1
+    ket, orbital_rotation_matrix, rotation_driver=None, bond_dim=1000, dt=0.05, iprint=1, convergence_thresh = 1.e-4
 ):
     assert dt <= 1.0 and dt >= 0.0
 
@@ -84,7 +84,13 @@ def orbital_rotation_mps(
     te.normalize_mps = False
     te.trunc_pattern = TruncPatternTypes.TruncAfterEven
 
-    te.solve(round(1.0 / abs(dt)), dt, ket.center == 0)
+    converged = True
+
+    for i in range(round(1.0 / abs(dt))):
+        te.solve(1, dt, ket.center == 0)
+        if abs(te.normsq[-1] - 1.) > convergence_thresh:
+            converged = False
+            break
 
     if flip_sign:
         flip_operator = rotation_driver.expr_builder()
@@ -96,7 +102,7 @@ def orbital_rotation_mps(
         rotation_driver.multiply(mps_flipped_back, flip_mpo, ket)
         ket = mps_flipped_back.deep_copy(ket.info.tag)
 
-    return ket
+    return ket, converged
 
 
 # Converges the orbital bon dimension required to match the orbital rotation
@@ -111,7 +117,6 @@ def converge_orbital_rotation_mps(
     dt=0.05,
     iprint = 1,
 ):
-    converged = False
     bond_dim = init_bond_dim
 
     if rotation_driver is None:
@@ -130,12 +135,12 @@ def converge_orbital_rotation_mps(
 
     while not converged:
         rotated_ket = ket.deep_copy("rotated_ket")
-        rotated_ket = orbital_rotation_mps(
+        rotated_ket, converged = orbital_rotation_mps(
             rotated_ket,
             orbital_rotation_matrix,
             bond_dim=bond_dim,
             rotation_driver=rotation_driver,
-            dt=dt, iprint=iprint
+            dt=dt, iprint=iprint, convergence_thresh=convergence_thresh
         )
         final_expectation = rotation_driver.expectation(
             rotated_ket, convergence_mpos[1], rotated_ket, iprint=iprint
@@ -145,8 +150,11 @@ def converge_orbital_rotation_mps(
         with open("orbital_rotation_output_{}_{}.txt".format(ket.info.tag, hash(orbital_rotation_matrix.tobytes())), "a") as fl:
             fl.write("{}  {}  {}\n".format(bond_dim, reference_expectation, final_expectation))
 
-        if abs(reference_expectation - final_expectation) <= convergence_thresh:
-            converged = True
+        if converged:
+            if abs(reference_expectation - final_expectation) <= convergence_thresh:
+                converged = True
+            else:
+                converged = False
         if not converged:
             bond_dim += bond_dim_incr
     return rotated_ket
