@@ -45,9 +45,9 @@ init_mol = mol.copy()
 mf = scf.hf_symm.SymAdaptedRHF(init_mol.copy())
 mf.kernel()
 
-dmrg_scf = dmrgscf.DMRGSCF(mf, norb, norb, maxM=200, tol=1E-10)
+dmrg_scf = dmrgscf.DMRGSCF(mf, norb, norb, maxM=500, tol=1E-10)
 dmrg_scf.fcisolver.output_level = 1
-dmrg_scf.fcisolver.maxIter=100
+dmrg_scf.fcisolver.maxIter=500
 dmrg_scf.fcisolver.threads=int(os.environ.get("OMP_NUM_THREADS", 16))
 
 scanner_fun = dmrg_scf.nuc_grad_method().as_scanner()
