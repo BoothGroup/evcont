@@ -4,7 +4,16 @@ from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 from mpi4py import MPI
 
-def converge_dmrg(h1, h2, nelec, tag, bond_dim_schedule=[2**i for i in range(2,14)], mpi=False, tolerance=1.e-5):
+
+def converge_dmrg(
+    h1,
+    h2,
+    nelec,
+    tag,
+    bond_dim_schedule=[2**i for i in range(2, 14)],
+    mpi=False,
+    tolerance=1.0e-5,
+):
     norb = h1.shape[0]
 
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=mpi)
@@ -22,11 +31,27 @@ def converge_dmrg(h1, h2, nelec, tag, bond_dim_schedule=[2**i for i in range(2,1
 
     rank = MPI.COMM_WORLD.Get_rank()
 
-    noises = [1.e-4, 1.e-6] + [0]
+    noises = [1.0e-4, 1.0e-6] + [0]
 
-    for i in range(len(bond_dim_schedule)-1):
-        inner_bond_dim_schedule = list(np.round(np.logspace(np.log10(bond_dim_schedule[i]), np.log10(bond_dim_schedule[i+1]), num=2, endpoint=False)).astype(int))
-        mps_solver.dmrg(mpo, ket, bond_dims=inner_bond_dim_schedule, noises = noises, n_sweeps=10, iprint=1)
+    for i in range(len(bond_dim_schedule) - 1):
+        inner_bond_dim_schedule = list(
+            np.round(
+                np.logspace(
+                    np.log10(bond_dim_schedule[i]),
+                    np.log10(bond_dim_schedule[i + 1]),
+                    num=2,
+                    endpoint=False,
+                )
+            ).astype(int)
+        )
+        mps_solver.dmrg(
+            mpo,
+            ket,
+            bond_dims=inner_bond_dim_schedule,
+            noises=noises,
+            n_sweeps=10,
+            iprint=1,
+        )
         bnd_dms, dws, ens = mps_solver.get_dmrg_results()
         final_energies.append(ens[-1][0])
         if rank == 0:
@@ -37,10 +62,11 @@ def converge_dmrg(h1, h2, nelec, tag, bond_dim_schedule=[2**i for i in range(2,1
                         noise = noises[j]
                     else:
                         noise = noises[-1]
-                    fl.write("{}  {}  {}  {}\n".format(bnd_dms[j], ens[j][0], dws[j], noise))
+                    fl.write(
+                        "{}  {}  {}  {}\n".format(bnd_dms[j], ens[j][0], dws[j], noise)
+                    )
         if len(final_energies) > 1:
             if abs(final_energies[-1] - final_energies[-2]) < tolerance:
                 break
 
     return ket, final_energies[-1]
-
