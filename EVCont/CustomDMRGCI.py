@@ -77,7 +77,7 @@ class DMRGSolver:
         return one_rdm_transformed, two_rdm_transformed
 
 
-class CustomDMRGCI(EVContSCI):
+class CustomDMRGCI(EVContCI):
     def __init__(
         self,
         mf_or_mol,
