@@ -26,7 +26,7 @@ class CustomCASCI(CASCI):
                 % (mo_coeff.shape[1], self.ncore, ncas)
             )
 
-        self.fcisolver.mo_coeff = self.mo_coeff
+        self.fcisolver.mo_coeff = self.mo_coeff[:, self.ncore : self.ncore + ncas]
         self.fcisolver.mol = self.mol
         self.e_tot, self.ci = self.fcisolver.kernel(
             h1eff,
@@ -45,7 +45,7 @@ class CustomCASCI(CASCI):
                 sort=self.sorting_mo_energy,
                 cas_natorb=self.natorb,
             )
-        self.fcisolver.mo_coeff = self.mo_coeff
+        self.fcisolver.mo_coeff = self.mo_coeff[:, self.ncore : self.ncore + ncas]
 
         self._finalize()
 
