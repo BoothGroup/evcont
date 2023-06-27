@@ -1,9 +1,19 @@
-from .electron_integral_utils import get_basis, get_integrals, transform_integrals
-from .converge_dmrg import converge_dmrg
-
 import numpy as np
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
+
+from EVCont.electron_integral_utils import get_basis, get_integrals, transform_integrals
+from EVCont.converge_dmrg import converge_dmrg
+
+
+def default_solver_fun(h1, h2, nelec, tag):
+    return converge_dmrg(
+        h1,
+        h2,
+        nelec,
+        tag,
+        tolerance=1.0e-4,
+    )
 
 
 def append_to_rdms(
@@ -13,6 +23,7 @@ def append_to_rdms(
     two_rdm=None,
     computational_basis="split",
     reorder_orbitals=True,
+    converge_dmrg_fun=default_solver_fun,
 ):
     mol_bra = mols[-1]
 
@@ -32,9 +43,7 @@ def append_to_rdms(
 
     h1, h2 = get_integrals(mol_bra, basis)
 
-    bra, en = converge_dmrg(
-        h1, h2, nelec, "MPS_{}".format(len(mols) - 1), tolerance=1.0e-4
-    )
+    bra, en = converge_dmrg_fun(h1, h2, nelec, "MPS_{}".format(len(mols) - 1))
 
     np.save("basis_{}.npy".format(len(mols) - 1), basis)
 
@@ -54,8 +63,7 @@ def append_to_rdms(
     if two_rdm is not None:
         two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
 
-    for i in range(len(mols)):
-        mol_ket = mols[i]
+    for i, mol_ket in enumerate(mols):
         ket = mps_solver.load_mps("MPS_{}".format(i))
         computational_basis_ket = np.load("basis_{}.npy".format(i))
         ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
@@ -72,8 +80,8 @@ def append_to_rdms(
             h1, h2 = get_integrals(
                 mol_ket, computational_basis_ket.dot(orbital_rotation)
             )
-            transformed_ket, en = converge_dmrg(
-                h1, h2, nelec, "MPS_{}_{}".format(len(mols) - 1, i), tolerance=1.0e-4
+            transformed_ket, en = converge_dmrg_fun(
+                h1, h2, nelec, "MPS_{}_{}".format(len(mols) - 1, i)
             )
         else:
             transformed_ket = ket

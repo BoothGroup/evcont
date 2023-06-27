@@ -2,11 +2,13 @@ from pyscf import ao2mo
 
 import numpy as np
 
-from .electron_integral_utils import get_basis, get_integrals, transform_integrals
+from EVCont.electron_integral_utils import transform_integrals, get_basis
 
-from .ab_initio_eigenvector_continuation import approximate_ground_state
+from EVCont.converge_dmrg import converge_dmrg
 
-from .EVContCI import EVContCI
+from EVCont.customCASCI import CustomCASCI
+
+from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 
 def default_solver_fun(h1, h2, nelec):
@@ -41,13 +43,13 @@ class DMRGSolver:
 
         state, en = self.converge_dmrg_fun(
             h1_transformed,
-            h2_full,
+            h2_transformed,
             nelec,
         )
 
         return ecore + en, state
 
-    def make_rdm1(self, fcivec, norb, nelec):
+    def make_rdm1(self, state, norb, nelec):
         mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2)
         mps_solver.initialize_system(norb)
 
@@ -55,9 +57,11 @@ class DMRGSolver:
 
         one_rdm = np.array(mps_solver.get_1pdm(state, bra=state))
 
-        one_rdm_transformed = MO_OAO_trafo.T.dot(one_rdm.dot(MO_OAO_trafo))
+        one_rdm_transformed = MO_computational_trafo.T.dot(
+            one_rdm.dot(MO_computational_trafo)
+        )
 
-        return one_rdm_transformed, two_rdm_transformed
+        return one_rdm_transformed
 
     def make_rdm12(self, state, norb, nelec):
         mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2)
@@ -77,7 +81,7 @@ class DMRGSolver:
         return one_rdm_transformed, two_rdm_transformed
 
 
-class CustomDMRGCI(EVContCI):
+class CustomDMRGCI(CustomCASCI):
     def __init__(
         self,
         mf_or_mol,
@@ -87,7 +91,7 @@ class CustomDMRGCI(EVContCI):
         converge_dmrg_fun=default_solver_fun,
         ncore=None,
     ):
-        super().super().__init__(
-            mf_or_mol, ncas, nelecas, converge_dmrg_fun=converge_dmrg_fun, ncore=ncore
+        super().__init__(mf_or_mol, ncas, nelecas, ncore=ncore)
+        self.fcisolver = DMRGSolver(
+            computational_basis, converge_dmrg_fun=converge_dmrg_fun
         )
-        self.fcisolver = DMRGSolver(computational_basis)
