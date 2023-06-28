@@ -35,7 +35,7 @@ class EVContSolver:
         return ecore + en, coeff
 
     def make_rdm1(self, fcivec, norb, nelec):
-        one_rdm = np.zeros((norb, norb))
+        one_rdm = np.zeros(self.one_rdm.shape[2:])
 
         MO_OAO_trafo = self.get_MO_OAO_transformation()
 
@@ -49,8 +49,8 @@ class EVContSolver:
         return one_rdm_transformed
 
     def make_rdm12(self, fcivec, norb, nelec):
-        one_rdm = np.zeros((norb, norb))
-        two_rdm = np.zeros((norb, norb, norb, norb))
+        one_rdm = np.zeros(self.one_rdm.shape[2:])
+        two_rdm = np.zeros(self.two_rdm.shape[2:])
 
         MO_OAO_trafo = self.get_MO_OAO_transformation()
 
