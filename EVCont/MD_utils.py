@@ -38,6 +38,7 @@ def get_trajectory(
     steps=10,
     init_veloc=None,
     hermitian=True,
+    trajectory_output=None,
 ):
     scanner_fun = get_scanner(init_mol, one_rdm, two_rdm, overlap, hermitian=hermitian)
 
@@ -49,6 +50,7 @@ def get_trajectory(
         veloc=init_veloc,
         incore_anyway=True,
         frames=frames,
+        trajectory_output=trajectory_output,
     )
     myintegrator.run()
     trajectory = [frame.coord for frame in frames]
