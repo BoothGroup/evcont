@@ -34,16 +34,28 @@ def converge_dmrg(
     noises = [1.0e-4, 1.0e-6] + [0]
 
     for i in range(len(bond_dim_schedule) - 1):
-        inner_bond_dim_schedule = list(
-            np.round(
-                np.logspace(
-                    np.log10(bond_dim_schedule[i]),
-                    np.log10(bond_dim_schedule[i + 1]),
-                    num=2,
-                    endpoint=False,
-                )
-            ).astype(int)
-        )
+        if i == 0:
+            inner_bond_dim_schedule = list(
+                np.round(
+                    np.logspace(
+                        np.log10(bond_dim_schedule[i] / 2),
+                        np.log10(bond_dim_schedule[i]),
+                        num=3,
+                        endpoint=True,
+                    )
+                ).astype(int)
+            )
+        else:
+            inner_bond_dim_schedule = list(
+                np.round(
+                    np.logspace(
+                        np.log10((bond_dim_schedule[i - 1] + bond_dim_schedule[i]) / 2),
+                        np.log10(bond_dim_schedule[i]),
+                        num=3,
+                        endpoint=True,
+                    )
+                ).astype(int)
+            )
         mps_solver.dmrg(
             mpo,
             ket,
