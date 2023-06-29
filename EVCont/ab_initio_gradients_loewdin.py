@@ -154,7 +154,7 @@ def get_two_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
     return h2_grad
 
 
-def get_energy_with_grad(mol, one_RDM, two_RDM, S):
+def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
     # Construct h1 and h2
     ao_mo_trafo = np.array(
         get_loewdin_trafo(jnp.array(mol.intor("int1e_ovlp"))), dtype=float
@@ -176,9 +176,9 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S):
         np.expand_dims(one_RDM, (-1, -2)) * h1_jac, axis=(-3, -4)
     ) + 0.5 * np.sum(np.expand_dims(two_RDM, (-1, -2)) * h2_jac, axis=(-3, -4, -5, -6))
 
-    en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S)
+    en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
 
-    print("yes")
-
-    return en + mol.energy_nuc(), np.einsum("i,ijkl,j->kl", vec, jac_H, vec)
-    #  + grad.RHF(scf.RHF(mol)).grad_nuc()
+    return (
+        en + mol.energy_nuc(),
+        np.einsum("i,ijkl,j->kl", vec, jac_H, vec) + grad.RHF(scf.RHF(mol)).grad_nuc(),
+    )
