@@ -62,7 +62,7 @@ def converge_dmrg(
             bond_dims=inner_bond_dim_schedule,
             noises=noises,
             n_sweeps=10,
-            twosite_to_onesite=5,
+            twosite_to_onesite=3,
             iprint=1,
         )
         bnd_dms, dws, ens = mps_solver.get_dmrg_results()
