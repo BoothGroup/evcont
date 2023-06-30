@@ -63,7 +63,7 @@ def converge_dmrg(
             noises=noises,
             n_sweeps=10,
             twosite_to_onesite=5,
-            iprint=2,
+            iprint=1,
         )
         bnd_dms, dws, ens = mps_solver.get_dmrg_results()
         final_energies.append(ens[-1][0])
