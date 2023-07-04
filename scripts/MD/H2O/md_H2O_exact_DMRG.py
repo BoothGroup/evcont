@@ -13,7 +13,7 @@ def get_mol(geometry):
     mol = gto.Mole()
 
     mol.build(
-        atom=[("H", geometry[0]), ("H", geometry[1])],
+        atom=[("H", geometry[0]), ("H", geometry[1]), ("O", geometry[2])],
         basis="cc-pVDZ",
         symmetry=True,
         unit="Bohr",
@@ -40,7 +40,7 @@ mol = get_mol(init_geometry)
 init_mol = mol.copy()
 
 
-steps = 10
+steps = 50
 dt = 2
 
 solver = CustomDMRGCI(mol, mol.nao, mol.nelec, "split")
