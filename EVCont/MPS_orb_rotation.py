@@ -35,7 +35,7 @@ def orbital_rotation_mps(
     bond_dim=1000,
     dt=0.05,
     iprint=1,
-    convergence_thresh=1.0e-4,
+    convergence_thresh=1.0e-3,
 ):
     assert dt <= 1.0 and dt >= 0.0
 
@@ -83,7 +83,7 @@ def converge_orbital_rotation_mps(
     init_bond_dim=25,
     bond_dim_incr=25,
     rotation_driver=None,
-    convergence_thresh=1.0e-4,
+    convergence_thresh=1.0e-3,
     convergence_mpos=None,
     dt=0.05,
     iprint=1,
