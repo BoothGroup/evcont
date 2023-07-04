@@ -10,7 +10,7 @@ def converge_dmrg(
     h2,
     nelec,
     tag,
-    bond_dim_schedule=[np.round(1.5**i).astype(int) for i in range(6, 19)],
+    bond_dim_schedule=[np.round(1.5**i).astype(int) for i in range(6, 20)],
     mpi=False,
     tolerance=1.0e-4,
 ):
