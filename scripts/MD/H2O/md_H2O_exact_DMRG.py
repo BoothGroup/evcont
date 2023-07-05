@@ -14,9 +14,9 @@ def get_mol(geometry):
 
     mol.build(
         atom=[("H", geometry[0]), ("H", geometry[1]), ("O", geometry[2])],
-        basis="cc-pVDZ",
+        basis="6-31G",
         symmetry=True,
-        unit="Bohr",
+        unit="Angstrom",
     )
 
     return mol
@@ -27,8 +27,8 @@ def get_mol(geometry):
 # )
 init_geometry = np.array(
     [
-        [0.0, 0.795 * 1.1, -0.454 * 1.1],
-        [0.0, -0.795 * 1.1, -0.454 * 1.1],
+        [0.0, 0.795 * 1.5, -0.454 * 1.5],
+        [0.0, -0.795 * 1.5, -0.454 * 1.5],
         [0.0, 0.0, 0.113],
     ]
 )
@@ -41,7 +41,7 @@ init_mol = mol.copy()
 
 
 steps = 50
-dt = 2
+dt = 10
 
 solver = CustomDMRGCI(mol, mol.nao, mol.nelec, "split")
 solver.converged = True
