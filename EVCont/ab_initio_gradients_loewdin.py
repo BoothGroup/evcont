@@ -6,7 +6,7 @@ import jax.numpy as jnp
 
 import jax
 
-from .ab_initio_eigenvector_continuation import approximate_ground_state
+from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state
 
 
 def get_overlap_grad(mol):
@@ -29,7 +29,67 @@ def get_loewdin_trafo(overlap_mat):
     return jnp.dot(vecs * inverse_sqrt_vals, vecs.conj().T)
 
 
-loewdin_trafo_grad = jax.jacobian(get_loewdin_trafo)
+def loewdin_trafo_grad(overlap_mat):
+    vals, vecs = jnp.linalg.eigh(overlap_mat)
+    vals = np.array(vals)
+    vecs = np.array(vecs)
+
+    rounded_vals = np.round(vals, decimals=5)
+    degenerate_vals = np.unique(rounded_vals)
+
+    U_full = np.zeros((*overlap_mat.shape, *overlap_mat.shape))
+    degenerate_subspace = np.zeros(overlap_mat.shape, dtype=bool)
+
+    # Take care of degeneracies
+    for val in degenerate_vals:
+        degenerate_ids = (np.argwhere(rounded_vals == val)).flatten()
+        subspace = vecs[:, degenerate_ids]
+
+        V_projected = 0.5 * np.einsum(
+            "ai,bj->abij", subspace, subspace
+        ) + 0.5 * np.einsum("bi,aj->abij", subspace, subspace)
+
+        # Get rotation to diagonalise V in degenerate subspace
+        _, U = jnp.linalg.eigh(V_projected)
+        U = np.array(U)
+        U_full[
+            np.ix_(
+                np.ones(U_full.shape[0], dtype=bool),
+                np.ones(U_full.shape[1], dtype=bool),
+                degenerate_ids,
+                degenerate_ids,
+            )
+        ] = U
+        degenerate_subspace[np.ix_(degenerate_ids, degenerate_ids)] = True
+
+    vecs_rotated = np.einsum("ij,abjk->abik", vecs, U_full)
+
+    Vji = 0.5 * np.einsum(
+        "abai,abbj->abij", vecs_rotated, vecs_rotated
+    ) + 0.5 * np.einsum("abbi,abaj->abij", vecs_rotated, vecs_rotated)
+
+    Zji = np.zeros((*overlap_mat.shape, *overlap_mat.shape))
+    Zji[:, :, ~degenerate_subspace] = Vji[:, :, ~degenerate_subspace] / (
+        (vals - np.expand_dims(vals, -1))[~degenerate_subspace]
+    )
+
+    dvecs = np.einsum("abij,abjk->abik", vecs_rotated, Zji)
+    dvals = Vji[:, :, np.arange(Vji.shape[2]), np.arange(Vji.shape[3])]
+
+    transformed_vals = jnp.where(vals > 1.0e-15, 1 / jnp.sqrt(vals), 0.0)
+    d_transformed_vals = (
+        jnp.where(vals > 1.0e-15, -(0.5 / jnp.sqrt(vals) ** 3), 0.0) * dvals
+    )
+    dS = (
+        np.einsum("abij, abkj->abik", dvecs * transformed_vals, vecs_rotated)
+        + np.einsum(
+            "abij, abkj->abik",
+            vecs_rotated * np.expand_dims(d_transformed_vals, axis=-2),
+            vecs_rotated,
+        )
+        + np.einsum("abij, abkj->abik", vecs_rotated * transformed_vals, dvecs)
+    )
+    return np.transpose(dS, (2, 3, 0, 1))
 
 
 def get_derivative_ao_mo_trafo(mol):
