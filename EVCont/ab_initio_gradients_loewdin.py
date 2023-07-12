@@ -1,3 +1,7 @@
+from jax import config
+
+config.update("jax_enable_x64", True)
+
 import numpy as np
 
 from pyscf import scf, ao2mo, grad
@@ -45,9 +49,9 @@ def loewdin_trafo_grad(overlap_mat):
         degenerate_ids = (np.argwhere(rounded_vals == val)).flatten()
         subspace = vecs[:, degenerate_ids]
 
-        V_projected = 0.5 * np.einsum(
+        V_projected = 0.5 * jnp.einsum(
             "ai,bj->abij", subspace, subspace
-        ) + 0.5 * np.einsum("bi,aj->abij", subspace, subspace)
+        ) + 0.5 * jnp.einsum("bi,aj->abij", subspace, subspace)
 
         # Get rotation to diagonalise V in degenerate subspace
         _, U = jnp.linalg.eigh(V_projected)
@@ -62,18 +66,18 @@ def loewdin_trafo_grad(overlap_mat):
         ] = U
         degenerate_subspace[np.ix_(degenerate_ids, degenerate_ids)] = True
 
-    vecs_rotated = np.einsum("ij,abjk->abik", vecs, U_full)
+    vecs_rotated = jnp.einsum("ij,abjk->abik", vecs, U_full)
 
-    Vji = 0.5 * np.einsum(
+    Vji = 0.5 * jnp.einsum(
         "abai,abbj->abij", vecs_rotated, vecs_rotated
-    ) + 0.5 * np.einsum("abbi,abaj->abij", vecs_rotated, vecs_rotated)
+    ) + 0.5 * jnp.einsum("abbi,abaj->abij", vecs_rotated, vecs_rotated)
 
     Zji = np.zeros((*overlap_mat.shape, *overlap_mat.shape))
     Zji[:, :, ~degenerate_subspace] = Vji[:, :, ~degenerate_subspace] / (
         (vals - np.expand_dims(vals, -1))[~degenerate_subspace]
     )
 
-    dvecs = np.einsum("abij,abjk->abik", vecs_rotated, Zji)
+    dvecs = jnp.einsum("abij,abjk->abik", vecs_rotated, Zji)
     dvals = Vji[:, :, np.arange(Vji.shape[2]), np.arange(Vji.shape[3])]
 
     transformed_vals = jnp.where(vals > 1.0e-15, 1 / jnp.sqrt(vals), 0.0)
@@ -81,20 +85,20 @@ def loewdin_trafo_grad(overlap_mat):
         jnp.where(vals > 1.0e-15, -(0.5 / jnp.sqrt(vals) ** 3), 0.0) * dvals
     )
     dS = (
-        np.einsum("abij, abkj->abik", dvecs * transformed_vals, vecs_rotated)
-        + np.einsum(
+        jnp.einsum("abij, abkj->abik", dvecs * transformed_vals, vecs_rotated)
+        + jnp.einsum(
             "abij, abkj->abik",
             vecs_rotated * np.expand_dims(d_transformed_vals, axis=-2),
             vecs_rotated,
         )
-        + np.einsum("abij, abkj->abik", vecs_rotated * transformed_vals, dvecs)
+        + jnp.einsum("abij, abkj->abik", vecs_rotated * transformed_vals, dvecs)
     )
     return np.transpose(dS, (2, 3, 0, 1))
 
 
 def get_derivative_ao_mo_trafo(mol):
     overlap_grad = get_overlap_grad(mol)
-    trafo_grad = np.einsum(
+    trafo_grad = jnp.einsum(
         "ijkl, ijmn->klmn",
         np.array(loewdin_trafo_grad(mol.intor("int1e_ovlp")), dtype=float),
         overlap_grad,
@@ -122,11 +126,11 @@ def get_one_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
 
     h1_grad_ao = get_one_el_grad_ao(mol)
 
-    h1_grad = np.einsum("ijkl,im,mn->jnkl", ao_mo_trafo_grad, h1_ao, ao_mo_trafo)
+    h1_grad = jnp.einsum("ijkl,im,mn->jnkl", ao_mo_trafo_grad, h1_ao, ao_mo_trafo)
 
     h1_grad += np.swapaxes(h1_grad, 0, 1)
 
-    h1_grad += np.einsum("ij,iklm,kn->jnlm", ao_mo_trafo, h1_grad_ao, ao_mo_trafo)
+    h1_grad += jnp.einsum("ij,iklm,kn->jnlm", ao_mo_trafo, h1_grad_ao, ao_mo_trafo)
 
     return h1_grad
 
@@ -160,9 +164,9 @@ def get_two_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
     if ao_mo_trafo_grad is None:
         ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
 
-    h2_grad_ao = get_two_el_grad_ao(mol)
+    h2_grad_ao = jnp.array(get_two_el_grad_ao(mol))
 
-    h2_grad = np.einsum(
+    h2_grad = jnp.einsum(
         "abcd,aimn,bj,ck,dl->ijklmn",
         h2_ao,
         ao_mo_trafo_grad,
@@ -172,8 +176,8 @@ def get_two_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
         optimize="optimal",
     )
 
-    # This can certainly be done faster via appropriate transpose operations, but it shouldn't be the bottleneck atm
-    h2_grad += np.einsum(
+    # TODO: This can certainly be done faster via appropriate transpose operations
+    h2_grad += jnp.einsum(
         "abcd,ai,bjmn,ck,dl->ijklmn",
         h2_ao,
         ao_mo_trafo,
@@ -182,7 +186,7 @@ def get_two_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
         ao_mo_trafo,
         optimize="optimal",
     )
-    h2_grad += np.einsum(
+    h2_grad += jnp.einsum(
         "abcd,ai,bj,ckmn,dl->ijklmn",
         h2_ao,
         ao_mo_trafo,
@@ -191,7 +195,7 @@ def get_two_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
         ao_mo_trafo,
         optimize="optimal",
     )
-    h2_grad += np.einsum(
+    h2_grad += jnp.einsum(
         "abcd,ai,bj,ck,dlmn->ijklmn",
         h2_ao,
         ao_mo_trafo,
@@ -201,7 +205,7 @@ def get_two_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
         optimize="optimal",
     )
 
-    h2_grad += np.einsum(
+    h2_grad += jnp.einsum(
         "abcdmn,ai,bj,ck,dl->ijklmn",
         h2_grad_ao,
         ao_mo_trafo,
@@ -232,13 +236,15 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
         mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
     )
 
-    jac_H = np.sum(
-        np.expand_dims(one_RDM, (-1, -2)) * h1_jac, axis=(-3, -4)
-    ) + 0.5 * np.sum(np.expand_dims(two_RDM, (-1, -2)) * h2_jac, axis=(-3, -4, -5, -6))
+    jac_H = jnp.sum(
+        jnp.expand_dims(one_RDM, (-1, -2)) * h1_jac, axis=(-3, -4)
+    ) + 0.5 * jnp.sum(
+        jnp.expand_dims(two_RDM, (-1, -2)) * h2_jac, axis=(-3, -4, -5, -6)
+    )
 
     en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
 
     return (
         en + mol.energy_nuc(),
-        np.einsum("i,ijkl,j->kl", vec, jac_H, vec) + grad.RHF(scf.RHF(mol)).grad_nuc(),
+        jnp.einsum("i,ijkl,j->kl", vec, jac_H, vec) + grad.RHF(scf.RHF(mol)).grad_nuc(),
     )
