@@ -246,5 +246,8 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
 
     return (
         en + mol.energy_nuc(),
-        jnp.einsum("i,ijkl,j->kl", vec, jac_H, vec) + grad.RHF(scf.RHF(mol)).grad_nuc(),
+        np.array(
+            jnp.einsum("i,ijkl,j->kl", vec, jac_H, vec)
+            + grad.RHF(scf.RHF(mol)).grad_nuc()
+        ),
     )
