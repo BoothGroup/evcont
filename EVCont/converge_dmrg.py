@@ -27,9 +27,10 @@ def converge_dmrg(
 
     final_energies = []
 
-    open("DMRG_result_{}.txt".format(tag), "w").close()
-
     rank = MPI.COMM_WORLD.Get_rank()
+
+    if rank == 0:
+        open("DMRG_result_{}.txt".format(tag), "w").close()
 
     noises = [1.0e-4, 1.0e-6] + [0]
 

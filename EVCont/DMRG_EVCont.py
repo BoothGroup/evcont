@@ -7,14 +7,15 @@ from EVCont.converge_dmrg import converge_dmrg
 
 from EVCont.MPS_orb_rotation import converge_orbital_rotation_mps
 
+from mpi4py import MPI
+
+
+rank = MPI.COMM_WORLD.rank
+
 
 def default_solver_fun(h1, h2, nelec, tag):
     return converge_dmrg(
-        h1,
-        h2,
-        nelec,
-        tag,
-        tolerance=1.0e-5,
+        h1, h2, nelec, tag, tolerance=1.0e-5, mpi=(MPI.COMM_WORLD.size > 1)
     )
 
 
@@ -47,7 +48,8 @@ def append_to_rdms_rerun(
 
     bra, en = converge_dmrg_fun(h1, h2, nelec, "MPS_{}".format(len(mols) - 1))
 
-    np.save("basis_{}.npy".format(len(mols) - 1), basis)
+    if rank == 0:
+        np.save("basis_{}.npy".format(len(mols) - 1), basis)
 
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2)
     mps_solver.initialize_system(norb)
@@ -120,6 +122,8 @@ def append_to_rdms_orbital_rotation(
     mol_bra = mols[-1]
 
     basis = get_basis(mol_bra, basis_type=computational_basis)
+    MPI.COMM_WORLD.Bcast(basis)
+
     h1, h2 = get_integrals(mol_bra, basis)
 
     norb = h1.shape[0]
@@ -137,13 +141,15 @@ def append_to_rdms_orbital_rotation(
 
     bra, en = converge_dmrg_fun(h1, h2, nelec, "MPS_{}".format(len(mols) - 1))
 
-    np.save("basis_{}.npy".format(len(mols) - 1), basis)
+    if rank == 0:
+        np.save("basis_{}.npy".format(len(mols) - 1), basis)
 
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2)
     mps_solver.initialize_system(norb)
 
     ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
     oao_basis_bra = get_basis(mol_bra, "OAO")
+    MPI.COMM_WORLD.Bcast(oao_basis_bra)
 
     overlap_new = np.ones((len(mols), len(mols)))
     if overlap is not None:
