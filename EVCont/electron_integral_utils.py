@@ -1,18 +1,26 @@
+from jax import config
+
+config.update("jax_enable_x64", True)
+
+
 import numpy as np
+
+import jax.numpy as jnp
 
 from pyscf import scf, lo, ao2mo
 
 
-def transform_integrals(h1, h2, trafo_left, trafo_right=None):
-    if trafo_right is None:
-        trafo_right = trafo_left
-    h1 = np.einsum("...ij,ai->...aj", h1, trafo_left)
-    h1 = np.einsum("...aj,bj->...ab", h1, trafo_right)
-    h2 = np.einsum("...ijkl,ai->...ajkl", h2, trafo_left)
-    h2 = np.einsum("...ajkl,bj->...abkl", h2, trafo_right)
-    h2 = np.einsum("...abkl,ck->...abcl", h2, trafo_left)
-    h2 = np.einsum("...abcl,dl->...abcd", h2, trafo_right)
-    return h1, h2
+def transform_integrals(h1, h2, trafo):
+    h1 = jnp.array(h1)
+    h2 = jnp.array(h2)
+    trafo = jnp.array(trafo)
+    h1 = jnp.einsum("...ij,ai->...aj", h1, trafo)
+    h1 = jnp.einsum("...aj,bj->...ab", h1, trafo)
+    h2 = jnp.einsum("...ijkl,ai->...ajkl", h2, trafo)
+    h2 = jnp.einsum("...ajkl,bj->...abkl", h2, trafo)
+    h2 = jnp.einsum("...abkl,ck->...abcl", h2, trafo)
+    h2 = jnp.einsum("...abcl,dl->...abcd", h2, trafo)
+    return np.array(h1), np.array(h2)
 
 
 def get_basis(mol, basis_type="OAO"):
