@@ -77,7 +77,7 @@ MPI.COMM_WORLD.barrier()
 cascis = []
 
 overlap = one_rdm = two_rdm = None
-for trn_dist in [1.0, 3.6, 1.8, 1.2, 1.4, 1.6, 2.0, 2.4, 2.8, 3.2]:
+for trn_dist in [1.0, 3.6, 1.8, 2.6, 1.4, 3.2, 1.2, 1.6, 2.0, 2.8]:
     mol = get_mol(trn_dist)
     mf = scf.HF(mol)
     mf.kernel()
