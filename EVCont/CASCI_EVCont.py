@@ -238,12 +238,12 @@ def append_to_rdms(cascis, overlap=None, one_rdm=None, two_rdm=None):
         if rank == 0:
             pbar.close()
 
-        overlap_accumulate = MPI.COMM_WORLD.allreduce(overlap_accumulate)
+        overlap_accumulate = MPI.COMM_WORLD.allreduce(overlap_accumulate, op=MPI.SUM)
         overlap_new[-1, i] = overlap_accumulate
         overlap_new[i, -1] = overlap_accumulate.conj()
 
-        MPI.COMM_WORLD.Allreduce(rdm1)
-        MPI.COMM_WORLD.Allreduce(rdm2)
+        MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, rdm1, op=MPI.SUM)
+        MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, rdm2, op=MPI.SUM)
 
         rdm1 = jnp.einsum("...ij,ai->...aj", rdm1, trafo_ket)
         rdm1 = np.array(jnp.einsum("...aj,bj->...ab", rdm1, trafo_bra))
