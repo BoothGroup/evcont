@@ -18,11 +18,15 @@ from EVCont.CASCI_EVCont import append_to_rdms, append_to_rdms_complete_space
 
 from pyscf.mcscf.casci import CASCI
 
+from mpi4py import MPI
+
 
 ncas = 8
 neleca = 4
 
 basis = "cc-pVdZ"
+
+rank = MPI.COMM_WORLD.Get_rank()
 
 
 def get_mol(dist):
@@ -50,103 +54,49 @@ def get_potential_energy_curve(overlap, one_rdm, two_rdm, mfs):
     return np.array(ens)
 
 
-def get_CASCI_surface(mfs):
-    ens = []
-    for mf in mfs:
-        tmp = CASCI(mf, ncas, neleca)
-        tmp.canonicalization = False
-        e = tmp.kernel()[0]
-        ens.append(e)
-    return np.array(ens)
+dist_list = np.linspace(1.0, 3.6, 27)
 
+if rank == 0:
+    test_mfs = []
+    for d in dist_list:
+        mol = get_mol(d)
+        mf = scf.HF(mol)
+        mf.kernel()
+        test_mfs.append(mf)
 
-dist_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.4, 2.8, 3.2, 3.6]
+    with open("continued_surface.txt", "w") as fl:
+        for d in dist_list:
+            fl.write("{}".format(d))
+            if d != dist_list[-1]:
+                fl.write("  ")
+            else:
+                fl.write("\n")
 
-test_mfs = []
-for d in dist_list:
+MPI.COMM_WORLD.barrier()
+
+cascis = []
+for trn_dist in [1.0, 3.6, 1.8, 1.2, 1.4, 1.6, 2.0, 2.4, 2.8, 3.2]:
     mol = get_mol(d)
     mf = scf.HF(mol)
     mf.kernel()
-    test_mfs.append(mf)
+    MPI.COMM_WORLD.Bcast(mf.mo_coeff)
+    cascis.append(CASCI(mf, ncas, neleca))
+    overlap, one_rdm, two_rdm = append_to_rdms(cascis)
 
-CASCI_surface = get_CASCI_surface(test_mfs)
+    if rank == 0:
+        np.save("overlap.npy", overlap)
+        np.save("one_rdm.npy", one_rdm)
+        np.save("two_rdm.npy", two_rdm)
 
-np.savetxt("CASCI_surface.txt", CASCI_surface)
+        pot_energy_surface = get_potential_energy_curve(
+            overlap, one_rdm, two_rdm, test_mfs
+        )
 
-
-cascis = [CASCI(test_mfs[0], ncas, neleca)]
-
-overlap, one_rdm, two_rdm = append_to_rdms(cascis)
-
-a = get_potential_energy_curve(overlap, one_rdm, two_rdm, test_mfs)
-
-with open("continued_surface.txt", "w") as fl:
-    for a_el in a:
-        fl.write("{}".format(a_el))
-        if a_el != a[-1]:
-            fl.write("  ")
-        else:
-            fl.write("\n")
-
-
-cascis.append(CASCI(test_mfs[-1], ncas, neleca))
-
-overlap, one_rdm, two_rdm = append_to_rdms(cascis, overlap, one_rdm, two_rdm)
-
-b = get_potential_energy_curve(overlap, one_rdm, two_rdm, test_mfs)
-
-with open("continued_surface.txt", "a") as fl:
-    for el in b:
-        fl.write("{}".format(el))
-        if el != b[-1]:
-            fl.write("  ")
-        else:
-            fl.write("\n")
-
-
-cascis.append(CASCI(test_mfs[4], ncas, neleca))
-
-overlap, one_rdm, two_rdm = append_to_rdms(cascis, overlap, one_rdm, two_rdm)
-
-c = get_potential_energy_curve(overlap, one_rdm, two_rdm, test_mfs)
-
-with open("continued_surface.txt", "a") as fl:
-    for el in c:
-        fl.write("{}".format(el))
-        if el != c[-1]:
-            fl.write("  ")
-        else:
-            fl.write("\n")
-
-
-cascis.append(CASCI(test_mfs[7], ncas, neleca))
-
-overlap, one_rdm, two_rdm = append_to_rdms(cascis, overlap, one_rdm, two_rdm)
-
-d = get_potential_energy_curve(overlap, one_rdm, two_rdm, test_mfs)
-
-with open("continued_surface.txt", "a") as fl:
-    for el in d:
-        fl.write("{}".format(el))
-        if el != d[-1]:
-            fl.write("  ")
-        else:
-            fl.write("\n")
-
-cascis.append(CASCI(test_mfs[2], ncas, neleca))
-
-overlap, one_rdm, two_rdm = append_to_rdms(cascis, overlap, one_rdm, two_rdm)
-
-e = get_potential_energy_curve(overlap, one_rdm, two_rdm, test_mfs)
-
-with open("continued_surface.txt", "a") as fl:
-    for el in e:
-        fl.write("{}".format(el))
-        if el != e[-1]:
-            fl.write("  ")
-        else:
-            fl.write("\n")
-
-np.save("overlap.npy", overlap)
-np.save("one_rdm.npy", one_rdm)
-np.save("two_rdm.npy", two_rdm)
+        with open("continued_surface.txt", "a") as fl:
+            for el in pot_energy_surface:
+                fl.write("{}".format(el))
+                if el != pot_energy_surface[-1]:
+                    fl.write("  ")
+                else:
+                    fl.write("\n")
+    MPI.COMM_WORLD.barrier()
