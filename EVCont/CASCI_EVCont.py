@@ -1,8 +1,14 @@
 import numpy as np
 
+import jax.numpy as jnp
+
 from EVCont.electron_integral_utils import get_basis, transform_integrals
 
 from pygnme import wick, utils
+
+from mpi4py import MPI
+
+from tqdm import tqdm
 
 
 def owndata(x):
@@ -84,7 +90,12 @@ def append_to_rdms_complete_space(cascis, overlap=None, one_rdm=None, two_rdm=No
 def append_to_rdms(cascis, overlap=None, one_rdm=None, two_rdm=None):
     n_cascis = len(cascis)
     casci_bra = cascis[-1]
+
+    MPI.COMM_WORLD.Bcast(casci_bra.mo_coeff)
+
     casci_bra.kernel()
+    MPI.COMM_WORLD.Bcast(casci_bra.ci)
+
     mo_coeff_bra = casci_bra.mo_coeff
     mol_bra = casci_bra.mol
 
@@ -173,45 +184,73 @@ def append_to_rdms(cascis, overlap=None, one_rdm=None, two_rdm=None):
             )
         )
         overlap_accumulate = 0.0
-        for iabra, stringabra in enumerate(bra_occ_strings):
-            for ibbra, stringbbra in enumerate(bra_occ_strings):
-                for iaket, stringaket in enumerate(ket_occ_strings):
-                    for ibket, stringbket in enumerate(ket_occ_strings):
-                        rdm1_tmp.fill(0.0)
-                        rdm2_tmp.fill(0.0)
-                        o = wick_mb.evaluate_rdm12(
-                            stringabra,
-                            stringbbra,
-                            stringaket,
-                            stringbket,
-                            1.0,
-                            rdm1_tmp,
-                            rdm2_tmp,
-                        )
-                        overlap_accumulate += (
-                            o * casci_bra.ci[iabra, ibbra] * casci_ket.ci[iaket, ibket]
-                        )
 
-                        rdm1 += (
-                            rdm1_tmp
-                            * casci_bra.ci[iabra, ibbra]
-                            * casci_ket.ci[iaket, ibket]
-                        )
-                        rdm2 += (
-                            rdm2_tmp.reshape(rdm2.shape)
-                            * casci_bra.ci[iabra, ibbra]
-                            * casci_ket.ci[iaket, ibket]
-                        )
+        all_ids = np.array(
+            [
+                [iabra, ibbra, iaket, ibket]
+                for iabra in range(len(bra_occ_strings))
+                for ibbra in range(len(bra_occ_strings))
+                for iaket in range(len(ket_occ_strings))
+                for ibket in range(len(ket_occ_strings))
+            ]
+        )
 
+        n_ranks = MPI.COMM_WORLD.Get_size()
+        rank = MPI.COMM_WORLD.Get_rank()
+
+        all_ids_local = np.array_split(all_ids, n_ranks)[rank]
+
+        if rank == 0:
+            pbar = tqdm(total=len(all_ids_local))
+
+        for ids in all_ids_local:
+            iabra, ibbra, iaket, ibket = ids
+            stringabra = bra_occ_strings[iabra]
+            stringbbra = bra_occ_strings[ibbra]
+            stringaket = ket_occ_strings[iaket]
+            stringbket = ket_occ_strings[ibket]
+
+            rdm1_tmp.fill(0.0)
+            rdm2_tmp.fill(0.0)
+            o = wick_mb.evaluate_rdm12(
+                stringabra,
+                stringbbra,
+                stringaket,
+                stringbket,
+                1.0,
+                rdm1_tmp,
+                rdm2_tmp,
+            )
+            overlap_accumulate += (
+                o * casci_bra.ci[iabra, ibbra] * casci_ket.ci[iaket, ibket]
+            )
+
+            rdm1 += rdm1_tmp * casci_bra.ci[iabra, ibbra] * casci_ket.ci[iaket, ibket]
+            rdm2 += (
+                rdm2_tmp.reshape(rdm2.shape)
+                * casci_bra.ci[iabra, ibbra]
+                * casci_ket.ci[iaket, ibket]
+            )
+
+            if rank == 0:
+                pbar.update(1)
+
+        if rank == 0:
+            pbar.close()
+
+        overlap_accumulate = MPI.COMM_WORLD.allreduce(overlap_accumulate)
         overlap_new[-1, i] = overlap_accumulate
         overlap_new[i, -1] = overlap_accumulate.conj()
 
-        rdm1 = np.einsum("...ij,ai->...aj", rdm1, trafo_ket)
-        rdm1 = np.einsum("...aj,bj->...ab", rdm1, trafo_bra)
-        rdm2 = np.einsum("...ijkl,ai->...ajkl", rdm2, trafo_bra)
-        rdm2 = np.einsum("...ajkl,bj->...abkl", rdm2, trafo_ket)
-        rdm2 = np.einsum("...abkl,ck->...abcl", rdm2, trafo_bra)
-        rdm2 = np.einsum("...abcl,dl->...abcd", rdm2, trafo_ket)
+        MPI.COMM_WORLD.Allreduce(rdm1)
+        MPI.COMM_WORLD.Allreduce(rdm2)
+
+        rdm1 = jnp.einsum("...ij,ai->...aj", rdm1, trafo_ket)
+        rdm1 = np.array(jnp.einsum("...aj,bj->...ab", rdm1, trafo_bra))
+        rdm2 = jnp.einsum("...ijkl,ai->...ajkl", rdm2, trafo_bra)
+        rdm2 = jnp.einsum("...ajkl,bj->...abkl", rdm2, trafo_ket)
+        rdm2 = jnp.einsum("...abkl,ck->...abcl", rdm2, trafo_bra)
+        rdm2 = np.array(jnp.einsum("...abcl,dl->...abcd", rdm2, trafo_ket))
 
         one_rdm_new[-1, i, :, :] = rdm1
         one_rdm_new[i, -1, :, :] = rdm1.conj()
