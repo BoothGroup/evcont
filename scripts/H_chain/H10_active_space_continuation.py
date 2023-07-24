@@ -34,7 +34,7 @@ def get_mol(dist):
 
     mol.build(
         atom=[("H", (x, 0.0, 0.0)) for x in dist * np.arange(10)],
-        basis="cc-pVdZ",
+        basis=basis,
         symmetry=True,
         unit="Bohr",
     )
