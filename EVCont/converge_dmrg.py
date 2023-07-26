@@ -11,7 +11,7 @@ def converge_dmrg(
     nelec,
     tag,
     bond_dim_schedule=[np.round(1.5**i).astype(int) for i in range(6, 20)],
-    mpi=False,
+    mpi=MPI.COMM_WORLD.size > 1,
     tolerance=1.0e-4,
 ):
     norb = h1.shape[0]
@@ -41,7 +41,7 @@ def converge_dmrg(
                     np.logspace(
                         np.log10(bond_dim_schedule[i] / 2),
                         np.log10(bond_dim_schedule[i]),
-                        num=3,
+                        num=5,
                         endpoint=True,
                     )
                 ).astype(int)
@@ -52,7 +52,7 @@ def converge_dmrg(
                     np.logspace(
                         np.log10((bond_dim_schedule[i - 1] + bond_dim_schedule[i]) / 2),
                         np.log10(bond_dim_schedule[i]),
-                        num=3,
+                        num=5,
                         endpoint=True,
                     )
                 ).astype(int)
@@ -62,8 +62,9 @@ def converge_dmrg(
             ket,
             bond_dims=inner_bond_dim_schedule,
             noises=noises,
-            n_sweeps=10,
+            n_sweeps=1000,
             iprint=1,
+            tol=tolerance,
         )
         bnd_dms, dws, ens = mps_solver.get_dmrg_results()
         final_energies.append(ens[-1][0])

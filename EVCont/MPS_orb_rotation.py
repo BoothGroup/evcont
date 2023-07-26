@@ -86,7 +86,7 @@ def converge_orbital_rotation_mps(
     ket,
     orbital_rotation_matrix,
     init_bond_dim=25,
-    bond_dim_incr=25,
+    bond_dim_incr=50,
     rotation_driver=None,
     convergence_thresh=1.0e-3,
     convergence_mpos=None,
@@ -100,86 +100,85 @@ def converge_orbital_rotation_mps(
         rotation_driver = DMRGDriver(symm_type=SymmetryTypes.SU2)
         rotation_driver.initialize_system(orbital_rotation_matrix.shape[0])
 
-    if rank == 0:
-        if convergence_mpos is None:
-            convergence_mpos = (
-                rotation_driver.get_identity_mpo(),
-                rotation_driver.get_identity_mpo(),
-            )
-
-        if tag is None:
-            tag = ket.info.tag + str(hash(orbital_rotation_matrix.tobytes()))
-
-        reference_expectation = rotation_driver.expectation(
-            ket, convergence_mpos[0], ket, iprint=iprint
+    if convergence_mpos is None:
+        convergence_mpos = (
+            rotation_driver.get_identity_mpo(),
+            rotation_driver.get_identity_mpo(),
         )
 
-        open("orbital_rotation_output_{}.txt".format(tag), "w").close()
+    if tag is None:
+        tag = ket.info.tag + str(hash(orbital_rotation_matrix.tobytes()))
 
-        orbital_rotation_matrix_pos = orbital_rotation_matrix.copy()
-        if scipy.linalg.det(orbital_rotation_matrix_pos) < 0.0:
-            flip_sign = True
-            orbital_rotation_matrix_pos[:, 0] *= -1
-            print("sign flip")
-        else:
-            flip_sign = False
+    reference_expectation = rotation_driver.expectation(
+        ket, convergence_mpos[0], ket, iprint=iprint
+    )
 
-        log_orb_rot = scipy.linalg.logm(orbital_rotation_matrix_pos)
+    open("orbital_rotation_output_{}.txt".format(tag), "w").close()
 
-        assert np.isrealobj(log_orb_rot)
+    orbital_rotation_matrix_pos = orbital_rotation_matrix.copy()
+    if scipy.linalg.det(orbital_rotation_matrix_pos) < 0.0:
+        flip_sign = True
+        orbital_rotation_matrix_pos[:, 0] *= -1
+        print("sign flip")
+    else:
+        flip_sign = False
 
-        # perform orbital rotation (with positive det) from old to new basis
+    log_orb_rot = scipy.linalg.logm(orbital_rotation_matrix_pos)
 
-        # Hamiltonian for orbital transform
-        hamil_kappa = HamiltonianQC(
-            rotation_driver.vacuum,
-            rotation_driver.n_sites,
-            rotation_driver.orb_sym,
-            rotation_driver.write_fcidump(log_orb_rot, None),
-        )
+    assert np.isrealobj(log_orb_rot)
 
-        # MPO (anti-Hermitian)
-        mpo_kappa = MPOQC(hamil_kappa, QCTypes.Conventional)
-        mpo_kappa = SimplifiedMPO(
+    # perform orbital rotation (with positive det) from old to new basis
+
+    # Hamiltonian for orbital transform
+    hamil_kappa = HamiltonianQC(
+        rotation_driver.vacuum,
+        rotation_driver.n_sites,
+        rotation_driver.orb_sym,
+        rotation_driver.write_fcidump(log_orb_rot, None),
+    )
+
+    # MPO (anti-Hermitian)
+    mpo_kappa = MPOQC(hamil_kappa, QCTypes.Conventional)
+    mpo_kappa = SimplifiedMPO(
+        mpo_kappa,
+        AntiHermitianRuleQC(RuleQC()),
+        True,
+        True,
+        OpNamesSet((OpNames.R, OpNames.RD)),
+    )
+
+    converged = False
+    while not converged:
+        rotated_ket = ket.deep_copy("rotated_ket")
+        rotated_ket, converged = orbital_rotation_mps(
+            rotated_ket,
             mpo_kappa,
-            AntiHermitianRuleQC(RuleQC()),
-            True,
-            True,
-            OpNamesSet((OpNames.R, OpNames.RD)),
+            flip_sign,
+            rotation_driver,
+            bond_dim=bond_dim,
+            dt=dt,
+            iprint=iprint,
+            convergence_thresh=convergence_thresh,
         )
+        final_expectation = rotation_driver.expectation(
+            rotated_ket, convergence_mpos[1], rotated_ket, iprint=iprint
+        )
+        print(bond_dim, reference_expectation, final_expectation, converged)
 
-        converged = False
-        while not converged:
-            rotated_ket = ket.deep_copy("rotated_ket")
-            rotated_ket, converged = orbital_rotation_mps(
-                rotated_ket,
-                mpo_kappa,
-                flip_sign,
-                rotation_driver,
-                bond_dim=bond_dim,
-                dt=dt,
-                iprint=iprint,
-                convergence_thresh=convergence_thresh,
-            )
-            final_expectation = rotation_driver.expectation(
-                rotated_ket, convergence_mpos[1], rotated_ket, iprint=iprint
-            )
-            print(bond_dim, reference_expectation, final_expectation)
-
-            with open("orbital_rotation_output_{}.txt".format(tag), "a") as fl:
-                fl.write(
-                    "{}  {}  {}\n".format(
-                        bond_dim, reference_expectation, final_expectation
-                    )
+        with open("orbital_rotation_output_{}.txt".format(tag), "a") as fl:
+            fl.write(
+                "{}  {}  {}\n".format(
+                    bond_dim, reference_expectation, final_expectation
                 )
+            )
 
-            if converged:
-                if abs(reference_expectation - final_expectation) <= convergence_thresh:
-                    converged = True
-                else:
-                    converged = False
-            if not converged:
-                bond_dim += bond_dim_incr
-    MPI.COMM_WORLD.barrier()
-    rotated_ket = rotation_driver.load_mps("rotated_ket")
+        if converged:
+            if abs(reference_expectation - final_expectation) <= convergence_thresh:
+                converged = True
+            else:
+                converged = False
+        if not converged:
+            bond_dim += bond_dim_incr
+
+    rotated_ket = rotated_ket.deep_copy(tag)
     return rotated_ket
