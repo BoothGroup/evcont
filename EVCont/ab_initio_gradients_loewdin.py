@@ -245,7 +245,7 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
     en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
 
     return (
-        en + mol.energy_nuc(),
+        en.real + mol.energy_nuc(),
         np.array(
             jnp.einsum("i,ijkl,j->kl", vec, jac_H, vec)
             + grad.RHF(scf.RHF(mol)).grad_nuc()
