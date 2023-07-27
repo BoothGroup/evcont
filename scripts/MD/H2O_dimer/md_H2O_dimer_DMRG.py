@@ -7,7 +7,11 @@ from EVCont.electron_integral_utils import get_basis, get_integrals, transform_i
 from EVCont.MD_utils import get_trajectory
 from EVCont.converge_dmrg import converge_dmrg
 
-from EVCont.DMRG_EVCont import append_to_rdms_rerun
+from EVCont.DMRG_EVCont import (
+    append_to_rdms_rerun,
+    append_to_rdms_orbital_rotation,
+    append_to_rdms_OAO_basis,
+)
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
@@ -21,14 +25,22 @@ rank = MPI.COMM_WORLD.rank
 
 def dmrg_converge_fun(h1, h2, nelec, tag):
     MPI.COMM_WORLD.Bcast(h1, root=0)
-    MPI.COMM_WORLD.Bcast(h2, root=0)
+
+    h2_slice = np.empty((h2.shape[2], h2.shape[3]))
+
+    for i in range(h2.shape[0]):
+        for j in range(h2.shape[1]):
+            np.copyto(h2_slice, h2[i, j, :, :])
+            MPI.COMM_WORLD.Bcast(h2_slice, root=0)
+            np.copyto(h2[i, j, :, :], h2_slice)
+
     return converge_dmrg(
-        h1, h2, nelec, tag, tolerance=1.0e-3, mpi=MPI.COMM_WORLD.size > 1
+        h1, h2, nelec, tag, tolerance=1.0e-4, mpi=MPI.COMM_WORLD.size > 1
     )
 
 
 def append_to_rdms(mols, overlap=None, one_rdm=None, two_rdm=None):
-    return append_to_rdms_rerun(
+    return append_to_rdms_OAO_basis(
         mols,
         overlap=overlap,
         one_rdm=one_rdm,
@@ -69,6 +81,7 @@ init_geometry = stretch_factor * np.array(
     ]
 )
 
+
 mol = get_mol(init_geometry)
 
 
@@ -76,16 +89,25 @@ init_mol = mol.copy()
 
 trn_mols = [init_mol.copy()]
 
-steps = 50
-dt = 10
+steps = 100
+dt = 20
 
-reference_traj = np.load("traj_HF.npy")
+reference_traj = None
 
-if rank == 0:
-    np.save("trn_geometry_1.npy", init_geometry)
-    np.save("trn_time_1.npy", np.array(0))
 
 overlap, one_rdm, two_rdm = append_to_rdms(trn_mols)
+
+if rank == 0:
+    np.save("overlap.npy", overlap)
+    np.save("one_rdm.npy", one_rdm)
+    np.save("two_rdm.npy", two_rdm)
+
+i = 0
+
+if rank == 0:
+    fl = open("traj_EVCont_{}.xyz".format(i), "w")
+else:
+    fl = None
 
 updated_traj = get_trajectory(
     init_mol.copy(),
@@ -94,29 +116,36 @@ updated_traj = get_trajectory(
     two_rdm,
     steps=steps,
     dt=dt,
-    init_veloc=None,
-    hermitian=False,
+    trajectory_output=fl,
 )
+if rank == 0:
+    fl.close()
+
 
 if rank == 0:
-    np.save("traj_EVCont_1.npy", updated_traj)
+    np.save("traj_EVCont_{}.npy".format(i), updated_traj)
 
-thresh = 1.0e-4
+thresh = 1.0e-6
 
 times = [0]
 
 converged_assumed = False
-for i in range(2, 11):
-    diff = np.mean(abs(reference_traj - updated_traj) ** 2, axis=(1, 2))
-    if len(np.argwhere(diff > thresh).flatten()) > 0:
-        trn_time = np.argwhere(diff > thresh).flatten()[0]
-        converged_assumed = False
-    else:
-        if converged_assumed:
-            break
+while not converged_assumed:
+    i += 1
+    if reference_traj is not None:
+        diff = np.mean(abs(reference_traj - updated_traj) ** 2, axis=(1, 2))
+        if len(np.argwhere(diff > thresh).flatten()) > 0:
+            trn_time = np.argwhere(diff > thresh).flatten()[0]
+            converged_assumed = False
         else:
-            trn_time = len(diff) - 1
-            converged_assumed = True
+            if converged_assumed:
+                break
+            else:
+                trn_time = len(diff) - 1
+                converged_assumed = True
+    else:
+        diff = np.mean(abs(updated_traj - updated_traj[0]) ** 2, axis=(1, 2))
+        trn_time = np.argmax(diff)
     trn_geometry = updated_traj[trn_time]
     trn_mols.append(get_mol(trn_geometry))
     times.append(trn_time)
@@ -124,9 +153,27 @@ for i in range(2, 11):
         np.save("trn_geometry_{}.npy".format(i), trn_geometry)
     np.save("trn_time_{}.npy".format(i), trn_time)
     overlap, one_rdm, two_rdm = append_to_rdms(trn_mols, overlap, one_rdm, two_rdm)
+    if rank == 0:
+        np.save("overlap.npy", overlap)
+        np.save("one_rdm.npy", one_rdm)
+        np.save("two_rdm.npy", two_rdm)
+
     reference_traj = updated_traj
+    if rank == 0:
+        fl = open("traj_EVCont_{}.xyz".format(i), "w")
+    else:
+        fl = None
     updated_traj = get_trajectory(
-        init_mol.copy(), overlap, one_rdm, two_rdm, steps=steps, dt=dt, hermitian=False
+        init_mol.copy(),
+        overlap,
+        one_rdm,
+        two_rdm,
+        steps=steps,
+        dt=dt,
+        trajectory_output=fl,
+        hermitian=True,
     )
+    if rank == 0:
+        fl.close()
     if rank == 0:
         np.save("traj_EVCont_{}.npy".format(i), updated_traj)
