@@ -37,6 +37,7 @@ def append_to_rdms_rerun(
     computational_basis="split",
     reorder_orbitals=True,
     converge_dmrg_fun=default_solver_fun,
+    enforce_symmetric=True,
 ):
     mol_bra = mols[-1]
 
@@ -110,11 +111,55 @@ def append_to_rdms_rerun(
         rdm1, rdm2 = transform_integrals(o_RDM, t_RDM, computational_to_OAO_bra)
 
         overlap_new[-1, i] = ovlp
-        overlap_new[i, -1] = ovlp.conj()
         one_rdm_new[-1, i, :, :] = rdm1
-        one_rdm_new[i, -1, :, :] = rdm1.conj()
         two_rdm_new[-1, i, :, :, :, :] = rdm2
-        two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+
+        if enforce_symmetric:
+            overlap_new[i, -1] = ovlp.conj()
+            one_rdm_new[i, -1, :, :] = rdm1.conj()
+            two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+
+    if not enforce_symmetric:
+        for i, mol_ket in enumerate(mols[:-1]):
+            ket = mps_solver.load_mps("MPS_{}".format(i))
+            computational_basis_ket = np.load("basis_{}.npy".format(i))
+            ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
+            oao_basis_ket = get_basis(mol_ket, "OAO")
+
+            # Transform ket into computational basis of bra
+            computational_to_OAO_ket = oao_basis_ket.T.dot(ovlp_ket).dot(
+                computational_basis_ket
+            )
+            computational_to_OAO_bra = oao_basis_bra.T.dot(ovlp_bra).dot(basis)
+            orbital_rotation = (
+                computational_to_OAO_bra.T.dot(computational_to_OAO_ket)
+            ).T
+
+            if i != len(mols) - 1:
+                h1, h2 = get_integrals(mol_bra, (basis.dot(orbital_rotation.T)))
+                transformed_bra, en = converge_dmrg_fun(
+                    h1, h2, nelec, "MPS_{}_{}".format(i, len(mols) - 1)
+                )
+            else:
+                transformed_bra = bra
+
+            ovlp = np.array(
+                mps_solver.expectation(
+                    transformed_bra, mps_solver.get_identity_mpo(), ket
+                )
+            )
+            o_RDM = np.array(mps_solver.get_1pdm(ket, bra=transformed_bra))
+            t_RDM = np.array(
+                np.transpose(
+                    mps_solver.get_2pdm(ket, bra=transformed_bra), (0, 3, 1, 2)
+                )
+            )
+
+            rdm1, rdm2 = transform_integrals(o_RDM, t_RDM, computational_to_OAO_ket)
+
+            overlap_new[i, -1] = ovlp.conj()
+            one_rdm_new[i, -1, :, :] = rdm1.conj()
+            two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
 
     return overlap_new, one_rdm_new, two_rdm_new
 

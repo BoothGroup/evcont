@@ -32,7 +32,7 @@ def converge_dmrg(
     if rank == 0:
         open("DMRG_result_{}.txt".format(tag), "w").close()
 
-    noises = [1.0e-4, 1.0e-6] + [0]
+    noises = [1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7] + [0]
 
     for i in range(len(bond_dim_schedule) - 1):
         if i == 0:
@@ -61,7 +61,7 @@ def converge_dmrg(
             mpo,
             ket,
             bond_dims=inner_bond_dim_schedule,
-            noises=noises,
+            noises=np.array(noises) * (4 ** (-i)),
             n_sweeps=1000,
             iprint=1,
             tol=tolerance,
