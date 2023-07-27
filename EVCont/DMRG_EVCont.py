@@ -11,6 +11,7 @@ from mpi4py import MPI
 
 
 rank = MPI.COMM_WORLD.rank
+n_ranks = MPI.COMM_WORLD.Get_size()
 
 
 def default_solver_fun(h1, h2, nelec, tag):
@@ -102,7 +103,7 @@ def append_to_rdms_rerun(
 
         ovlp = np.array(
             mps_solver.expectation(bra, mps_solver.get_identity_mpo(), transformed_ket)
-        )
+        ) / n_ranks
         o_RDM = np.array(mps_solver.get_1pdm(transformed_ket, bra=bra))
         t_RDM = np.array(
             np.transpose(mps_solver.get_2pdm(transformed_ket, bra=bra), (0, 3, 1, 2))
@@ -147,7 +148,7 @@ def append_to_rdms_rerun(
                 mps_solver.expectation(
                     transformed_bra, mps_solver.get_identity_mpo(), ket
                 )
-            )
+            )/n_ranks
             o_RDM = np.array(mps_solver.get_1pdm(ket, bra=transformed_bra))
             t_RDM = np.array(
                 np.transpose(
@@ -321,7 +322,10 @@ def append_to_rdms_OAO_basis(
         mol_ket = mols[i]
         ket = mps_solver.load_mps("MPS_{}".format(i))
 
-        ovlp = np.array(mps_solver.expectation(bra, mps_solver.get_identity_mpo(), ket))
+        ovlp = (
+            np.array(mps_solver.expectation(bra, mps_solver.get_identity_mpo(), ket))
+            / n_ranks
+        )
         o_RDM = np.array(mps_solver.get_1pdm(ket, bra=bra))
         t_RDM = np.array(np.transpose(mps_solver.get_2pdm(ket, bra=bra), (0, 3, 1, 2)))
 
