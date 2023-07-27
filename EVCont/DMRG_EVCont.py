@@ -189,13 +189,13 @@ def append_to_rdms_orbital_rotation(
                 computational_to_OAO_bra.T.dot(computational_to_OAO_ket)
             ).T
 
-            init_bond_dim = max(ket.info.bond_dim, ket.info.bond_dim)
+            init_bond_dim = max(bra.info.bond_dim, ket.info.bond_dim)
 
             if i != len(mols) - 1:
                 transformed_ket = converge_orbital_rotation_mps(
                     ket,
                     orbital_rotation,
-                    tag="new",
+                    tag="MPS_{}_{}".format(len(mols) - 1, i),
                     convergence_thresh=rotation_thresh,
                     init_bond_dim=init_bond_dim,
                     iprint=0,
@@ -258,7 +258,9 @@ def append_to_rdms_OAO_basis(
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1))
     mps_solver.initialize_system(norb, n_elec=nelec)
 
-    bra, _ = converge_dmrg_fun(h1, h2, nelec, "MPS_{}".format(len(mols) - 1))
+    converge_dmrg_fun(h1, h2, nelec, "MPS_{}".format(len(mols) - 1))
+
+    bra = mps_solver.load_mps("MPS_{}".format(len(mols) - 1))
 
     overlap_new = np.ones((len(mols), len(mols)))
     if overlap is not None:
