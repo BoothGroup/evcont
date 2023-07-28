@@ -62,7 +62,7 @@ def get_mol(geometry):
             ("H", geometry[5]),
         ],
         basis="6-31G",
-        symmetry=True,
+        symmetry=False,
         unit="Bohr",
     )
 
