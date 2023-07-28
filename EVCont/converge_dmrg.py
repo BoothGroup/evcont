@@ -73,9 +73,9 @@ def converge_dmrg(
             with open("DMRG_result_{}.txt".format(tag), "a") as fl:
                 for j in range(len(bnd_dms)):
                     if j < len(noises):
-                        noise = noises[j]
+                        noise = (np.array(noises) * (4 ** (-i)))[j]
                     else:
-                        noise = noises[-1]
+                        noise = (np.array(noises) * (4 ** (-i)))[-1]
                     fl.write(
                         "{}  {}  {}  {}\n".format(bnd_dms[j], ens[j][0], dws[j], noise)
                     )
