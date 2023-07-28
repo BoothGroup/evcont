@@ -20,7 +20,7 @@ def get_mol(geometry):
             ("H", geometry[5]),
         ],
         basis="6-31G",
-        symmetry=True,
+        symmetry=False,
         unit="Bohr",
     )
 
@@ -46,8 +46,8 @@ init_mol = mol.copy()
 
 mf = init_mol.RHF()
 
-steps = 50
-dt = 10
+steps = 100
+dt = 20
 
 scanner_fun = mf.nuc_grad_method().as_scanner()
 frames = []
