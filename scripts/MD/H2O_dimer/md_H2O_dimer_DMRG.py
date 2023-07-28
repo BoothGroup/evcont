@@ -35,7 +35,7 @@ def dmrg_converge_fun(h1, h2, nelec, tag):
             np.copyto(h2[i, j, :, :], h2_slice)
 
     return converge_dmrg(
-        h1, h2, nelec, tag, tolerance=1.0e-4, mpi=MPI.COMM_WORLD.size > 1
+        h1, h2, nelec, tag, tolerance=1.0e-3, mpi=MPI.COMM_WORLD.size > 1
     )
 
 
