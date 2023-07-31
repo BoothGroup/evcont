@@ -49,7 +49,7 @@ def append_to_rdms_rerun(
     nelec = np.sum(mol_bra.nelec)
 
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1))
-    mps_solver.initialize_system(norb, n_elec=nelec)
+    mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
     if reorder_orbitals:
         orbital_reordering = mps_solver.orbital_reordering(h1, h2)
@@ -101,9 +101,14 @@ def append_to_rdms_rerun(
         else:
             transformed_ket = ket
 
-        ovlp = np.array(
-            mps_solver.expectation(bra, mps_solver.get_identity_mpo(), transformed_ket)
-        ) / n_ranks
+        ovlp = (
+            np.array(
+                mps_solver.expectation(
+                    bra, mps_solver.get_identity_mpo(), transformed_ket
+                )
+            )
+            / n_ranks
+        )
         o_RDM = np.array(mps_solver.get_1pdm(transformed_ket, bra=bra))
         t_RDM = np.array(
             np.transpose(mps_solver.get_2pdm(transformed_ket, bra=bra), (0, 3, 1, 2))
@@ -144,11 +149,14 @@ def append_to_rdms_rerun(
             else:
                 transformed_bra = bra
 
-            ovlp = np.array(
-                mps_solver.expectation(
-                    transformed_bra, mps_solver.get_identity_mpo(), ket
+            ovlp = (
+                np.array(
+                    mps_solver.expectation(
+                        transformed_bra, mps_solver.get_identity_mpo(), ket
+                    )
                 )
-            )/n_ranks
+                / n_ranks
+            )
             o_RDM = np.array(mps_solver.get_1pdm(ket, bra=transformed_bra))
             t_RDM = np.array(
                 np.transpose(
@@ -186,7 +194,7 @@ def append_to_rdms_orbital_rotation(
 
     if rank == 0:
         mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=None)
-        mps_solver.initialize_system(norb, n_elec=nelec)
+        mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
         if reorder_orbitals:
             orbital_reordering = mps_solver.orbital_reordering(h1, h2)
@@ -211,7 +219,7 @@ def append_to_rdms_orbital_rotation(
 
     if rank == 0:
         mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=None)
-        mps_solver.initialize_system(norb, n_elec=nelec)
+        mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
         bra = mps_solver.load_mps("MPS_{}".format(len(mols) - 1))
 
@@ -302,7 +310,7 @@ def append_to_rdms_OAO_basis(
     nelec = np.sum(mol_bra.nelec)
 
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1))
-    mps_solver.initialize_system(norb, n_elec=nelec)
+    mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
     converge_dmrg_fun(h1, h2, nelec, "MPS_{}".format(len(mols) - 1))
 
