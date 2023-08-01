@@ -1,4 +1,6 @@
-from pyscf import gto, md, CASCI
+from pyscf import gto, md
+
+from pyscf.mcscf.casci import CASCI
 
 import numpy as np
 
