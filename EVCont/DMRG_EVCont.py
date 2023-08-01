@@ -60,7 +60,7 @@ def append_to_rdms_rerun(
 
     h1, h2 = get_integrals(mol_bra, basis)
 
-    bra, en = converge_dmrg_fun(h1, h2, nelec, "MPS_{}".format(len(mols) - 1))
+    bra, en = converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(len(mols) - 1))
 
     if rank == 0:
         np.save("basis_{}.npy".format(len(mols) - 1), basis)
@@ -96,7 +96,7 @@ def append_to_rdms_rerun(
                 mol_ket, computational_basis_ket.dot(orbital_rotation)
             )
             transformed_ket, en = converge_dmrg_fun(
-                h1, h2, nelec, "MPS_{}_{}".format(len(mols) - 1, i)
+                h1, h2, mol_ket.nelec, "MPS_{}_{}".format(len(mols) - 1, i)
             )
         else:
             transformed_ket = ket
@@ -144,7 +144,7 @@ def append_to_rdms_rerun(
             if i != len(mols) - 1:
                 h1, h2 = get_integrals(mol_bra, (basis.dot(orbital_rotation.T)))
                 transformed_bra, en = converge_dmrg_fun(
-                    h1, h2, nelec, "MPS_{}_{}".format(i, len(mols) - 1)
+                    h1, h2, mol_ket.nelec, "MPS_{}_{}".format(i, len(mols) - 1)
                 )
             else:
                 transformed_bra = bra
@@ -215,7 +215,7 @@ def append_to_rdms_orbital_rotation(
     if two_rdm is not None:
         two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
 
-    converge_dmrg_fun(h1, h2, nelec, "MPS_{}".format(len(mols) - 1))
+    converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(len(mols) - 1))
 
     if rank == 0:
         mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=None)
@@ -312,7 +312,7 @@ def append_to_rdms_OAO_basis(
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1))
     mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
-    converge_dmrg_fun(h1, h2, nelec, "MPS_{}".format(len(mols) - 1))
+    converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(len(mols) - 1))
 
     bra = mps_solver.load_mps("MPS_{}".format(len(mols) - 1))
 
