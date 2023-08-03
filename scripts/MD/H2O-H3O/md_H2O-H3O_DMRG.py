@@ -91,7 +91,7 @@ init_mol = mol.copy()
 
 trn_mols = [init_mol.copy()]
 
-steps = 100
+steps = 200
 dt = 20
 
 reference_traj = None
