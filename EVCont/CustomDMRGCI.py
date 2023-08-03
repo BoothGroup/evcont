@@ -33,11 +33,11 @@ class DMRGSolver:
         ovlp = self.mol.intor_symmetric("int1e_ovlp")
         computational_basis = get_basis(self.mol, basis_type=self.basis)
         transform = computational_basis.T.dot(ovlp).dot(basis_MO)
-        MPI.Bcast(transform)
+        MPI.COMM_WORLD.Bcast(transform)
         return transform
 
     def kernel(self, h1, h2, norb, nelec, ecore=0.0):
-        MPI.Bcast(self.mo_coeff)  # Just to be safe...
+        MPI.COMM_WORLD.Bcast(self.mo_coeff)  # Just to be safe...
         MO_computational_transformation = self.get_MO_computational_transformation()
 
         # Likely there are faster ways to do this...
@@ -55,7 +55,7 @@ class DMRGSolver:
         return ecore + en, state
 
     def make_rdm1(self, state, norb, nelec):
-        MPI.Bcast(self.mo_coeff)  # Just to be safe...
+        MPI.COMM_WORLD.Bcast(self.mo_coeff)  # Just to be safe...
         mps_solver = DMRGDriver(
             symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1)
         )
@@ -74,7 +74,7 @@ class DMRGSolver:
         return one_rdm_transformed
 
     def make_rdm12(self, state, norb, nelec):
-        MPI.Bcast(self.mo_coeff)  # Just to be safe...
+        MPI.COMM_WORLD.Bcast(self.mo_coeff)  # Just to be safe...
         mps_solver = DMRGDriver(
             symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1)
         )
