@@ -7,6 +7,9 @@ from EVCont.MD_utils import get_trajectory
 
 from EVCont.CustomDMRGCI import CustomDMRGCI
 
+from EVCont.converge_dmrg import converge_dmrg
+
+
 import os
 
 from mpi4py import MPI
