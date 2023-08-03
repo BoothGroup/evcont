@@ -62,6 +62,6 @@ for i, pos in enumerate(trajectory):
                     hermitian=True,
                 )
                 fl.write("  {}".format(en))
-                fl2.write("  {}".format(np.sum(abs(grad - grad_exact) ** 2)))
+                fl2.write("{}  ".format(np.sum(abs(grad - grad_exact) ** 2)))
             fl.write("\n")
             fl2.write("\n")
