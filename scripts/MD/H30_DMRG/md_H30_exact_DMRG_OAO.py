@@ -18,6 +18,16 @@ rank = MPI.COMM_WORLD.rank
 norb = nelec = 30
 
 
+def default_solver_fun(h1, h2, nelec):
+    return converge_dmrg(
+        h1,
+        h2,
+        nelec,
+        "MPS",
+        tolerance=1.0e-5,
+    )
+
+
 def get_mol(geometry):
     mol = gto.Mole()
 
@@ -38,7 +48,7 @@ dt = 20
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 init_mol = mol.copy()
-solver = CustomDMRGCI(mol, 30, 30, "OAO")
+solver = CustomDMRGCI(mol, 30, 30, "OAO", converge_dmrg_fun=default_solver_fun)
 solver.converged = True
 
 scanner_fun = solver.nuc_grad_method().as_scanner()
