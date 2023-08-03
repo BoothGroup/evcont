@@ -10,6 +10,8 @@ from EVCont.customCASCI import CustomCASCI
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
+from mpi4py import MPI
+
 
 def default_solver_fun(h1, h2, nelec):
     return converge_dmrg(
@@ -30,9 +32,12 @@ class DMRGSolver:
         basis_MO = self.mo_coeff
         ovlp = self.mol.intor_symmetric("int1e_ovlp")
         computational_basis = get_basis(self.mol, basis_type=self.basis)
-        return computational_basis.T.dot(ovlp).dot(basis_MO)
+        transform = computational_basis.T.dot(ovlp).dot(basis_MO)
+        MPI.Bcast(transform)
+        return transform
 
     def kernel(self, h1, h2, norb, nelec, ecore=0.0):
+        MPI.Bcast(self.mo_coeff)  # Just to be safe...
         MO_computational_transformation = self.get_MO_computational_transformation()
 
         # Likely there are faster ways to do this...
@@ -50,8 +55,13 @@ class DMRGSolver:
         return ecore + en, state
 
     def make_rdm1(self, state, norb, nelec):
-        mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2)
-        mps_solver.initialize_system(norb)
+        MPI.Bcast(self.mo_coeff)  # Just to be safe...
+        mps_solver = DMRGDriver(
+            symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1)
+        )
+        mps_solver.initialize_system(
+            norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])
+        )
 
         MO_computational_trafo = self.get_MO_computational_transformation()
 
@@ -64,8 +74,13 @@ class DMRGSolver:
         return one_rdm_transformed
 
     def make_rdm12(self, state, norb, nelec):
-        mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2)
-        mps_solver.initialize_system(norb)
+        MPI.Bcast(self.mo_coeff)  # Just to be safe...
+        mps_solver = DMRGDriver(
+            symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1)
+        )
+        mps_solver.initialize_system(
+            norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])
+        )
 
         MO_computational_trafo = self.get_MO_computational_transformation()
 
