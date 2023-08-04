@@ -35,7 +35,7 @@ def dmrg_converge_fun(h1, h2, nelec, tag):
             np.copyto(h2[i, j, :, :], h2_slice)
 
     return converge_dmrg(
-        h1, h2, nelec, tag, tolerance=1.0e-5, mpi=MPI.COMM_WORLD.size > 1
+        h1, h2, nelec, tag, tolerance=1.0e-3, mpi=MPI.COMM_WORLD.size > 1
     )
 
 
@@ -138,7 +138,9 @@ while not converged_assumed:
             if converged_assumed:
                 break
             else:
-                trn_time = len(diff) - 1
+                trn_time = np.argmax(
+                    np.mean(abs(updated_traj - updated_traj[0]) ** 2, axis=(1, 2))
+                )
                 converged_assumed = True
     else:
         diff = np.mean(abs(updated_traj - updated_traj[0]) ** 2, axis=(1, 2))
