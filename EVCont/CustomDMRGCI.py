@@ -57,7 +57,9 @@ class DMRGSolver:
     def make_rdm1(self, state, norb, nelec):
         MPI.COMM_WORLD.Bcast(self.mo_coeff)  # Just to be safe...
         mps_solver = DMRGDriver(
-            symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1)
+            symm_type=SymmetryTypes.SU2,
+            mpi=(MPI.COMM_WORLD.size > 1),
+            stack_mem=4 << 30,
         )
         mps_solver.initialize_system(
             norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])
@@ -76,7 +78,9 @@ class DMRGSolver:
     def make_rdm12(self, state, norb, nelec):
         MPI.COMM_WORLD.Bcast(self.mo_coeff)  # Just to be safe...
         mps_solver = DMRGDriver(
-            symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1)
+            symm_type=SymmetryTypes.SU2,
+            mpi=(MPI.COMM_WORLD.size > 1),
+            stack_mem=4 << 30,
         )
         mps_solver.initialize_system(
             norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])
