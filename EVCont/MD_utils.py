@@ -51,6 +51,12 @@ def get_trajectory(
 ):
     trajectory = np.zeros((steps, len(init_mol.atom), 3))
     num_threads = MPI.COMM_WORLD.Split_type(MPI.COMM_TYPE_SHARED).Get_size()
+
+    num_threads_outer = os.getenv("OMP_NUM_THREADS")
+
+    if num_threads_outer is not None:
+        num_threads *= int(num_threads_outer)
+
     if rank == 0:
         with threadpool_limits(limits=num_threads):
             scanner_fun = get_scanner(
