@@ -67,7 +67,7 @@ def get_mol(geometry):
 
 init_dist = 1.9
 
-steps = 100
+steps = 200
 dt = 20
 
 np.save("times.npy", np.arange(steps) * dt)

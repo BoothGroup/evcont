@@ -5,30 +5,7 @@ import numpy as np
 from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
 from EVCont.MD_utils import get_trajectory
 
-from EVCont.CustomDMRGCI import CustomDMRGCI
-
-from EVCont.converge_dmrg import converge_dmrg
-
-
-import os
-
-from mpi4py import MPI
-
-
-rank = MPI.COMM_WORLD.rank
-
-
-norb = nelec = 30
-
-
-def default_solver_fun(h1, h2, nelec):
-    return converge_dmrg(
-        h1,
-        h2,
-        nelec,
-        "MPS",
-        tolerance=1.0e-5,
-    )
+norb = nelec = 20
 
 
 def get_mol(geometry):
@@ -44,6 +21,17 @@ def get_mol(geometry):
     return mol
 
 
+def get_ham(mol):
+    loc_coeff = lo.orth_ao(mol, "lowdin", pre_orth_ao=None)
+
+    norb = loc_coeff.shape[0]
+
+    h1 = np.linalg.multi_dot((loc_coeff.T, scf.hf.get_hcore(mol), loc_coeff))
+    h2 = ao2mo.restore(1, ao2mo.kernel(mol, loc_coeff), norb)
+
+    return h1, h2
+
+
 init_dist = 1.9
 
 steps = 200
@@ -51,29 +39,24 @@ dt = 20
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 init_mol = mol.copy()
-solver = CustomDMRGCI(mol, 30, 30, "OAO", converge_dmrg_fun=default_solver_fun)
-solver.converged = True
 
-scanner_fun = solver.nuc_grad_method().as_scanner()
+mf = init_mol.KS()
+
+mf.xc = "pbe"
 
 
+scanner_fun = mf.nuc_grad_method().as_scanner()
 frames = []
 scanner_fun.mol = init_mol.copy()
-
-if rank == 0:
-    fl = "DMRG_trajectory.xyz"
-else:
-    fl = None
-
 myintegrator = md.NVE(
     scanner_fun,
     dt=dt,
     steps=steps,
     incore_anyway=True,
     frames=frames,
-    trajectory_output=fl,
+    trajectory_output="DFT_trajectory.xyz",
 )
 myintegrator.run()
 
-if rank == 0:
-    np.save("traj_DMRG.npy", np.array([frame.coord for frame in frames]))
+
+np.save("traj_DFT.npy", np.array([frame.coord for frame in frames]))
