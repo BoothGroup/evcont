@@ -113,7 +113,7 @@ if rank == 0:
 if rank == 0:
     np.save("traj_EVCont_{}.npy".format(i), updated_traj)
 
-thresh = 1.0e-6
+thresh = 1.0e-5
 
 times = [0]
 
@@ -129,11 +129,13 @@ while not converged_assumed:
             if converged_assumed:
                 break
             else:
-                trn_time = len(diff) - 1
+                trn_time = np.argmax(
+                    np.mean(abs(updated_traj - updated_traj[0]) ** 2, axis=(1, 2))
+                )
                 converged_assumed = True
     else:
         diff = np.mean(abs(updated_traj - updated_traj[0]) ** 2, axis=(1, 2))
-        trn_time = np.argmax(diff)
+        trn_time = np.argwhere(diff > thresh).flatten()[0]
     trn_geometry = updated_traj[trn_time]
     trn_mols.append(get_mol(trn_geometry))
     times.append(trn_time)
