@@ -89,7 +89,7 @@ trn_mols = [init_mol.copy()]
 steps = 100
 dt = 20
 
-reference_traj = None
+reference_traj = init_geometry
 
 
 overlap, one_rdm, two_rdm = append_to_rdms(trn_mols)
