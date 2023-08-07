@@ -12,6 +12,8 @@ import jax
 
 from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state
 
+from EVCont.electron_integral_utils import get_loewdin_trafo
+
 
 def get_overlap_grad(mol):
     inner_deriv = mol.intor("int1e_ipovlp", comp=3)
@@ -24,12 +26,6 @@ def get_overlap_grad(mol):
     deriv = deriv + deriv.transpose(0, 1, 3, 2)
 
     return np.transpose(deriv, (2, 3, 1, 0))
-
-
-def get_loewdin_trafo(overlap_mat):
-    vals, vecs = jnp.linalg.eigh(overlap_mat)
-    inverse_sqrt_vals = jnp.where(vals > 1.0e-15, 1 / jnp.sqrt(vals), 0.0)
-    return jnp.dot(vecs * inverse_sqrt_vals, vecs.conj().T)
 
 
 def loewdin_trafo_grad(overlap_mat):
