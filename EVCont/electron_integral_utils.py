@@ -2,6 +2,7 @@ from jax import config
 
 config.update("jax_enable_x64", True)
 
+from EVCont.ab_initio_gradients_loewdin import get_loewdin_trafo
 
 import numpy as np
 
@@ -25,7 +26,7 @@ def transform_integrals(h1, h2, trafo):
 
 def get_basis(mol, basis_type="OAO"):
     if basis_type == "OAO":
-        basis = lo.orth_ao(mol, "lowdin", pre_orth_ao=None)
+        basis = np.array(get_loewdin_trafo(mol.intor("int1e_ovlp")))
     else:
         myhf = scf.RHF(mol)
         ehf = myhf.scf()

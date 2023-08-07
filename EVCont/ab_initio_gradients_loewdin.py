@@ -26,7 +26,6 @@ def get_overlap_grad(mol):
     return np.transpose(deriv, (2, 3, 1, 0))
 
 
-@jax.jit
 def get_loewdin_trafo(overlap_mat):
     vals, vecs = jnp.linalg.eigh(overlap_mat)
     inverse_sqrt_vals = jnp.where(vals > 1.0e-15, 1 / jnp.sqrt(vals), 0.0)
