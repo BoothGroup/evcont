@@ -22,19 +22,22 @@ def get_mol(geometry):
     return mol
 
 
-trajectory = np.load("traj_EVCont_7.npy")
-
 overlap = np.load("overlap.npy")
 one_rdm = np.load("one_rdm.npy")
 two_rdm = np.load("two_rdm.npy")
 
+num_points = overlap.shape[0]
+
+trajectory = np.load("traj_EVCont_{}.npy".format(num_points - 1))
+
+
 with open("force_error_6_31_G.txt", "w") as fl:
-    for i in range(9):
+    for i in range(num_points):
         fl.write("Force error ({} trn. geometries)  ".format(i + 1))
     fl.write("\n")
 with open("predicted_energies_6_31_G.txt", "w") as fl:
     fl.write("Energy exact")
-    for i in range(9):
+    for i in range(num_points):
         fl.write("  Energy predicted ({} trn. geometries)".format(i + 1))
     fl.write("\n")
 
@@ -53,7 +56,7 @@ for i, pos in enumerate(trajectory):
         fl.write("{}".format(en_exact))
         with open("force_error_6_31_G.txt", "a") as fl2:
             h1, h2 = get_integrals(mol, get_basis(mol))
-            for j in range(9):
+            for j in range(num_points):
                 en, grad = get_energy_with_grad(
                     mol,
                     (one_rdm[: j + 1, : j + 1, :, :]),
