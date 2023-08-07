@@ -135,8 +135,7 @@ thresh = 1.0e-5
 
 times = [0]
 
-converged_assumed = False
-while not converged_assumed:
+while True:
     i += 1
     en_diff = abs(updated_ens - reference_ens)
     trn_time = np.argmax(en_diff)
@@ -157,7 +156,6 @@ while not converged_assumed:
         np.save("one_rdm.npy", one_rdm)
         np.save("two_rdm.npy", two_rdm)
 
-    reference_ens = updated_ens
     if rank == 0:
         fl = open("traj_EVCont_{}.xyz".format(i), "w")
     else:
@@ -172,6 +170,11 @@ while not converged_assumed:
         trajectory_output=fl,
         hermitian=True,
     )
+    if rank == 0:
+        fl.close()
+    if rank == 0:
+        np.save("traj_EVCont_{}.npy".format(i), trajectory)
+    reference_ens = updated_ens
     updated_ens = np.array(
         [
             approximate_ground_state_OAO(get_mol(geometry), one_rdm, two_rdm, overlap)[
@@ -180,7 +183,3 @@ while not converged_assumed:
             for geometry in trajectory
         ]
     )
-    if rank == 0:
-        fl.close()
-    if rank == 0:
-        np.save("traj_EVCont_{}.npy".format(i), trajectory)

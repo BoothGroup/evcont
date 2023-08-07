@@ -15,6 +15,9 @@ from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
 
+from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
+
+
 from mpi4py import MPI
 
 
@@ -84,7 +87,7 @@ if rank == 0:
 else:
     fl = None
 
-updated_traj = get_trajectory(
+trajectory = get_trajectory(
     init_mol.copy(),
     overlap,
     one_rdm,
@@ -97,31 +100,33 @@ if rank == 0:
     fl.close()
 
 
+updated_ens = np.array(
+    [
+        approximate_ground_state_OAO(get_mol(geometry), one_rdm, two_rdm, overlap)[0]
+        for geometry in trajectory
+    ]
+)
+
+reference_ens = updated_ens[0]
+
+
 if rank == 0:
-    np.save("traj_EVCont_vtz_{}.npy".format(i), updated_traj)
+    np.save("traj_EVCont_vtz_{}.npy".format(i), trajectory)
 
 thresh = 1.0e-5
 
 times = [0]
 
-converged_assumed = False
-while not converged_assumed:
+while True:
     i += 1
-    if reference_traj is not None:
-        diff = np.mean(abs(reference_traj - updated_traj) ** 2, axis=(1, 2))
-        if len(np.argwhere(diff > thresh).flatten()) > 0:
-            trn_time = np.argwhere(diff > thresh).flatten()[0]
-            converged_assumed = False
-        else:
-            if converged_assumed:
-                break
-            else:
-                trn_time = np.argmax(np.mean(abs(updated_traj - updated_traj[0]) ** 2, axis=(1, 2)))
-                converged_assumed = True
-    else:
-        diff = np.mean(abs(updated_traj - updated_traj[0]) ** 2, axis=(1, 2))
-        trn_time = np.argwhere(diff > thresh).flatten()[0]
-    trn_geometry = updated_traj[trn_time]
+    en_diff = abs(updated_ens - reference_ens)
+    trn_time = np.argmax(en_diff)
+    if rank == 0:
+        with open("MD_convergence.txt", "a") as fl:
+            fl.write("{}\n".format(en_diff[trn_time]))
+    if en_diff[trn_time] < thresh and i > 1:
+        break
+    trn_geometry = trajectory[trn_time]
     mf = get_mol(trn_geometry).copy().RHF()
     mf.kernel()
     MPI.COMM_WORLD.Bcast(mf.mo_coeff)
@@ -136,12 +141,11 @@ while not converged_assumed:
         np.save("one_rdm_vtz.npy", one_rdm)
         np.save("two_rdm_vtz.npy", two_rdm)
 
-    reference_traj = updated_traj
     if rank == 0:
         fl = open("traj_EVCont_vtz_{}.xyz".format(i), "w")
     else:
         fl = None
-    updated_traj = get_trajectory(
+    trajectory = get_trajectory(
         init_mol.copy(),
         overlap,
         one_rdm,
@@ -154,4 +158,14 @@ while not converged_assumed:
     if rank == 0:
         fl.close()
     if rank == 0:
-        np.save("traj_EVCont_vtz_{}.npy".format(i), updated_traj)
+        np.save("traj_EVCont_vtz_{}.npy".format(i), trajectory)
+
+    reference_ens = updated_ens
+    updated_ens = np.array(
+        [
+            approximate_ground_state_OAO(get_mol(geometry), one_rdm, two_rdm, overlap)[
+                0
+            ]
+            for geometry in trajectory
+        ]
+    )
