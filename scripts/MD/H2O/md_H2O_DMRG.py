@@ -121,6 +121,7 @@ if rank == 0:
 
 if rank == 0:
     np.save("traj_EVCont_{}.npy".format(i), updated_traj)
+    open("MD_convergence.txt", "w").close()
 
 thresh = 1.0e-5
 
@@ -129,22 +130,12 @@ times = [0]
 converged_assumed = False
 while not converged_assumed:
     i += 1
-    if reference_traj is not None:
-        diff = np.mean(abs(reference_traj - updated_traj) ** 2, axis=(1, 2))
-        if len(np.argwhere(diff > thresh).flatten()) > 0:
-            trn_time = np.argwhere(diff > thresh).flatten()[0]
-            converged_assumed = False
-        else:
-            if converged_assumed:
-                break
-            else:
-                trn_time = np.argmax(
-                    np.mean(abs(updated_traj - updated_traj[0]) ** 2, axis=(1, 2))
-                )
-                converged_assumed = True
-    else:
-        diff = np.mean(abs(updated_traj - updated_traj[0]) ** 2, axis=(1, 2))
-        trn_time = np.argwhere(diff > thresh).flatten()[0]
+    diff = np.mean(abs(reference_traj - updated_traj) ** 2, axis=(1, 2))
+    trn_time = np.argmax(diff)
+    with open("MD_convergence.txt", "a") as fl:
+        fl.write("{}\n".format(diff[trn_time]))
+    if diff[trn_time] < thresh:
+        break
     trn_geometry = updated_traj[trn_time]
     trn_mols.append(get_mol(trn_geometry))
     times.append(trn_time)
