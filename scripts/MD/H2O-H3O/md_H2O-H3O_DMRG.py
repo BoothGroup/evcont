@@ -137,8 +137,9 @@ while not converged_assumed:
     i += 1
     diff = np.mean(abs(reference_traj - updated_traj) ** 2, axis=(1, 2))
     trn_time = np.argmax(diff)
-    with open("MD_convergence.txt", "a") as fl:
-        fl.write("{}\n".format(diff[trn_time]))
+    if rank == 0:
+        with open("MD_convergence.txt", "a") as fl:
+            fl.write("{}\n".format(diff[trn_time]))
     if diff[trn_time] < thresh:
         break
     trn_geometry = updated_traj[trn_time]
