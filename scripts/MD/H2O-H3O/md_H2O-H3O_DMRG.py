@@ -93,8 +93,7 @@ init_mol = mol.copy()
 
 trn_mols = [init_mol.copy()]
 
-steps = 200
-dt = 20
+steps = 300
 
 overlap, one_rdm, two_rdm = append_to_rdms(trn_mols)
 
@@ -116,7 +115,6 @@ trajectory = get_trajectory(
     one_rdm,
     two_rdm,
     steps=steps,
-    dt=dt,
     trajectory_output=fl,
 )
 if rank == 0:
@@ -134,27 +132,30 @@ reference_ens = updated_ens[0]
 
 if rank == 0:
     np.save("traj_EVCont_{}.npy".format(i), trajectory)
-    open("MD_convergence.txt", "w").close()
+    open("en_convergence.txt", "w").close()
+    open("trn_times.txt", "w").close()
 
-thresh = 1.0e-5
-
-times = [0]
+thresh = 1.0e-3
 
 while True:
     i += 1
     en_diff = abs(updated_ens - reference_ens)
-    trn_time = np.argmax(en_diff)
     if rank == 0:
-        with open("MD_convergence.txt", "a") as fl:
-            fl.write("{}\n".format(en_diff[trn_time]))
-    if en_diff[trn_time] < thresh and i > 1:
-        break
+        with open("en_convergence.txt", "a") as fl:
+            fl.write("{}\n".format(max(en_diff)))
+    if max(en_diff) > thresh:
+        trn_time = np.argwhere(en_diff > thresh).flatten()[0]
+        converged = False
+    else:
+        if converged:
+            break
+        trn_time = np.argmax(en_diff)
+        converged = True
+    if rank == 0:
+        with open("trn_times.txt", "a") as fl:
+            fl.write("{}\n".format(trn_time))
     trn_geometry = trajectory[trn_time]
     trn_mols.append(get_mol(trn_geometry))
-    times.append(trn_time)
-    if rank == 0:
-        np.save("trn_geometry_{}.npy".format(i), trn_geometry)
-    np.save("trn_time_{}.npy".format(i), trn_time)
     overlap, one_rdm, two_rdm = append_to_rdms(trn_mols, overlap, one_rdm, two_rdm)
     if rank == 0:
         np.save("overlap.npy", overlap)
@@ -171,7 +172,6 @@ while True:
         one_rdm,
         two_rdm,
         steps=steps,
-        dt=dt,
         trajectory_output=fl,
         hermitian=True,
     )
@@ -179,7 +179,6 @@ while True:
         fl.close()
     if rank == 0:
         np.save("traj_EVCont_{}.npy".format(i), trajectory)
-
     reference_ens = updated_ens
     updated_ens = np.array(
         [

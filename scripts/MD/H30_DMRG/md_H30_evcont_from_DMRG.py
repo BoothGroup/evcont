@@ -71,9 +71,6 @@ def get_mol(geometry):
 init_dist = 1.9
 
 steps = 200
-dt = 20
-
-np.save("times.npy", np.arange(steps) * dt)
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 
@@ -103,44 +100,47 @@ trajectory = get_trajectory(
     one_rdm,
     two_rdm,
     steps=steps,
-    dt=dt,
     trajectory_output=fl,
 )
 if rank == 0:
     fl.close()
 
+updated_ens = np.array(
+    [
+        approximate_ground_state_OAO(get_mol(geometry), one_rdm, two_rdm, overlap)[0]
+        for geometry in trajectory
+    ]
+)
+
+reference_ens = updated_ens[0]
+
 
 if rank == 0:
     np.save("traj_EVCont_{}.npy".format(i), trajectory)
+    open("en_convergence.txt", "w").close()
+    open("trn_times.txt", "w").close()
 
-thresh = 1.0e-5
-
-times = [0]
+thresh = 1.0e-3
 
 while True:
     i += 1
-    if reference_traj is not None:
-        diff = np.mean(abs(reference_traj - trajectory) ** 2, axis=(1, 2))
-        if len(np.argwhere(diff > thresh).flatten()) > 0:
-            trn_time = np.argwhere(diff > thresh).flatten()[0]
-            converged_assumed = False
-        else:
-            if converged_assumed:
-                break
-            else:
-                trn_time = np.argmax(
-                    np.mean(abs(trajectory - trajectory[0]) ** 2, axis=(1, 2))
-                )
-                converged_assumed = True
+    en_diff = abs(updated_ens - reference_ens)
+    if rank == 0:
+        with open("en_convergence.txt", "a") as fl:
+            fl.write("{}\n".format(max(en_diff)))
+    if max(en_diff) > thresh:
+        trn_time = np.argwhere(en_diff > thresh).flatten()[0]
+        converged = False
     else:
-        diff = np.mean(abs(trajectory - trajectory[0]) ** 2, axis=(1, 2))
-        trn_time = np.argwhere(diff > thresh).flatten()[0]
+        if converged:
+            break
+        trn_time = np.argmax(en_diff)
+        converged = True
+    if rank == 0:
+        with open("trn_times.txt", "a") as fl:
+            fl.write("{}\n".format(trn_time))
     trn_geometry = trajectory[trn_time]
     trn_mols.append(get_mol(trn_geometry))
-    times.append(trn_time)
-    if rank == 0:
-        np.save("trn_geometry_{}.npy".format(i), trn_geometry)
-    np.save("trn_time_{}.npy".format(i), trn_time)
     overlap, one_rdm, two_rdm = append_to_rdms(trn_mols, overlap, one_rdm, two_rdm)
     if rank == 0:
         np.save("overlap.npy", overlap)
@@ -157,7 +157,6 @@ while True:
         one_rdm,
         two_rdm,
         steps=steps,
-        dt=dt,
         trajectory_output=fl,
         hermitian=True,
     )
@@ -165,7 +164,6 @@ while True:
         fl.close()
     if rank == 0:
         np.save("traj_EVCont_{}.npy".format(i), trajectory)
-
     reference_ens = updated_ens
     updated_ens = np.array(
         [
