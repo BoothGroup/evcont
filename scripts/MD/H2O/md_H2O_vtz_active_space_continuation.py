@@ -118,6 +118,7 @@ if rank == 0:
     open("trn_times.txt", "w").close()
 
 thresh = 1.0e-3
+inner_thresh = 1.0e-2
 
 while True:
     i += 1
@@ -125,14 +126,15 @@ while True:
     if rank == 0:
         with open("en_convergence.txt", "a") as fl:
             fl.write("{}\n".format(max(en_diff)))
-    if max(en_diff) > thresh:
+    if max(en_diff) > inner_thresh:
         trn_time = np.argwhere(en_diff > thresh).flatten()[0]
         converged = False
     else:
-        if converged:
+        if converged and max(en_diff) <= thresh:
             break
         trn_time = np.argmax(en_diff)
-        converged = True
+        if max(en_diff) <= thresh:
+            converged = True
     if rank == 0:
         with open("trn_times.txt", "a") as fl:
             fl.write("{}\n".format(trn_time))
