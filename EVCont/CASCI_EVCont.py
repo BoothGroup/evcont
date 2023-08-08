@@ -172,20 +172,20 @@ def append_to_rdms(cascis, overlap=None, one_rdm=None, two_rdm=None):
             mol_ket.nelec[0] - casci_ket.ncore, casci_ket.ncas
         )
 
-        rdm1_tmp = np.zeros((one_rdm_new.shape[2], one_rdm_new.shape[3]))
-        rdm1 = np.zeros((one_rdm_new.shape[2], one_rdm_new.shape[3]))
+        rdm1_tmp = np.zeros((mo_coeff_ket.shape[0], mo_coeff_ket.shape[0]))
+        rdm1 = np.zeros((mo_coeff_ket.shape[0], mo_coeff_ket.shape[0]))
         rdm2_tmp = np.zeros(
             (
-                two_rdm_new.shape[2] * two_rdm_new.shape[3],
-                two_rdm_new.shape[4] * two_rdm_new.shape[5],
+                mo_coeff_ket.shape[0] * mo_coeff_ket.shape[0],
+                mo_coeff_ket.shape[0] * mo_coeff_ket.shape[0],
             )
         )
         rdm2 = np.zeros(
             (
-                two_rdm_new.shape[2],
-                two_rdm_new.shape[3],
-                two_rdm_new.shape[4],
-                two_rdm_new.shape[5],
+                mo_coeff_ket.shape[0],
+                mo_coeff_ket.shape[0],
+                mo_coeff_ket.shape[0],
+                mo_coeff_ket.shape[0],
             )
         )
         overlap_accumulate = 0.0
