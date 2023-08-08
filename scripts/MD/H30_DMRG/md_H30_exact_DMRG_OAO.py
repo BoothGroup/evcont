@@ -27,7 +27,7 @@ def default_solver_fun(h1, h2, nelec):
         h2,
         nelec,
         "MPS",
-        tolerance=1.0e-5,
+        tolerance=1.0e-4,
     )
 
 
@@ -47,7 +47,6 @@ def get_mol(geometry):
 init_dist = 1.9
 
 steps = 200
-dt = 20
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 init_mol = mol.copy()
@@ -67,7 +66,6 @@ else:
 
 myintegrator = md.NVE(
     scanner_fun,
-    dt=dt,
     steps=steps,
     incore_anyway=True,
     frames=frames,
