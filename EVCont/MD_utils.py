@@ -43,7 +43,7 @@ def get_trajectory(
     overlap,
     one_rdm,
     two_rdm,
-    dt=100.0,
+    dt=10.0,
     steps=10,
     init_veloc=None,
     hermitian=True,
