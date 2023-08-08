@@ -123,6 +123,8 @@ if rank == 0:
 thresh = 1.0e-3
 inner_thresh = 1.0e-2
 
+converged = False
+
 while True:
     i += 1
     en_diff = abs(updated_ens - reference_ens)
