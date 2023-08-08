@@ -10,6 +10,8 @@ from mpi4py import MPI
 
 from tqdm import tqdm
 
+rank = MPI.COMM_WORLD.Get_rank()
+
 
 def owndata(x):
     # CARMA requires numpy arrays to have data ownership
@@ -112,26 +114,29 @@ def append_to_rdms(cascis, overlap=None, one_rdm=None, two_rdm=None):
         owndata(mo_coeff_bra),
     )
 
-    overlap_new = np.zeros((n_cascis, n_cascis))
-    if overlap is not None:
-        overlap_new[:-1, :-1] = overlap
-    one_rdm_new = np.zeros(
-        (n_cascis, n_cascis, mo_coeff_bra.shape[0], mo_coeff_bra.shape[0])
-    )
-    if one_rdm is not None:
-        one_rdm_new[:-1, :-1, :, :] = one_rdm
-    two_rdm_new = np.zeros(
-        (
-            n_cascis,
-            n_cascis,
-            mo_coeff_bra.shape[0],
-            mo_coeff_bra.shape[0],
-            mo_coeff_bra.shape[0],
-            mo_coeff_bra.shape[0],
+    if rank == 0:
+        overlap_new = np.zeros((n_cascis, n_cascis))
+        if overlap is not None:
+            overlap_new[:-1, :-1] = overlap
+        one_rdm_new = np.zeros(
+            (n_cascis, n_cascis, mo_coeff_bra.shape[0], mo_coeff_bra.shape[0])
         )
-    )
-    if two_rdm is not None:
-        two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
+        if one_rdm is not None:
+            one_rdm_new[:-1, :-1, :, :] = one_rdm
+        two_rdm_new = np.zeros(
+            (
+                n_cascis,
+                n_cascis,
+                mo_coeff_bra.shape[0],
+                mo_coeff_bra.shape[0],
+                mo_coeff_bra.shape[0],
+                mo_coeff_bra.shape[0],
+            )
+        )
+        if two_rdm is not None:
+            two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
+    else:
+        overlap_new = one_rdm_new = two_rdm_new = None
 
     bra_occ_strings = utils.fci_bitset_list(
         mol_bra.nelec[0] - casci_bra.ncore, casci_bra.ncas
@@ -196,7 +201,6 @@ def append_to_rdms(cascis, overlap=None, one_rdm=None, two_rdm=None):
         )
 
         n_ranks = MPI.COMM_WORLD.Get_size()
-        rank = MPI.COMM_WORLD.Get_rank()
 
         all_ids_local = np.array_split(all_ids, n_ranks)[rank]
 
@@ -239,21 +243,22 @@ def append_to_rdms(cascis, overlap=None, one_rdm=None, two_rdm=None):
             pbar.close()
 
         overlap_accumulate = MPI.COMM_WORLD.allreduce(overlap_accumulate, op=MPI.SUM)
-        overlap_new[-1, i] = overlap_accumulate
-        overlap_new[i, -1] = overlap_accumulate.conj()
 
         MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, rdm1, op=MPI.SUM)
         MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, rdm2, op=MPI.SUM)
 
-        rdm1 = jnp.einsum("...ij,ai->...aj", rdm1, trafo_ket)
-        rdm1 = np.array(jnp.einsum("...aj,bj->...ab", rdm1, trafo_bra))
-        rdm2 = jnp.einsum("...ijkl,ai->...ajkl", rdm2, trafo_bra)
-        rdm2 = jnp.einsum("...ajkl,bj->...abkl", rdm2, trafo_ket)
-        rdm2 = jnp.einsum("...abkl,ck->...abcl", rdm2, trafo_bra)
-        rdm2 = np.array(jnp.einsum("...abcl,dl->...abcd", rdm2, trafo_ket))
+        if rank == 0:
+            overlap_new[-1, i] = overlap_accumulate
+            overlap_new[i, -1] = overlap_accumulate.conj()
+            rdm1 = jnp.einsum("...ij,ai->...aj", rdm1, trafo_ket)
+            rdm1 = np.array(jnp.einsum("...aj,bj->...ab", rdm1, trafo_bra))
+            rdm2 = jnp.einsum("...ijkl,ai->...ajkl", rdm2, trafo_bra)
+            rdm2 = jnp.einsum("...ajkl,bj->...abkl", rdm2, trafo_ket)
+            rdm2 = jnp.einsum("...abkl,ck->...abcl", rdm2, trafo_bra)
+            rdm2 = np.array(jnp.einsum("...abcl,dl->...abcd", rdm2, trafo_ket))
 
-        one_rdm_new[-1, i, :, :] = rdm1
-        one_rdm_new[i, -1, :, :] = rdm1.conj()
-        two_rdm_new[-1, i, :, :, :, :] = rdm2
-        two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+            one_rdm_new[-1, i, :, :] = rdm1
+            one_rdm_new[i, -1, :, :] = rdm1.conj()
+            two_rdm_new[-1, i, :, :, :, :] = rdm2
+            two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
     return overlap_new, one_rdm_new, two_rdm_new
