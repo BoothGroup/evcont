@@ -14,22 +14,6 @@ rank = MPI.COMM_WORLD.rank
 n_ranks = MPI.COMM_WORLD.Get_size()
 
 
-def default_solver_fun(h1, h2, nelec, tag):
-    MPI.COMM_WORLD.Bcast(h1, root=0)
-
-    h2_slice = np.empty((h2.shape[2], h2.shape[3]))
-
-    for i in range(h2.shape[0]):
-        for j in range(h2.shape[1]):
-            np.copyto(h2_slice, h2[i, j, :, :])
-            MPI.COMM_WORLD.Bcast(h2_slice, root=0)
-            np.copyto(h2[i, j, :, :], h2_slice)
-
-    return converge_dmrg(
-        h1, h2, nelec, tag, tolerance=1.0e-4, mpi=(MPI.COMM_WORLD.size > 1)
-    )
-
-
 def append_to_rdms_rerun(
     mols,
     overlap=None,
@@ -37,7 +21,7 @@ def append_to_rdms_rerun(
     two_rdm=None,
     computational_basis="split",
     reorder_orbitals=True,
-    converge_dmrg_fun=default_solver_fun,
+    converge_dmrg_fun=converge_dmrg,
     enforce_symmetric=True,
 ):
     mol_bra = mols[-1]
@@ -49,7 +33,9 @@ def append_to_rdms_rerun(
     nelec = np.sum(mol_bra.nelec)
 
     mps_solver = DMRGDriver(
-        symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1), stack_mem=4 << 30
+        symm_type=SymmetryTypes.SU2,
+        mpi=(MPI.COMM_WORLD.size > 1),
+        stack_mem=4 << 30,
     )
     mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
@@ -61,6 +47,16 @@ def append_to_rdms_rerun(
     MPI.COMM_WORLD.Bcast(basis, root=0)
 
     h1, h2 = get_integrals(mol_bra, basis)
+
+    MPI.COMM_WORLD.Bcast(h1, root=0)
+
+    h2_slice = np.empty((h2.shape[2], h2.shape[3]))
+
+    for i in range(h2.shape[0]):
+        for j in range(h2.shape[1]):
+            np.copyto(h2_slice, h2[i, j, :, :])
+            MPI.COMM_WORLD.Bcast(h2_slice, root=0)
+            np.copyto(h2[i, j, :, :], h2_slice)
 
     bra, en = converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(len(mols) - 1))
 
@@ -97,6 +93,17 @@ def append_to_rdms_rerun(
             h1, h2 = get_integrals(
                 mol_ket, computational_basis_ket.dot(orbital_rotation)
             )
+
+            MPI.COMM_WORLD.Bcast(h1, root=0)
+
+            h2_slice = np.empty((h2.shape[2], h2.shape[3]))
+
+            for i in range(h2.shape[0]):
+                for j in range(h2.shape[1]):
+                    np.copyto(h2_slice, h2[i, j, :, :])
+                    MPI.COMM_WORLD.Bcast(h2_slice, root=0)
+                    np.copyto(h2[i, j, :, :], h2_slice)
+
             transformed_ket, en = converge_dmrg_fun(
                 h1, h2, mol_ket.nelec, "MPS_{}_{}".format(len(mols) - 1, i)
             )
@@ -145,6 +152,17 @@ def append_to_rdms_rerun(
 
             if i != len(mols) - 1:
                 h1, h2 = get_integrals(mol_bra, (basis.dot(orbital_rotation.T)))
+
+                MPI.COMM_WORLD.Bcast(h1, root=0)
+
+                h2_slice = np.empty((h2.shape[2], h2.shape[3]))
+
+                for i in range(h2.shape[0]):
+                    for j in range(h2.shape[1]):
+                        np.copyto(h2_slice, h2[i, j, :, :])
+                        MPI.COMM_WORLD.Bcast(h2_slice, root=0)
+                        np.copyto(h2[i, j, :, :], h2_slice)
+
                 transformed_bra, en = converge_dmrg_fun(
                     h1, h2, mol_ket.nelec, "MPS_{}_{}".format(i, len(mols) - 1)
                 )
@@ -182,7 +200,7 @@ def append_to_rdms_orbital_rotation(
     two_rdm=None,
     computational_basis="split",
     reorder_orbitals=True,
-    converge_dmrg_fun=default_solver_fun,
+    converge_dmrg_fun=converge_dmrg,
     rotation_thresh=1.0e-6,
 ):
     mol_bra = mols[-1]
@@ -190,6 +208,16 @@ def append_to_rdms_orbital_rotation(
     basis = get_basis(mol_bra, basis_type=computational_basis)
 
     h1, h2 = get_integrals(mol_bra, basis)
+
+    MPI.COMM_WORLD.Bcast(h1, root=0)
+
+    h2_slice = np.empty((h2.shape[2], h2.shape[3]))
+
+    for i in range(h2.shape[0]):
+        for j in range(h2.shape[1]):
+            np.copyto(h2_slice, h2[i, j, :, :])
+            MPI.COMM_WORLD.Bcast(h2_slice, root=0)
+            np.copyto(h2[i, j, :, :], h2_slice)
 
     norb = h1.shape[0]
     nelec = np.sum(mol_bra.nelec)
@@ -208,6 +236,16 @@ def append_to_rdms_orbital_rotation(
     MPI.COMM_WORLD.Bcast(basis, root=0)
 
     h1, h2 = get_integrals(mol_bra, basis)
+
+    MPI.COMM_WORLD.Bcast(h1, root=0)
+
+    h2_slice = np.empty((h2.shape[2], h2.shape[3]))
+
+    for i in range(h2.shape[0]):
+        for j in range(h2.shape[1]):
+            np.copyto(h2_slice, h2[i, j, :, :])
+            MPI.COMM_WORLD.Bcast(h2_slice, root=0)
+            np.copyto(h2[i, j, :, :], h2_slice)
 
     overlap_new = np.ones((len(mols), len(mols)))
     if overlap is not None:
@@ -306,17 +344,33 @@ def append_to_rdms_orbital_rotation(
 
 
 def append_to_rdms_OAO_basis(
-    mols, overlap=None, one_rdm=None, two_rdm=None, converge_dmrg_fun=default_solver_fun
+    mols,
+    overlap=None,
+    one_rdm=None,
+    two_rdm=None,
+    converge_dmrg_fun=converge_dmrg,
 ):
     mol_bra = mols[-1]
 
     h1, h2 = get_integrals(mol_bra, get_basis(mol_bra, basis_type="OAO"))
 
+    MPI.COMM_WORLD.Bcast(h1, root=0)
+
+    h2_slice = np.empty((h2.shape[2], h2.shape[3]))
+
+    for i in range(h2.shape[0]):
+        for j in range(h2.shape[1]):
+            np.copyto(h2_slice, h2[i, j, :, :])
+            MPI.COMM_WORLD.Bcast(h2_slice, root=0)
+            np.copyto(h2[i, j, :, :], h2_slice)
+
     norb = h1.shape[0]
     nelec = np.sum(mol_bra.nelec)
 
     mps_solver = DMRGDriver(
-        symm_type=SymmetryTypes.SU2, mpi=(MPI.COMM_WORLD.size > 1), stack_mem=4 << 30
+        symm_type=SymmetryTypes.SU2,
+        mpi=(MPI.COMM_WORLD.size > 1),
+        stack_mem=4 << 30,
     )
     mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
@@ -353,3 +407,31 @@ def append_to_rdms_OAO_basis(
         two_rdm_new[i, -1, :, :, :, :] = t_RDM.conj()
 
     return overlap_new, one_rdm_new, two_rdm_new
+
+
+class DMRG_EVCont_obj:
+    def __init__(
+        self,
+        dmrg_converge_fun=converge_dmrg,
+        append_method=append_to_rdms_OAO_basis,
+    ):
+        self.solver = dmrg_converge_fun
+        self.append_method = append_method
+
+        self.mols = None
+        self.overlap = None
+        self.one_rdm = None
+        self.two_rdm = None
+
+    def append_to_rdms(self, mol):
+        if self.mols is None:
+            self.mols = [mol]
+        else:
+            self.mols.append(mol)
+        self.overlap, self.one_rdm, self.two_rdm = self.append_method(
+            self.mols,
+            overlap=self.overlap,
+            one_rdm=self.one_rdm,
+            two_rdm=self.two_rdm,
+            converge_dmrg_fun=self.solver,
+        )

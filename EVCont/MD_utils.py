@@ -85,7 +85,7 @@ def get_trajectory(
 
 
 def converge_EVCont_MD(
-    append_to_rdms,
+    EVCont_obj,
     init_mol,
     steps=100,
     dt=1,
@@ -93,15 +93,14 @@ def converge_EVCont_MD(
     append_thresh=1.0e-2,
 ):
     i = 0
-    trn_mols = [init_mol.copy()]
     trn_times = [0]
 
-    overlap, one_rdm, two_rdm = append_to_rdms(trn_mols)
+    EVCont_obj.append_to_rdms(init_mol.copy())
 
     if rank == 0:
-        np.save("overlap_{}.npy".format(i), overlap)
-        np.save("one_rdm_{}.npy".format(i), one_rdm)
-        np.save("two_rdm_{}.npy".format(i), two_rdm)
+        np.save("overlap_{}.npy".format(i), EVCont_obj.overlap)
+        np.save("one_rdm_{}.npy".format(i), EVCont_obj.one_rdm)
+        np.save("two_rdm_{}.npy".format(i), EVCont_obj.two_rdm)
         trajectory_out = open("traj_EVCont_{}.xyz".format(i), "w")
         en_out = open("ens_EVCont_{}.xyz".format(i), "w")
     else:
@@ -110,9 +109,9 @@ def converge_EVCont_MD(
 
     trajectory = get_trajectory(
         init_mol.copy(),
-        overlap,
-        one_rdm,
-        two_rdm,
+        EVCont_obj.overlap,
+        EVCont_obj.one_rdm,
+        EVCont_obj.two_rdm,
         steps=steps,
         trajectory_output=trajectory_out,
         energy_output=en_out,
@@ -146,15 +145,14 @@ def converge_EVCont_MD(
                 converged = True
 
         trn_geometry = trajectory[trn_time]
-        trn_mols.append(init_mol.copy().set_geom_(trn_geometry))
         trn_times.append(trn_time)
 
-        overlap, one_rdm, two_rdm = append_to_rdms(trn_mols, overlap, one_rdm, two_rdm)
+        EVCont_obj.append_to_rdms(init_mol.copy().set_geom_(trn_geometry))
 
         if rank == 0:
-            np.save("overlap_{}.npy".format(i), overlap)
-            np.save("one_rdm_{}.npy".format(i), one_rdm)
-            np.save("two_rdm_{}.npy".format(i), two_rdm)
+            np.save("overlap_{}.npy".format(i), EVCont_obj.overlap)
+            np.save("one_rdm_{}.npy".format(i), EVCont_obj.one_rdm)
+            np.save("two_rdm_{}.npy".format(i), EVCont_obj.two_rdm)
             np.savetxt("trn_times_{}.txt".format(i), np.array(trn_times))
 
             trajectory_out = open("traj_EVCont_{}.xyz".format(i), "w")
@@ -165,9 +163,9 @@ def converge_EVCont_MD(
 
         trajectory = get_trajectory(
             init_mol.copy(),
-            overlap,
-            one_rdm,
-            two_rdm,
+            EVCont_obj.overlap,
+            EVCont_obj.one_rdm,
+            EVCont_obj.two_rdm,
             steps=steps,
             trajectory_output=trajectory_out,
             energy_output=en_out,
@@ -183,9 +181,9 @@ def converge_EVCont_MD(
             [
                 approximate_ground_state_OAO(
                     init_mol.copy().set_geom_(geometry),
-                    one_rdm[:-1, :-1],
-                    two_rdm[:-1, :-1],
-                    overlap[:-1, :-1],
+                    EVCont_obj.one_rdm[:-1, :-1],
+                    EVCont_obj.two_rdm[:-1, :-1],
+                    EVCont_obj.overlap[:-1, :-1],
                 )[0]
                 for geometry in trajectory
             ]
