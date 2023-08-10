@@ -2,9 +2,9 @@ from pyscf import md, scf, lib, grad
 
 import numpy as np
 
-from .ab_initio_gradients_loewdin import get_energy_with_grad
+from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
 
-from .electron_integral_utils import get_integrals, get_basis
+from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
 
 
 from mpi4py import MPI
@@ -48,6 +48,7 @@ def get_trajectory(
     init_veloc=None,
     hermitian=True,
     trajectory_output=None,
+    energy_output=None,
 ):
     trajectory = np.zeros((steps, len(init_mol.atom), 3))
     num_threads = MPI.COMM_WORLD.Split_type(MPI.COMM_TYPE_SHARED).Get_size()
@@ -72,6 +73,8 @@ def get_trajectory(
                 incore_anyway=True,
                 frames=frames,
                 trajectory_output=trajectory_output,
+                energy_output=energy_output,
+                verbose=0,
             )
             myintegrator.run()
             trajectory = np.array([frame.coord for frame in frames])
@@ -79,3 +82,112 @@ def get_trajectory(
     MPI.COMM_WORLD.Bcast(trajectory, root=0)
 
     return trajectory
+
+
+def converge_EVCont_MD(
+    append_to_rdms,
+    init_mol,
+    steps=100,
+    dt=1,
+    convergence_thresh=1.0e-3,
+    append_thresh=1.0e-2,
+):
+    i = 0
+    trn_mols = [init_mol.copy()]
+    trn_times = [0]
+
+    overlap, one_rdm, two_rdm = append_to_rdms(trn_mols)
+
+    if rank == 0:
+        np.save("overlap_{}.npy".format(i), overlap)
+        np.save("one_rdm_{}.npy".format(i), one_rdm)
+        np.save("two_rdm_{}.npy".format(i), two_rdm)
+        trajectory_out = open("traj_EVCont_{}.xyz".format(i), "w")
+        en_out = open("ens_EVCont_{}.xyz".format(i), "w")
+    else:
+        trajectory_out = None
+        en_out = None
+
+    trajectory = get_trajectory(
+        init_mol.copy(),
+        overlap,
+        one_rdm,
+        two_rdm,
+        steps=steps,
+        trajectory_output=trajectory_out,
+        energy_output=en_out,
+        dt=dt,
+    )
+
+    if rank == 0:
+        trajectory_out.close()
+        en_out.close()
+        np.save("traj_EVCont_{}.npy".format(i), trajectory)
+
+    updated_ens = np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
+
+    reference_ens = updated_ens[0]
+
+    converged = False
+
+    while True:
+        en_diff = abs(reference_ens - updated_ens)
+        if rank == 0:
+            np.savetxt("en_diff_{}.txt".format(i), np.array(en_diff))
+        i += 1
+        if max(en_diff) > append_thresh:
+            trn_time = np.argwhere(en_diff > append_thresh).flatten()[0]
+            converged = False
+        else:
+            if converged and max(en_diff) <= convergence_thresh:
+                break
+            trn_time = np.argmax(en_diff)
+            if max(en_diff) <= convergence_thresh:
+                converged = True
+
+        trn_geometry = trajectory[trn_time]
+        trn_mols.append(init_mol.copy().set_geom_(trn_geometry))
+        trn_times.append(trn_time)
+
+        overlap, one_rdm, two_rdm = append_to_rdms(trn_mols, overlap, one_rdm, two_rdm)
+
+        if rank == 0:
+            np.save("overlap_{}.npy".format(i), overlap)
+            np.save("one_rdm_{}.npy".format(i), one_rdm)
+            np.save("two_rdm_{}.npy".format(i), two_rdm)
+            np.savetxt("trn_times_{}.txt".format(i), np.array(trn_times))
+
+            trajectory_out = open("traj_EVCont_{}.xyz".format(i), "w")
+            en_out = open("ens_EVCont_{}.xyz".format(i), "w")
+        else:
+            trajectory_out = None
+            en_out = None
+
+        trajectory = get_trajectory(
+            init_mol.copy(),
+            overlap,
+            one_rdm,
+            two_rdm,
+            steps=steps,
+            trajectory_output=trajectory_out,
+            energy_output=en_out,
+            dt=dt,
+        )
+
+        if rank == 0:
+            trajectory_out.close()
+            en_out.close()
+            np.save("traj_EVCont_{}.npy".format(i), trajectory)
+
+        reference_ens = np.array(
+            [
+                approximate_ground_state_OAO(
+                    init_mol.copy().set_geom_(geometry),
+                    one_rdm[:-1, :-1],
+                    two_rdm[:-1, :-1],
+                    overlap[:-1, :-1],
+                )[0]
+                for geometry in trajectory
+            ]
+        )
+        updated_ens = np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
