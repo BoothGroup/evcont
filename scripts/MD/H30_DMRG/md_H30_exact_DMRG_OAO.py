@@ -46,7 +46,8 @@ def get_mol(geometry):
 
 init_dist = 1.9
 
-steps = 200
+steps = 500
+dt = 2
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 init_mol = mol.copy()
@@ -59,17 +60,17 @@ scanner_fun = solver.nuc_grad_method().as_scanner()
 frames = []
 scanner_fun.mol = init_mol.copy()
 
-if rank == 0:
-    fl = "DMRG_trajectory.xyz"
-else:
-    fl = None
+fl = "DMRG_trajectory_{}.xyz".format(rank)
+fl_en = "DMRG_energies_{}.xyz".format(rank)
 
 myintegrator = md.NVE(
     scanner_fun,
     steps=steps,
+    dt=dt,
     incore_anyway=True,
     frames=frames,
     trajectory_output=fl,
+    energy_output=fl_en,
 )
 myintegrator.run()
 
