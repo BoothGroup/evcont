@@ -15,6 +15,9 @@ from EVCont.DMRG_EVCont import (
 
 from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
 
+from EVCont.DMRG_EVCont import (
+    DMRG_EVCont_obj,
+)
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
@@ -82,4 +85,4 @@ init_mol = mol.copy()
 trn_mols = [init_mol.copy()]
 
 
-converge_EVCont_MD(append_to_rdms, init_mol, steps=steps, dt=dt)
+converge_EVCont_MD(DMRG_EVCont_obj(), init_mol, steps=steps, dt=dt)
