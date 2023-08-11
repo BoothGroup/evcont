@@ -123,8 +123,13 @@ def converge_EVCont_MD(
         en_out.close()
         np.save("traj_EVCont_{}.npy".format(i), trajectory)
 
-    updated_ens = np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
+        updated_ens = np.ascontiguousarray(
+            np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
+        )
+    else:
+        updated_ens = np.zeros(trajectory.shape[0])
 
+    MPI.COMM_WORLD.Bcast(updated_ens, root=0)
     reference_ens = updated_ens[0]
 
     converged = False
@@ -177,15 +182,22 @@ def converge_EVCont_MD(
             en_out.close()
             np.save("traj_EVCont_{}.npy".format(i), trajectory)
 
-        reference_ens = np.array(
-            [
-                approximate_ground_state_OAO(
-                    init_mol.copy().set_geom_(geometry),
-                    EVCont_obj.one_rdm[:-1, :-1],
-                    EVCont_obj.two_rdm[:-1, :-1],
-                    EVCont_obj.overlap[:-1, :-1],
-                )[0]
-                for geometry in trajectory
-            ]
-        )
-        updated_ens = np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
+            reference_ens = np.array(
+                [
+                    approximate_ground_state_OAO(
+                        init_mol.copy().set_geom_(geometry),
+                        EVCont_obj.one_rdm[:-1, :-1],
+                        EVCont_obj.two_rdm[:-1, :-1],
+                        EVCont_obj.overlap[:-1, :-1],
+                    )[0]
+                    for geometry in trajectory
+                ]
+            )
+            updated_ens = np.ascontiguousarray(
+                np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
+            )
+        else:
+            reference_ens = np.zeros_like(updated_ens)
+
+        MPI.COMM_WORLD.Bcast(updated_ens, root=0)
+        MPI.COMM_WORLD.Bcast(reference_ens, root=0)
