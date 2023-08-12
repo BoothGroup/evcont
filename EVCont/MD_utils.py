@@ -152,7 +152,7 @@ def converge_EVCont_MD(
 
         if prune_irrelevant_data:
             keep_ids = np.nonzeros(np.array(trn_times) <= trn_time)[0]
-            trn_times = [trn_times[i] for i in keep_ids]
+            trn_times = [trn_times[j] for j in keep_ids]
             if EVCont_obj.overlap is not None:
                 EVCont_obj.overlap = EVCont_obj.overlap[np.ix_(keep_ids, keep_ids)]
             if EVCont_obj.one_rdm is not None:
