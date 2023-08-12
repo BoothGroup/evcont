@@ -91,6 +91,7 @@ def converge_EVCont_MD(
     dt=1,
     convergence_thresh=1.0e-3,
     append_thresh=1.0e-2,
+    prune_irrelevant_data=True,
 ):
     i = 0
     trn_times = [0]
@@ -148,6 +149,20 @@ def converge_EVCont_MD(
             trn_time = np.argmax(en_diff)
             if max(en_diff) <= convergence_thresh:
                 converged = True
+
+        if prune_irrelevant_data:
+            keep_ids = np.nonzeros(trn_times <= trn_time)[0]
+            trn_times = [trn_times[i] for i in keep_ids]
+            if EVCont_obj.overlap is not None:
+                EVCont_obj.overlap = EVCont_obj.overlap[np.ix_(keep_ids, keep_ids)]
+            if EVCont_obj.one_rdm is not None:
+                EVCont_obj.one_rdm = EVCont_obj.one_rdm[
+                    np.ix_(keep_ids, keep_ids), :, :
+                ]
+            if EVCont_obj.two_rdm is not None:
+                EVCont_obj.two_rdm = EVCont_obj.two_rdm[
+                    np.ix_(keep_ids, keep_ids), :, :, :, :
+                ]
 
         trn_geometry = trajectory[trn_time]
         trn_times.append(trn_time)
