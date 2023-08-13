@@ -292,3 +292,13 @@ class CASCI_EVCont_obj:
         self.overlap = overlap_new
         self.one_rdm = one_rdm_new
         self.two_rdm = two_rdm_new
+
+    def prune_datapoints(self, keep_ids):
+        if self.overlap is not None:
+            self.overlap = self.overlap[np.ix_(keep_ids, keep_ids)]
+        if self.one_rdm is not None:
+            self.one_rdm = self.one_rdm[np.ix_(keep_ids, keep_ids)]
+        if self.two_rdm is not None:
+            self.two_rdm = self.two_rdm[np.ix_(keep_ids, keep_ids)]
+        if self.cascis is not None:
+            self.cascis = [self.cascis[i] for i in keep_ids]

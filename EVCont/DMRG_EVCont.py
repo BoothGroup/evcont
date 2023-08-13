@@ -435,3 +435,13 @@ class DMRG_EVCont_obj:
             two_rdm=self.two_rdm,
             converge_dmrg_fun=self.solver,
         )
+
+    def prune_datapoints(self, keep_ids):
+        if self.overlap is not None:
+            self.overlap = self.overlap[np.ix_(keep_ids, keep_ids)]
+        if self.one_rdm is not None:
+            self.one_rdm = self.one_rdm[np.ix_(keep_ids, keep_ids)]
+        if self.two_rdm is not None:
+            self.two_rdm = self.two_rdm[np.ix_(keep_ids, keep_ids)]
+        if self.mols is not None:
+            self.mols = [self.mols[i] for i in keep_ids]
