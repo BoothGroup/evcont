@@ -27,7 +27,7 @@ def default_solver_fun(h1, h2, nelec):
         h2,
         nelec,
         "MPS",
-        tolerance=1.0e-4,
+        tolerance=1.0e-5,
     )
 
 
