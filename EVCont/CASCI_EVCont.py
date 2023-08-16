@@ -96,7 +96,7 @@ class CASCI_EVCont_obj:
         self.ncas = ncas
         self.neleca = neleca
 
-        self.cascis = None
+        self.cascis = []
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
@@ -111,10 +111,7 @@ class CASCI_EVCont_obj:
         MPI.COMM_WORLD.Bcast(mf.mo_coeff)
         casci_bra = CASCI(mf, self.ncas, self.neleca)
 
-        if self.cascis is None:
-            self.cascis = [casci_bra]
-        else:
-            self.cascis.append(casci_bra)
+        self.cascis.append(casci_bra)
 
         cascis = self.cascis
         n_cascis = len(cascis)
@@ -300,5 +297,4 @@ class CASCI_EVCont_obj:
             self.one_rdm = self.one_rdm[np.ix_(keep_ids, keep_ids)]
         if self.two_rdm is not None:
             self.two_rdm = self.two_rdm[np.ix_(keep_ids, keep_ids)]
-        if self.cascis is not None:
-            self.cascis = [self.cascis[i] for i in keep_ids]
+        self.cascis = [self.cascis[i] for i in keep_ids]
