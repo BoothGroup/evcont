@@ -22,11 +22,12 @@ def get_mol(geometry):
     return mol
 
 
-overlap = np.load("overlap.npy")
-one_rdm = np.load("one_rdm.npy")
-two_rdm = np.load("two_rdm.npy")
+num_points = 6
 
-num_points = overlap.shape[0]
+overlaps = [np.load("overlap_{}.npy".format(i)) for i in range(num_points)]
+one_rdms = [np.load("one_rdm_{}.npy".format(i)) for i in range(num_points)]
+two_rdms = [np.load("two_rdm_{}.npy".format(i)) for i in range(num_points)]
+
 
 trajectory = np.load("traj_EVCont_{}.npy".format(num_points - 1))
 
@@ -59,9 +60,9 @@ for i, pos in enumerate(trajectory):
             for j in range(num_points):
                 en, grad = get_energy_with_grad(
                     mol,
-                    (one_rdm[: j + 1, : j + 1, :, :]),
-                    (two_rdm[: j + 1, : j + 1, :, :, :, :]),
-                    (overlap[: j + 1, : j + 1]),
+                    one_rdms[j],
+                    two_rdms[j],
+                    overlaps[j],
                     hermitian=True,
                 )
                 fl.write("  {}".format(en))
