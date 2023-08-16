@@ -12,8 +12,8 @@ class FCI_EVCont_obj:
     ):
         self.cisolver = cisolver
 
-        self.fcivecs = None
-        self.ens = None
+        self.fcivecs = []
+        self.ens = []
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
@@ -22,15 +22,9 @@ class FCI_EVCont_obj:
         h1, h2 = get_integrals(mol, get_basis(mol))
         e, fcivec = self.cisolver.kernel(h1, h2, mol.nao, mol.nelec)
 
-        if self.fcivecs is None:
-            self.fcivecs = [fcivec]
-        else:
-            self.fcivecs.append(fcivec)
+        self.fcivecs.append(fcivec)
 
-        if self.ens is None:
-            self.ens = [e + mol.energy_nuc()]
-        else:
-            self.ens.append(e + mol.energy_nuc())
+        self.ens.append(e + mol.energy_nuc())
 
         overlap_new = np.ones((len(self.fcivecs), len(self.fcivecs)))
         if self.overlap is not None:
@@ -66,7 +60,5 @@ class FCI_EVCont_obj:
             self.one_rdm = self.one_rdm[np.ix_(keep_ids, keep_ids)]
         if self.two_rdm is not None:
             self.two_rdm = self.two_rdm[np.ix_(keep_ids, keep_ids)]
-        if self.fcivecs is not None:
-            self.fcivecs = [self.fcivecs[i] for i in keep_ids]
-        if self.ens is not None:
-            self.ens = [self.ens[i] for i in keep_ids]
+        self.fcivecs = [self.fcivecs[i] for i in keep_ids]
+        self.ens = [self.ens[i] for i in keep_ids]
