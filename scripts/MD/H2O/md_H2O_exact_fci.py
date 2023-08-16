@@ -54,6 +54,7 @@ myintegrator = md.NVE(
     frames=frames,
     trajectory_output="exact_trajectory.xyz",
     energy_output="exact_energy.xyz",
+    dt=dt,
 )
 myintegrator.run()
 
