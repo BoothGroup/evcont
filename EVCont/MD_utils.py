@@ -90,7 +90,6 @@ def converge_EVCont_MD(
     steps=100,
     dt=1,
     convergence_thresh=1.0e-3,
-    append_thresh=1.0e-2,
     prune_irrelevant_data=True,
 ):
     i = 0
@@ -140,21 +139,15 @@ def converge_EVCont_MD(
         if rank == 0:
             np.savetxt("en_diff_{}.txt".format(i), np.array(en_diff))
         i += 1
-        if max(en_diff) > append_thresh:
-            trn_time = np.argwhere(en_diff > append_thresh).flatten()[0]
-            converged = False
+
+        if converged and max(en_diff) <= convergence_thresh:
+            break
+        if max(en_diff) <= convergence_thresh:
+            converged = True
         else:
-            if converged and max(en_diff) <= convergence_thresh:
-                break
-            trn_time = np.argmax(en_diff)
-            if max(en_diff) <= convergence_thresh:
-                converged = True
+            converged = False
 
-        if prune_irrelevant_data:
-            keep_ids = np.nonzero(np.array(trn_times) <= trn_time)[0]
-            trn_times = [trn_times[j] for j in keep_ids]
-            EVCont_obj.prune_datapoints(keep_ids)
-
+        trn_time = np.argmax(en_diff)
         trn_geometry = trajectory[trn_time]
         trn_times.append(trn_time)
 
@@ -202,8 +195,46 @@ def converge_EVCont_MD(
             updated_ens = np.ascontiguousarray(
                 np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
             )
+
+            if prune_irrelevant_data:
+                print("pruning irrelevant data points")
+                keep = np.ones(EVCont_obj.overlap.shape[0], dtype=bool)
+                for j in range(EVCont_obj.overlap.shape[0]):
+                    print(j)
+                    test_keep = keep.copy()
+                    test_keep[j] = False
+                    if np.sum(test_keep) >= 1:
+                        test_ids = np.ix_(test_keep, test_keep)
+
+                        reference_ens_datapoint_removed = np.array(
+                            [
+                                approximate_ground_state_OAO(
+                                    init_mol.copy().set_geom_(geometry),
+                                    EVCont_obj.one_rdm[test_ids],
+                                    EVCont_obj.two_rdm[test_ids],
+                                    EVCont_obj.overlap[test_ids],
+                                )[0]
+                                for geometry in trajectory
+                            ]
+                        )
+                        if np.all(
+                            abs(reference_ens_datapoint_removed - updated_ens)
+                            < convergence_thresh
+                        ):
+                            keep = test_keep
+                            print("removing data point {}".format(j))
+                            print(reference_ens_datapoint_removed)
+                            print(updated_ens)
         else:
             reference_ens = np.zeros_like(updated_ens)
+            if prune_irrelevant_data:
+                keep = np.ones(EVCont_obj.overlap.shape[0], dtype=bool)
 
         MPI.COMM_WORLD.Bcast(updated_ens, root=0)
         MPI.COMM_WORLD.Bcast(reference_ens, root=0)
+
+        if prune_irrelevant_data:
+            MPI.COMM_WORLD.Bcast(keep, root=0)
+            keep_ids = np.nonzero(keep)[0]
+            trn_times = [trn_times[j] for j in keep_ids]
+            EVCont_obj.prune_datapoints(keep_ids)
