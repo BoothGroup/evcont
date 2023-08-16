@@ -223,8 +223,6 @@ def converge_EVCont_MD(
                         ):
                             keep = test_keep
                             print("removing data point {}".format(j))
-                            print(reference_ens_datapoint_removed)
-                            print(updated_ens)
         else:
             reference_ens = np.zeros_like(updated_ens)
             if prune_irrelevant_data:
