@@ -16,6 +16,7 @@ n_ranks = MPI.COMM_WORLD.Get_size()
 
 def append_to_rdms_rerun(
     mols,
+    tags,
     overlap=None,
     one_rdm=None,
     two_rdm=None,
@@ -58,10 +59,10 @@ def append_to_rdms_rerun(
             MPI.COMM_WORLD.Bcast(h2_slice, root=0)
             np.copyto(h2[i, j, :, :], h2_slice)
 
-    bra, en = converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(len(mols) - 1))
+    bra, en = converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(tags[-1]))
 
     if rank == 0:
-        np.save("basis_{}.npy".format(len(mols) - 1), basis)
+        np.save("basis_{}.npy".format(tags[-1]), basis)
 
     ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
     oao_basis_bra = get_basis(mol_bra, "OAO")
@@ -77,8 +78,8 @@ def append_to_rdms_rerun(
         two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
 
     for i, mol_ket in enumerate(mols):
-        ket = mps_solver.load_mps("MPS_{}".format(i))
-        computational_basis_ket = np.load("basis_{}.npy".format(i))
+        ket = mps_solver.load_mps("MPS_{}".format(tags[i]))
+        computational_basis_ket = np.load("basis_{}.npy".format(tags[i]))
         ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
         oao_basis_ket = get_basis(mol_ket, "OAO")
 
@@ -105,7 +106,7 @@ def append_to_rdms_rerun(
                     np.copyto(h2[i, j, :, :], h2_slice)
 
             transformed_ket, en = converge_dmrg_fun(
-                h1, h2, mol_ket.nelec, "MPS_{}_{}".format(len(mols) - 1, i)
+                h1, h2, mol_ket.nelec, "MPS_{}_{}".format(tags[-1], tags[i])
             )
         else:
             transformed_ket = ket
@@ -136,8 +137,8 @@ def append_to_rdms_rerun(
 
     if not enforce_symmetric:
         for i, mol_ket in enumerate(mols[:-1]):
-            ket = mps_solver.load_mps("MPS_{}".format(i))
-            computational_basis_ket = np.load("basis_{}.npy".format(i))
+            ket = mps_solver.load_mps("MPS_{}".format(tags[i]))
+            computational_basis_ket = np.load("basis_{}.npy".format(tags[i]))
             ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
             oao_basis_ket = get_basis(mol_ket, "OAO")
 
@@ -164,7 +165,7 @@ def append_to_rdms_rerun(
                         np.copyto(h2[i, j, :, :], h2_slice)
 
                 transformed_bra, en = converge_dmrg_fun(
-                    h1, h2, mol_ket.nelec, "MPS_{}_{}".format(i, len(mols) - 1)
+                    h1, h2, mol_ket.nelec, "MPS_{}_{}".format(tags[i], tags[-1])
                 )
             else:
                 transformed_bra = bra
@@ -195,6 +196,7 @@ def append_to_rdms_rerun(
 
 def append_to_rdms_orbital_rotation(
     mols,
+    tags,
     overlap=None,
     one_rdm=None,
     two_rdm=None,
@@ -257,7 +259,7 @@ def append_to_rdms_orbital_rotation(
     if two_rdm is not None:
         two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
 
-    converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(len(mols) - 1))
+    converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(tags[-1]))
 
     if rank == 0:
         mps_solver = DMRGDriver(
@@ -265,16 +267,16 @@ def append_to_rdms_orbital_rotation(
         )
         mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
-        bra = mps_solver.load_mps("MPS_{}".format(len(mols) - 1))
+        bra = mps_solver.load_mps("MPS_{}".format(tags[-1]))
 
-        np.save("basis_{}.npy".format(len(mols) - 1), basis)
+        np.save("basis_{}.npy".format(tags[-1]), basis)
 
         ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
         oao_basis_bra = get_basis(mol_bra, "OAO")
 
         for i, mol_ket in enumerate(mols):
-            ket = mps_solver.load_mps("MPS_{}".format(i))
-            computational_basis_ket = np.load("basis_{}.npy".format(i))
+            ket = mps_solver.load_mps("MPS_{}".format(tags[i]))
+            computational_basis_ket = np.load("basis_{}.npy".format(tags[i]))
             ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
             oao_basis_ket = get_basis(mol_ket, "OAO")
 
@@ -293,7 +295,7 @@ def append_to_rdms_orbital_rotation(
                 transformed_ket = converge_orbital_rotation_mps(
                     ket,
                     orbital_rotation,
-                    tag="MPS_{}_{}".format(len(mols) - 1, i),
+                    tag="MPS_{}_{}".format(tags[-1], tags[i]),
                     convergence_thresh=rotation_thresh,
                     init_bond_dim=init_bond_dim,
                     iprint=0,
@@ -345,6 +347,7 @@ def append_to_rdms_orbital_rotation(
 
 def append_to_rdms_OAO_basis(
     mols,
+    tags,
     overlap=None,
     one_rdm=None,
     two_rdm=None,
@@ -374,9 +377,9 @@ def append_to_rdms_OAO_basis(
     )
     mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
-    converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(len(mols) - 1))
+    converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(tags[-1]))
 
-    bra = mps_solver.load_mps("MPS_{}".format(len(mols) - 1))
+    bra = mps_solver.load_mps("MPS_{}".format(tags[-1]))
 
     overlap_new = np.ones((len(mols), len(mols)))
     if overlap is not None:
@@ -389,8 +392,7 @@ def append_to_rdms_OAO_basis(
         two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
 
     for i, mol_ket in enumerate(mols):
-        mol_ket = mols[i]
-        ket = mps_solver.load_mps("MPS_{}".format(i))
+        ket = mps_solver.load_mps("MPS_{}".format(tags[i]))
 
         ovlp = (
             np.array(mps_solver.expectation(bra, mps_solver.get_identity_mpo(), ket))
@@ -418,18 +420,20 @@ class DMRG_EVCont_obj:
         self.solver = dmrg_converge_fun
         self.append_method = append_method
 
-        self.mols = None
+        self.mols = []
+        self.tags = []
+        self.max_tag = 0
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
 
     def append_to_rdms(self, mol):
-        if self.mols is None:
-            self.mols = [mol]
-        else:
-            self.mols.append(mol)
+        self.mols.append(mol)
+        self.tags.append(self.max_tag)
+        self.max_tag += 1
         self.overlap, self.one_rdm, self.two_rdm = self.append_method(
             self.mols,
+            self.tags,
             overlap=self.overlap,
             one_rdm=self.one_rdm,
             two_rdm=self.two_rdm,
@@ -443,5 +447,5 @@ class DMRG_EVCont_obj:
             self.one_rdm = self.one_rdm[np.ix_(keep_ids, keep_ids)]
         if self.two_rdm is not None:
             self.two_rdm = self.two_rdm[np.ix_(keep_ids, keep_ids)]
-        if self.mols is not None:
-            self.mols = [self.mols[i] for i in keep_ids]
+        self.mols = [self.mols[i] for i in keep_ids]
+        self.tags = [self.tags[i] for i in keep_ids]
