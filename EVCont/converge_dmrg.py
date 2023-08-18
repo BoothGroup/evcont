@@ -12,6 +12,7 @@ def converge_dmrg(
     tag,
     bond_dim_schedule=[np.round(1.4**i).astype(int) for i in range(9, 24)],
     mpi=MPI.COMM_WORLD.size > 1,
+    noises=[1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7, 0],
     tolerance=1.0e-4,
 ):
     norb = h1.shape[0]
@@ -31,8 +32,6 @@ def converge_dmrg(
 
     if rank == 0:
         open("DMRG_result_{}.txt".format(tag), "w").close()
-
-    noises = [1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7] + [0]
 
     for i in range(len(bond_dim_schedule) - 1):
         if i == 0:
