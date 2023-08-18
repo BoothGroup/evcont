@@ -198,8 +198,8 @@ def converge_EVCont_MD(
 
             if prune_irrelevant_data:
                 print("pruning irrelevant data points")
-                keep = np.ones(EVCont_obj.overlap.shape[0], dtype=bool)
-                for j in range(EVCont_obj.overlap.shape[0]):
+                keep = np.ones(len(trn_times), dtype=bool)
+                for j in range(len(trn_times)):
                     print(j)
                     test_keep = keep.copy()
                     test_keep[j] = False
@@ -226,7 +226,7 @@ def converge_EVCont_MD(
         else:
             reference_ens = np.zeros_like(updated_ens)
             if prune_irrelevant_data:
-                keep = np.ones(EVCont_obj.overlap.shape[0], dtype=bool)
+                keep = np.ones(len(trn_times), dtype=bool)
 
         MPI.COMM_WORLD.Bcast(updated_ens, root=0)
         MPI.COMM_WORLD.Bcast(reference_ens, root=0)
