@@ -90,7 +90,7 @@ def converge_EVCont_MD(
     steps=100,
     dt=1,
     convergence_thresh=1.0e-3,
-    prune_irrelevant_data=True,
+    prune_irrelevant_data=False,
 ):
     i = 0
     trn_times = [0]

@@ -65,4 +65,10 @@ dt = 5
 init_mol = mol.copy()
 
 
-converge_EVCont_MD(CASCI_EVCont_obj(ncas, neleca), init_mol, steps=steps, dt=dt)
+converge_EVCont_MD(
+    CASCI_EVCont_obj(ncas, neleca),
+    init_mol,
+    steps=steps,
+    dt=dt,
+    prune_irrelevant_data=False,
+)
