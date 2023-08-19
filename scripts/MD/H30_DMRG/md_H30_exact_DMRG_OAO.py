@@ -28,8 +28,8 @@ def default_solver_fun(h1, h2, nelec):
         nelec,
         "MPS",
         tolerance=1.0e-5,
-        noises=[1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7, 0],
-        bond_dim_schedule=[np.round(2**i).astype(int) for i in range(3, 13)],
+        noises=[1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7, 0],
+        bond_dim_schedule=[np.round(2**i).astype(int) for i in range(4, 13)],
     )
 
 
