@@ -13,7 +13,7 @@ def append_to_rdms(mols, overlap=None, one_rdm=None, two_rdm=None):
     computational_basis_bra = np.load("basis_{}.npy".format(str(hash(mol_bra))))
     norb = computational_basis_bra.shape[0]
 
-    mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, stack_mem=4 << 30)
+    mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, stack_mem=5 << 30)
     mps_solver.initialize_system(norb)
 
     bra = mps_solver.load_mps(str(hash(mol_bra))).deep_copy("bra_state")

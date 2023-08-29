@@ -17,7 +17,7 @@ def converge_dmrg(
 ):
     norb = h1.shape[0]
 
-    mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=mpi, stack_mem=4 << 30)
+    mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=mpi, stack_mem=5 << 30)
     mps_solver.initialize_system(norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1]))
 
     mpo = mps_solver.get_qc_mpo(h1e=h1, g2e=h2, iprint=1, reorder=None)

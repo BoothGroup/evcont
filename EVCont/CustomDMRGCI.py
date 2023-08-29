@@ -59,7 +59,7 @@ class DMRGSolver:
         mps_solver = DMRGDriver(
             symm_type=SymmetryTypes.SU2,
             mpi=(MPI.COMM_WORLD.size > 1),
-            stack_mem=4 << 30,
+            stack_mem=5 << 30,
         )
         mps_solver.initialize_system(
             norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])
@@ -80,7 +80,7 @@ class DMRGSolver:
         mps_solver = DMRGDriver(
             symm_type=SymmetryTypes.SU2,
             mpi=(MPI.COMM_WORLD.size > 1),
-            stack_mem=4 << 30,
+            stack_mem=5 << 30,
         )
         mps_solver.initialize_system(
             norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])

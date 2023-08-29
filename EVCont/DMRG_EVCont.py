@@ -36,7 +36,7 @@ def append_to_rdms_rerun(
     mps_solver = DMRGDriver(
         symm_type=SymmetryTypes.SU2,
         mpi=(MPI.COMM_WORLD.size > 1),
-        stack_mem=4 << 30,
+        stack_mem=5 << 30,
     )
     mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
@@ -226,7 +226,7 @@ def append_to_rdms_orbital_rotation(
 
     if rank == 0:
         mps_solver = DMRGDriver(
-            symm_type=SymmetryTypes.SU2, mpi=None, stack_mem=4 << 30
+            symm_type=SymmetryTypes.SU2, mpi=None, stack_mem=5 << 30
         )
         mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
@@ -263,7 +263,7 @@ def append_to_rdms_orbital_rotation(
 
     if rank == 0:
         mps_solver = DMRGDriver(
-            symm_type=SymmetryTypes.SU2, mpi=None, stack_mem=4 << 30
+            symm_type=SymmetryTypes.SU2, mpi=None, stack_mem=5 << 30
         )
         mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
