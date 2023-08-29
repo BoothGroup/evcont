@@ -17,18 +17,18 @@ def get_mol(geometry):
     mol.build(
         atom=[("H", geometry[0]), ("H", geometry[1]), ("O", geometry[2])],
         basis="6-31G",
-        symmetry=True,
+        symmetry=False,
         unit="Bohr",
     )
 
     return mol
 
 
-overlap = np.load("overlap.npy")
-one_rdm = np.load("one_rdm.npy")
-two_rdm = np.load("two_rdm.npy")
+num_points = 6
 
-num_points = overlap.shape[0]
+overlaps = [np.load("overlap_{}.npy".format(i)) for i in range(num_points)]
+one_rdms = [np.load("one_rdm_{}.npy".format(i)) for i in range(num_points)]
+two_rdms = [np.load("two_rdm_{}.npy".format(i)) for i in range(num_points)]
 
 trajectory = np.load("traj_EVCont_{}.npy".format(num_points - 1))
 
@@ -45,13 +45,13 @@ for i, pos in enumerate(trajectory):
     basis = get_basis(mol)
     h1, h2 = get_integrals(mol, basis)
     for j in range(num_points):
-        red_one_rdm = one_rdm[: j + 1, : j + 1, :, :]
+        red_one_rdm = one_rdms[j]
         en, vec = approximate_ground_state(
             h1,
             h2,
             (red_one_rdm),
-            (two_rdm[: j + 1, : j + 1, :, :, :, :]),
-            (overlap[: j + 1, : j + 1]),
+            (two_rdms[j]),
+            (overlaps[j]),
             hermitian=True,
         )
 

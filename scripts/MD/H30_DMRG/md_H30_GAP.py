@@ -23,7 +23,7 @@ def get_mol(geometry):
     mol.build(
         atom=[("H", pos) for pos in geometry],
         basis="sto-6g",
-        symmetry=True,
+        symmetry=False,
         unit="Bohr",
     )
 
@@ -111,8 +111,9 @@ def get_trajectory(init_mol, weights, features, dt=100.0, steps=10, init_veloc=N
 
 init_dist = 1.9
 
-steps = 200
-dt = 20
+steps = 500
+dt = 2
+
 
 energies = []
 features = []

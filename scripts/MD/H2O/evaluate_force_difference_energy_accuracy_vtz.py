@@ -19,7 +19,7 @@ def get_mol(geometry):
     mol.build(
         atom=[("H", geometry[0]), ("H", geometry[1]), ("O", geometry[2])],
         basis="cc-pvtz",
-        symmetry=True,
+        symmetry=False,
         unit="Bohr",
     )
 
@@ -32,7 +32,7 @@ two_rdm = np.load("two_rdm_vtz.npy")
 
 num_points = overlap.shape[0]
 
-trajectory = np.load("traj_EVCont_{}_vtz.npy".format(num_points - 1))
+trajectory = np.load("traj_EVCont_vtz_{}.npy".format(num_points - 1))
 
 
 with open("force_error_vtz.txt", "w") as fl:

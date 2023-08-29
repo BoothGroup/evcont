@@ -15,7 +15,7 @@ def get_mol(geometry):
     mol.build(
         atom=[("H", geometry[0]), ("H", geometry[1]), ("O", geometry[2])],
         basis="6-31G",
-        symmetry=True,
+        symmetry=False,
         unit="Bohr",
     )
 

@@ -33,7 +33,7 @@ def get_mol(geometry):
     mol.build(
         atom=[("H", geometry[0]), ("H", geometry[1]), ("O", geometry[2])],
         basis="cc-pVTZ",
-        symmetry=True,
+        symmetry=False,
         unit="Bohr",
     )
 
