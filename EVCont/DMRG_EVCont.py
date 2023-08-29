@@ -373,7 +373,7 @@ def append_to_rdms_OAO_basis(
     mps_solver = DMRGDriver(
         symm_type=SymmetryTypes.SU2,
         mpi=(MPI.COMM_WORLD.size > 1),
-        stack_mem=4 << 30,
+        stack_mem=10 << 30,
     )
     mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
