@@ -98,9 +98,14 @@ def converge_EVCont_MD(
     EVCont_obj.append_to_rdms(init_mol.copy())
 
     if rank == 0:
-        np.save("overlap_{}.npy".format(i), EVCont_obj.overlap)
-        np.save("one_rdm_{}.npy".format(i), EVCont_obj.one_rdm)
-        np.save("two_rdm_{}.npy".format(i), EVCont_obj.two_rdm)
+        if prune_irrelevant_data:
+            np.save("overlap_{}.npy".format(i), EVCont_obj.overlap)
+            np.save("one_rdm_{}.npy".format(i), EVCont_obj.one_rdm)
+            np.save("two_rdm_{}.npy".format(i), EVCont_obj.two_rdm)
+        else:
+            np.save("overlap.npy", EVCont_obj.overlap)
+            np.save("one_rdm.npy", EVCont_obj.one_rdm)
+            np.save("two_rdm.npy", EVCont_obj.two_rdm)
         trajectory_out = open("traj_EVCont_{}.xyz".format(i), "w")
         en_out = open("ens_EVCont_{}.xyz".format(i), "w")
     else:
@@ -154,10 +159,16 @@ def converge_EVCont_MD(
         EVCont_obj.append_to_rdms(init_mol.copy().set_geom_(trn_geometry))
 
         if rank == 0:
-            np.save("overlap_{}.npy".format(i), EVCont_obj.overlap)
-            np.save("one_rdm_{}.npy".format(i), EVCont_obj.one_rdm)
-            np.save("two_rdm_{}.npy".format(i), EVCont_obj.two_rdm)
-            np.savetxt("trn_times_{}.txt".format(i), np.array(trn_times))
+            if prune_irrelevant_data:
+                np.save("overlap_{}.npy".format(i), EVCont_obj.overlap)
+                np.save("one_rdm_{}.npy".format(i), EVCont_obj.one_rdm)
+                np.save("two_rdm_{}.npy".format(i), EVCont_obj.two_rdm)
+                np.savetxt("trn_times_{}.txt".format(i), np.array(trn_times))
+            else:
+                np.save("overlap.npy", EVCont_obj.overlap)
+                np.save("one_rdm.npy", EVCont_obj.one_rdm)
+                np.save("two_rdm.npy", EVCont_obj.two_rdm)
+                np.savetxt("trn_times.txt", np.array(trn_times))
 
             trajectory_out = open("traj_EVCont_{}.xyz".format(i), "w")
             en_out = open("ens_EVCont_{}.xyz".format(i), "w")
