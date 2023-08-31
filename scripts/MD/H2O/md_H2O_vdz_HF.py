@@ -1,30 +1,10 @@
 from pyscf import gto, md
 
-from pyscf.mcscf.casci import CASCI
-
 import numpy as np
-
-from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
-from EVCont.electron_integral_utils import get_basis, get_integrals, transform_integrals
-from EVCont.MD_utils import converge_EVCont_MD
-from EVCont.converge_dmrg import converge_dmrg
-
-from EVCont.CASCI_EVCont import CASCI_EVCont_obj
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
-
-from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
-
-
-from mpi4py import MPI
-
-
-rank = MPI.COMM_WORLD.rank
-
-ncas = 8
-neleca = 4
 
 
 def get_mol(geometry):
@@ -56,19 +36,32 @@ init_geometry = (
     )
 )
 
-
 mol = get_mol(init_geometry)
-steps = 300
-dt = 5
 
 
 init_mol = mol.copy()
 
+mf = init_mol.RHF()
 
-converge_EVCont_MD(
-    CASCI_EVCont_obj(ncas, neleca),
-    init_mol,
+
+steps = 300
+dt = 5
+
+
+scanner_fun = mf.nuc_grad_method().as_scanner()
+frames = []
+scanner_fun.mol = init_mol.copy()
+myintegrator = md.NVE(
+    scanner_fun,
     steps=steps,
     dt=dt,
-    prune_irrelevant_data=False,
+    incore_anyway=True,
+    frames=frames,
+    veloc=None,
+    trajectory_output="HF_trajectory_vtz.xyz",
+    energy_output="HF_energy_vtz.xyz",
 )
+myintegrator.run()
+
+
+np.save("traj_HF_vtz.npy", np.array([frame.coord for frame in frames]))

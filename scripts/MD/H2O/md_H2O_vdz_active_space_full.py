@@ -3,8 +3,8 @@ from pyscf import md, gto, scf, mcscf, lo, ao2mo, fci, lib, grad
 import numpy as np
 
 
-ncas = 12
-neleca = 6
+ncas = 8
+neleca = 4
 
 
 def get_mol(geometry):
@@ -46,7 +46,7 @@ init_mol = mol.copy()
 steps = 300
 dt = 5
 
-mf = scf.hf_symm.SymAdaptedRHF(init_mol.copy())
+mf = scf.RHF(init_mol.copy())
 scanner_fun = mcscf.CASCI(mf, ncas, neleca).nuc_grad_method().as_scanner()
 frames = []
 scanner_fun.mol = init_mol.copy()
@@ -56,10 +56,10 @@ myintegrator = md.NVE(
     dt=dt,
     incore_anyway=True,
     frames=frames,
-    trajectory_output="active_space_trajectory_vtz.xyz",
-    energy_output="active_space_energy_vtz.xyz",
+    trajectory_output="active_space_trajectory_vdz.xyz",
+    energy_output="active_space_energy_vdz.xyz",
 )
 myintegrator.run()
 
 
-np.save("active_space_trajectory_vtz.npy", np.array([frame.coord for frame in frames]))
+np.save("active_space_trajectory_vdz.npy", np.array([frame.coord for frame in frames]))
