@@ -28,8 +28,6 @@ def default_solver_fun(h1, h2, nelec):
         nelec,
         "MPS",
         tolerance=1.0e-5,
-        noises=[1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6, 0],
-        bond_dim_schedule=[np.round(2**i).astype(int) for i in range(4, 13)],
     )
 
 
@@ -48,8 +46,8 @@ def get_mol(geometry):
 
 init_dist = 1.9
 
-steps = 500
-dt = 2
+steps = 200
+dt = 5
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 init_mol = mol.copy()
