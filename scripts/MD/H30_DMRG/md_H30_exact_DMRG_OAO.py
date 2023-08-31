@@ -51,7 +51,9 @@ dt = 5
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 init_mol = mol.copy()
-solver = CustomDMRGCI(mol, 30, 30, "OAO", converge_dmrg_fun=default_solver_fun)
+solver = CustomDMRGCI(
+    mol, 30, 30, "split", converge_dmrg_fun=default_solver_fun, reorder_orbitals=True
+)
 solver.converged = True
 
 scanner_fun = solver.nuc_grad_method().as_scanner()
