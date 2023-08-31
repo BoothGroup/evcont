@@ -5,7 +5,7 @@ import numpy as np
 from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
 from EVCont.MD_utils import get_trajectory
 
-norb = nelec = 20
+norb = nelec = 30
 
 
 def get_mol(geometry):
@@ -34,8 +34,8 @@ def get_ham(mol):
 
 init_dist = 1.9
 
-steps = 500
-dt = 2
+steps = 300
+dt = 5
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 init_mol = mol.copy()

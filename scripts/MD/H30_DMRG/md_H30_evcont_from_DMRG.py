@@ -73,7 +73,7 @@ def get_mol(geometry):
 
 init_dist = 1.9
 
-steps = 200
+steps = 300
 dt = 5
 
 

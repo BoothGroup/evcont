@@ -46,7 +46,7 @@ def get_mol(geometry):
 
 init_dist = 1.9
 
-steps = 200
+steps = 300
 dt = 5
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
