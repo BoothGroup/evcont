@@ -10,9 +10,9 @@ def converge_dmrg(
     h2,
     nelec,
     tag,
-    bond_dim_schedule=[np.round(1.4**i).astype(int) for i in range(9, 24)],
+    bond_dim_schedule=[np.round(2**i).astype(int) for i in range(2, 14)],
     mpi=MPI.COMM_WORLD.size > 1,
-    noises=[1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7, 0],
+    noises=np.append(np.logspace(-2, -10, num=9), 0),
     tolerance=1.0e-4,
 ):
     norb = h1.shape[0]
@@ -40,7 +40,7 @@ def converge_dmrg(
                     np.logspace(
                         np.log10(bond_dim_schedule[i] / 2),
                         np.log10(bond_dim_schedule[i]),
-                        num=5,
+                        num=10,
                         endpoint=True,
                     )
                 ).astype(int)
@@ -51,7 +51,7 @@ def converge_dmrg(
                     np.logspace(
                         np.log10((bond_dim_schedule[i - 1] + bond_dim_schedule[i]) / 2),
                         np.log10(bond_dim_schedule[i]),
-                        num=5,
+                        num=10,
                         endpoint=True,
                     )
                 ).astype(int)
@@ -60,11 +60,11 @@ def converge_dmrg(
             mpo,
             ket,
             bond_dims=inner_bond_dim_schedule,
-            noises=np.array(noises) * (4 ** (-i)),
+            noises=noises * (4 ** (-i)),
             n_sweeps=1000,
             iprint=1,
             tol=tolerance,
-            twosite_to_onesite=5,
+            twosite_to_onesite=10,
         )
         bnd_dms, dws, ens = mps_solver.get_dmrg_results()
         final_energies.append(ens[-1][0])
@@ -73,9 +73,9 @@ def converge_dmrg(
             with open("DMRG_result_{}.txt".format(tag), "a") as fl:
                 for j in range(len(bnd_dms)):
                     if j < len(noises):
-                        noise = (np.array(noises) * (4 ** (-i)))[j]
+                        noise = (noises * (4 ** (-i)))[j]
                     else:
-                        noise = (np.array(noises) * (4 ** (-i)))[-1]
+                        noise = (noises * (4 ** (-i)))[-1]
                     fl.write(
                         "{}  {}  {}  {}\n".format(bnd_dms[j], ens[j][0], dws[j], noise)
                     )
