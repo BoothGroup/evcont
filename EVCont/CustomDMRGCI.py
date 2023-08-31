@@ -24,27 +24,51 @@ def default_solver_fun(h1, h2, nelec):
 
 
 class DMRGSolver:
-    def __init__(self, computational_basis, converge_dmrg_fun=default_solver_fun):
+    def __init__(
+        self,
+        computational_basis,
+        converge_dmrg_fun=default_solver_fun,
+        reorder_orbitals=False,
+    ):
         self.basis = computational_basis
         self.converge_dmrg_fun = converge_dmrg_fun
-
-    def get_MO_computational_transformation(self):
-        basis_MO = self.mo_coeff
-        ovlp = self.mol.intor_symmetric("int1e_ovlp")
-        computational_basis = get_basis(self.mol, basis_type=self.basis)
-        transform = computational_basis.T.dot(ovlp).dot(basis_MO)
-        MPI.COMM_WORLD.Bcast(transform)
-        return transform
+        self.reorder_orbitals = reorder_orbitals
 
     def kernel(self, h1, h2, norb, nelec, ecore=0.0):
         MPI.COMM_WORLD.Bcast(self.mo_coeff)  # Just to be safe...
-        MO_computational_transformation = self.get_MO_computational_transformation()
+
+        basis_MO = self.mo_coeff
+        ovlp = self.mol.intor_symmetric("int1e_ovlp")
+        self.comp_basis = get_basis(self.mol, basis_type=self.basis)
+
+        self.MO_computational_transformation = self.comp_basis.T.dot(ovlp).dot(basis_MO)
+        MPI.COMM_WORLD.Bcast(self.MO_computational_transformation)
 
         # Likely there are faster ways to do this...
         h2_full = ao2mo.restore(1, h2, norb)
         h1_transformed, h2_transformed = transform_integrals(
-            h1, h2_full, MO_computational_transformation
+            h1, h2_full, self.MO_computational_transformation
         )
+
+        if self.reorder_orbitals:
+            mps_solver = DMRGDriver(
+                symm_type=SymmetryTypes.SU2,
+                mpi=(MPI.COMM_WORLD.size > 1),
+                stack_mem=5 << 30,
+            )
+            mps_solver.initialize_system(norb, n_elec=np.sum(nelec), spin=self.mol.spin)
+
+            orbital_reordering = mps_solver.orbital_reordering(
+                h1_transformed, h2_transformed
+            )
+
+            self.comp_basis = self.comp_basis[:, orbital_reordering]
+            self.MO_computational_transformation = self.MO_computational_transformation[
+                orbital_reordering, :
+            ]
+            h1_transformed, h2_transformed = transform_integrals(
+                h1, h2_full, self.MO_computational_transformation
+            )
 
         state, en = self.converge_dmrg_fun(
             h1_transformed,
@@ -65,12 +89,10 @@ class DMRGSolver:
             norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])
         )
 
-        MO_computational_trafo = self.get_MO_computational_transformation()
-
         one_rdm = np.array(mps_solver.get_1pdm(state, bra=state))
 
-        one_rdm_transformed = MO_computational_trafo.T.dot(
-            one_rdm.dot(MO_computational_trafo)
+        one_rdm_transformed = self.MO_computational_transformation.T.dot(
+            one_rdm.dot(self.MO_computational_transformation)
         )
 
         return one_rdm_transformed
@@ -86,15 +108,13 @@ class DMRGSolver:
             norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])
         )
 
-        MO_computational_trafo = self.get_MO_computational_transformation()
-
         one_rdm = np.array(mps_solver.get_1pdm(state, bra=state))
         two_rdm = np.array(
             np.transpose(mps_solver.get_2pdm(state, bra=state), (0, 3, 1, 2))
         )
 
         one_rdm_transformed, two_rdm_transformed = transform_integrals(
-            one_rdm, two_rdm, MO_computational_trafo.T
+            one_rdm, two_rdm, self.MO_computational_transformation.T
         )
 
         return one_rdm_transformed, two_rdm_transformed
@@ -109,8 +129,11 @@ class CustomDMRGCI(CustomCASCI):
         computational_basis,
         converge_dmrg_fun=default_solver_fun,
         ncore=None,
+        reorder_orbitals=False,
     ):
         super().__init__(mf_or_mol, ncas, nelecas, ncore=ncore)
         self.fcisolver = DMRGSolver(
-            computational_basis, converge_dmrg_fun=converge_dmrg_fun
+            computational_basis,
+            converge_dmrg_fun=converge_dmrg_fun,
+            reorder_orbitals=reorder_orbitals,
         )
