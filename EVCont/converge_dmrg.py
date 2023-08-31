@@ -12,7 +12,7 @@ def converge_dmrg(
     tag,
     bond_dim_schedule=2 ** np.arange(5, 15),
     mpi=MPI.COMM_WORLD.size > 1,
-    noises=np.append(np.logspace(-2, -7, num=5), 0),
+    noises=np.append(np.logspace(-2, -7, num=4), 0),
     tolerance=1.0e-4,
 ):
     norb = h1.shape[0]
@@ -64,7 +64,6 @@ def converge_dmrg(
             n_sweeps=1000,
             iprint=1,
             tol=tolerance,
-            twosite_to_onesite=5,
         )
         bnd_dms, dws, ens = mps_solver.get_dmrg_results()
         final_energies.append(ens[-1][0])
