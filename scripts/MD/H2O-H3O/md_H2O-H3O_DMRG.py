@@ -33,17 +33,7 @@ def dmrg_converge_fun(h1, h2, nelec, tag):
             np.copyto(h2[i, j, :, :], h2_slice)
 
     return converge_dmrg(
-        h1, h2, nelec, tag, tolerance=1.0e-4, mpi=MPI.COMM_WORLD.size > 1
-    )
-
-
-def append_to_rdms(mols, overlap=None, one_rdm=None, two_rdm=None):
-    return append_to_rdms_OAO_basis(
-        mols,
-        overlap=overlap,
-        one_rdm=one_rdm,
-        two_rdm=two_rdm,
-        converge_dmrg_fun=dmrg_converge_fun,
+        h1, h2, nelec, tag, tolerance=1.0e-3, mpi=MPI.COMM_WORLD.size > 1
     )
 
 
@@ -96,5 +86,9 @@ init_mol = mol.copy()
 
 
 converge_EVCont_MD(
-    DMRG_EVCont_obj(), init_mol, steps=steps, dt=dt, prune_irrelevant_data=False
+    DMRG_EVCont_obj(dmrg_converge_fun=dmrg_converge_fun),
+    init_mol,
+    steps=steps,
+    dt=dt,
+    prune_irrelevant_data=False,
 )

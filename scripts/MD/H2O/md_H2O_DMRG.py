@@ -23,6 +23,22 @@ from mpi4py import MPI
 rank = MPI.COMM_WORLD.rank
 
 
+def dmrg_converge_fun(h1, h2, nelec, tag):
+    MPI.COMM_WORLD.Bcast(h1, root=0)
+
+    h2_slice = np.empty((h2.shape[2], h2.shape[3]))
+
+    for i in range(h2.shape[0]):
+        for j in range(h2.shape[1]):
+            np.copyto(h2_slice, h2[i, j, :, :])
+            MPI.COMM_WORLD.Bcast(h2_slice, root=0)
+            np.copyto(h2[i, j, :, :], h2_slice)
+
+    return converge_dmrg(
+        h1, h2, nelec, tag, tolerance=1.0e-3, mpi=MPI.COMM_WORLD.size > 1
+    )
+
+
 def get_mol(geometry):
     mol = gto.Mole()
 
@@ -64,5 +80,9 @@ init_mol = mol.copy()
 
 
 converge_EVCont_MD(
-    DMRG_EVCont_obj(), init_mol, steps=steps, dt=dt, prune_irrelevant_data=False
+    DMRG_EVCont_obj(dmrg_converge_fun=dmrg_converge_fun),
+    init_mol,
+    steps=steps,
+    dt=dt,
+    prune_irrelevant_data=False,
 )
