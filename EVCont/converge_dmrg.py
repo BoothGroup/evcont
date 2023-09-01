@@ -10,7 +10,7 @@ def converge_dmrg(
     h2,
     nelec,
     tag,
-    bond_dim_schedule=2 ** np.arange(5, 15),
+    bond_dim_schedule=np.round(1.8 ** np.arange(6, 16)).astype(int),
     mpi=MPI.COMM_WORLD.size > 1,
     noises=np.append(np.logspace(-2, -7, num=4), 0),
     tolerance=1.0e-4,
@@ -34,32 +34,10 @@ def converge_dmrg(
         open("DMRG_result_{}.txt".format(tag), "w").close()
 
     for i in range(len(bond_dim_schedule) - 1):
-        if i == 0:
-            inner_bond_dim_schedule = list(
-                np.round(
-                    np.logspace(
-                        np.log10(bond_dim_schedule[i] / 2),
-                        np.log10(bond_dim_schedule[i]),
-                        num=5,
-                        endpoint=True,
-                    )
-                ).astype(int)
-            )
-        else:
-            inner_bond_dim_schedule = list(
-                np.round(
-                    np.logspace(
-                        np.log10(bond_dim_schedule[i - 1]),
-                        np.log10(bond_dim_schedule[i]),
-                        num=5,
-                        endpoint=True,
-                    )
-                ).astype(int)
-            )
         mps_solver.dmrg(
             mpo,
             ket,
-            bond_dims=inner_bond_dim_schedule,
+            bond_dims=[bond_dim_schedule[i]],
             noises=noises * (4 ** (-i)),
             n_sweeps=1000,
             iprint=1,
