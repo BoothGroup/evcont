@@ -4,6 +4,8 @@ from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 from mpi4py import MPI
 
+import os
+
 
 def converge_dmrg(
     h1,
@@ -14,6 +16,7 @@ def converge_dmrg(
     mpi=MPI.COMM_WORLD.size > 1,
     noises=np.append(np.logspace(-2, -7, num=4), 0),
     tolerance=1.0e-4,
+    restart_tag=None,
 ):
     norb = h1.shape[0]
 
@@ -22,7 +25,12 @@ def converge_dmrg(
 
     mpo = mps_solver.get_qc_mpo(h1e=h1, g2e=h2, iprint=1, reorder=None)
 
-    ket = mps_solver.get_random_mps(tag, bond_dim=bond_dim_schedule[0], nroots=1)
+    if restart_tag is not None and os.path.exists(
+        "nodex/{}-mps_info.bin".format(restart_tag)
+    ):
+        ket = mps_solver.load_mps(restart_tag)
+    else:
+        ket = mps_solver.get_random_mps(tag, bond_dim=bond_dim_schedule[0], nroots=1)
 
     converged = False
 
