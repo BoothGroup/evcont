@@ -268,12 +268,11 @@ def converge_EVCont_MD(
         elif data_addition == "farthest_point":
             # Reconstruct training geometries
             trajs = [
-                np.load("traj_EVCont_{}.npy".format(i))
-                for i in range(len(trn_times) - 1)
+                np.load("traj_EVCont_{}.npy".format(i)) for i in range(len(trn_times))
             ]
 
             trn_geometries = [trajs[0][0]] + [
-                trajs[k][trn_times[k + 1]] for k in range(len(trajs))
+                trajs[k][trn_times[k + 1]] for k in range(len(trajs) - 1)
             ]
 
             # Farthest point selection
