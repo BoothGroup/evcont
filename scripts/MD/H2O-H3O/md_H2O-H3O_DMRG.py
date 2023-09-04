@@ -15,6 +15,8 @@ from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
 
+import os
+
 from mpi4py import MPI
 
 
@@ -85,10 +87,30 @@ dt = 5
 init_mol = mol.copy()
 
 
+dmrg_ev_cont_obj = DMRG_EVCont_obj(dmrg_converge_fun=dmrg_converge_fun)
+
+if os.path.exists("overlap.npy"):
+    dmrg_ev_cont_obj.overlap = np.load("overlap.npy")
+    dmrg_ev_cont_obj.one_rdm = np.load("one_rdm.npy")
+    dmrg_ev_cont_obj.two_rdm = np.load("two_rdm.npy")
+    if os.path.exists("trn_times.txt"):
+        trn_times = list(np.atleast_1d(np.loadtxt("trn_times.txt").astype(int)))
+    else:
+        trn_times = [0]
+    trajs = [np.load("traj_EVCont_{}.npy".format(i)) for i in range(len(trn_times) - 1)]
+    dmrg_ev_cont_obj.mols = [init_mol] + [
+        get_mol(trajs[i][trn_times[i + 1]]) for i in range(len(trajs))
+    ]
+    dmrg_ev_cont_obj.tags = [i for i in range(dmrg_ev_cont_obj.overlap.shape[0])]
+    dmrg_ev_cont_obj.max_tag = dmrg_ev_cont_obj.overlap.shape[0]
+else:
+    trn_times = []
+
 converge_EVCont_MD(
-    DMRG_EVCont_obj(dmrg_converge_fun=dmrg_converge_fun),
+    dmrg_ev_cont_obj,
     init_mol,
     steps=steps,
     dt=dt,
     prune_irrelevant_data=False,
+    trn_times=trn_times,
 )
