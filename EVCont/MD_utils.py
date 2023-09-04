@@ -92,6 +92,7 @@ def converge_EVCont_MD(
     convergence_thresh=1.0e-3,
     prune_irrelevant_data=False,
     trn_times=[],
+    data_addition="energy",
 ):
     if len(trn_times) < 1:
         i = 0
@@ -262,7 +263,34 @@ def converge_EVCont_MD(
         else:
             converged = False
 
-        trn_time = np.argmax(en_diff)
+        if data_addition == "energy":
+            trn_time = np.argmax(en_diff)
+        elif data_addition == "farthest_point":
+            # Reconstruct training geometries
+            trajs = [
+                np.load("traj_EVCont_{}.npy".format(i))
+                for i in range(len(trn_times) - 1)
+            ]
+
+            trn_geometries = [trajs[0][0]] + [
+                trajs[k][trn_times[k + 1]] for k in range(len(trajs))
+            ]
+
+            # Farthest point selection
+            trn_time = np.argmax(
+                np.min(
+                    np.array(
+                        [
+                            np.sum(abs(trn_geom - trajectory) ** 2, axis=(-1, -2))
+                            for trn_geom in trn_geometries
+                        ]
+                    ),
+                    axis=0,
+                )
+            )
+        else:
+            assert False
+
         trn_geometry = trajectory[trn_time]
         trn_times.append(trn_time)
 
