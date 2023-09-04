@@ -22,7 +22,15 @@ norb = nelec = 30
 
 
 def default_solver_fun(h1, h2, nelec):
-    return converge_dmrg(h1, h2, nelec, "MPS", tolerance=1.0e-5, restart_tag="MPS")
+    return converge_dmrg(
+        h1,
+        h2,
+        nelec,
+        "MPS",
+        tolerance=1.0e-5,
+        restart_tag="MPS",
+        bond_dim_schedule=np.round(1.8 ** np.arange(7, 16)).astype(int),
+    )
 
 
 def get_mol(geometry):
