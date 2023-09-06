@@ -29,10 +29,12 @@ class DMRGSolver:
         computational_basis,
         converge_dmrg_fun=default_solver_fun,
         reorder_orbitals=False,
+        mem=5,
     ):
         self.basis = computational_basis
         self.converge_dmrg_fun = converge_dmrg_fun
         self.reorder_orbitals = reorder_orbitals
+        self.mem = mem
 
     def kernel(self, h1, h2, norb, nelec, ecore=0.0):
         MPI.COMM_WORLD.Bcast(self.mo_coeff)  # Just to be safe...
@@ -54,7 +56,7 @@ class DMRGSolver:
             mps_solver = DMRGDriver(
                 symm_type=SymmetryTypes.SU2,
                 mpi=(MPI.COMM_WORLD.size > 1),
-                stack_mem=5 << 30,
+                stack_mem=self.mem << 30,
             )
             mps_solver.initialize_system(norb, n_elec=np.sum(nelec), spin=self.mol.spin)
 
@@ -83,7 +85,7 @@ class DMRGSolver:
         mps_solver = DMRGDriver(
             symm_type=SymmetryTypes.SU2,
             mpi=(MPI.COMM_WORLD.size > 1),
-            stack_mem=5 << 30,
+            stack_mem=self.mem << 30,
         )
         mps_solver.initialize_system(
             norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])
@@ -102,7 +104,7 @@ class DMRGSolver:
         mps_solver = DMRGDriver(
             symm_type=SymmetryTypes.SU2,
             mpi=(MPI.COMM_WORLD.size > 1),
-            stack_mem=5 << 30,
+            stack_mem=self.mem << 30,
         )
         mps_solver.initialize_system(
             norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1])

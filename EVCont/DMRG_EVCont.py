@@ -24,6 +24,7 @@ def append_to_rdms_rerun(
     reorder_orbitals=True,
     converge_dmrg_fun=converge_dmrg,
     enforce_symmetric=True,
+    mem=5,
 ):
     mol_bra = mols[-1]
 
@@ -36,7 +37,7 @@ def append_to_rdms_rerun(
     mps_solver = DMRGDriver(
         symm_type=SymmetryTypes.SU2,
         mpi=(MPI.COMM_WORLD.size > 1),
-        stack_mem=5 << 30,
+        stack_mem=mem << 30,
     )
     mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
@@ -204,6 +205,7 @@ def append_to_rdms_orbital_rotation(
     reorder_orbitals=True,
     converge_dmrg_fun=converge_dmrg,
     rotation_thresh=1.0e-6,
+    mem=5,
 ):
     mol_bra = mols[-1]
 
@@ -226,7 +228,7 @@ def append_to_rdms_orbital_rotation(
 
     if rank == 0:
         mps_solver = DMRGDriver(
-            symm_type=SymmetryTypes.SU2, mpi=None, stack_mem=5 << 30
+            symm_type=SymmetryTypes.SU2, mpi=None, stack_mem=mem << 30
         )
         mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
@@ -263,7 +265,7 @@ def append_to_rdms_orbital_rotation(
 
     if rank == 0:
         mps_solver = DMRGDriver(
-            symm_type=SymmetryTypes.SU2, mpi=None, stack_mem=5 << 30
+            symm_type=SymmetryTypes.SU2, mpi=None, stack_mem=mem << 30
         )
         mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
@@ -352,6 +354,7 @@ def append_to_rdms_OAO_basis(
     one_rdm=None,
     two_rdm=None,
     converge_dmrg_fun=converge_dmrg,
+    mem=5,
 ):
     mol_bra = mols[-1]
 
@@ -373,7 +376,7 @@ def append_to_rdms_OAO_basis(
     mps_solver = DMRGDriver(
         symm_type=SymmetryTypes.SU2,
         mpi=(MPI.COMM_WORLD.size > 1),
-        stack_mem=10 << 30,
+        stack_mem=mem << 30,
     )
     mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
@@ -416,6 +419,7 @@ class DMRG_EVCont_obj:
         self,
         dmrg_converge_fun=converge_dmrg,
         append_method=append_to_rdms_OAO_basis,
+        mem=5,
     ):
         self.solver = dmrg_converge_fun
         self.append_method = append_method
@@ -426,6 +430,7 @@ class DMRG_EVCont_obj:
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
+        self.mem = mem
 
     def append_to_rdms(self, mol):
         self.mols.append(mol)
@@ -438,6 +443,7 @@ class DMRG_EVCont_obj:
             one_rdm=self.one_rdm,
             two_rdm=self.two_rdm,
             converge_dmrg_fun=self.solver,
+            mem=self.mem,
         )
 
     def prune_datapoints(self, keep_ids):

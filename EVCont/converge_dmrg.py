@@ -17,10 +17,11 @@ def converge_dmrg(
     noises=np.append(np.logspace(-2, -7, num=4), 0),
     tolerance=1.0e-4,
     restart_tag=None,
+    mem=5,
 ):
     norb = h1.shape[0]
 
-    mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=mpi, stack_mem=5 << 30)
+    mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=mpi, stack_mem=mem << 30)
     mps_solver.initialize_system(norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1]))
 
     mpo = mps_solver.get_qc_mpo(h1e=h1, g2e=h2, iprint=1, reorder=None)
