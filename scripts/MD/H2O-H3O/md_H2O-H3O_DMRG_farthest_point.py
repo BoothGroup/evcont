@@ -35,7 +35,7 @@ def dmrg_converge_fun(h1, h2, nelec, tag):
             np.copyto(h2[i, j, :, :], h2_slice)
 
     return converge_dmrg(
-        h1, h2, nelec, tag, tolerance=1.0e-3, mpi=MPI.COMM_WORLD.size > 1
+        h1, h2, nelec, tag, tolerance=1.0e-3, mpi=MPI.COMM_WORLD.size > 1, mem=100
     )
 
 
@@ -87,7 +87,7 @@ dt = 5
 init_mol = mol.copy()
 
 
-dmrg_ev_cont_obj = DMRG_EVCont_obj(dmrg_converge_fun=dmrg_converge_fun)
+dmrg_ev_cont_obj = DMRG_EVCont_obj(dmrg_converge_fun=dmrg_converge_fun, mem=100)
 
 if os.path.exists("overlap.npy"):
     dmrg_ev_cont_obj.overlap = np.load("overlap.npy")
