@@ -25,6 +25,7 @@ from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
 
 from mpi4py import MPI
 
+import os
 
 rank = MPI.COMM_WORLD.rank
 
