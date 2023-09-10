@@ -2,7 +2,7 @@ from pyscf import md, scf, lib, grad
 
 import numpy as np
 
-from EVCont.ab_initio_gradients_loewdin_np import get_energy_with_grad
+from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
 
 from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
 
