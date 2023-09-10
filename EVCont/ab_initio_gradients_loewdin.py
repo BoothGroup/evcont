@@ -231,18 +231,18 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
         mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
     )
 
-    jac_H = jnp.sum(
-        jnp.expand_dims(one_RDM, (-1, -2)) * h1_jac, axis=(-3, -4)
-    ) + 0.5 * jnp.sum(
-        jnp.expand_dims(two_RDM, (-1, -2)) * h2_jac, axis=(-3, -4, -5, -6)
-    )
-
     en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
+
+    one_rdm_predicted = np.array(jnp.einsum("i,ijkl,j->kl", vec, one_RDM, vec))
+    two_rdm_predicted = np.array(jnp.einsum("i,ijklmn,j->klmn", vec, two_RDM, vec))
+
+    jac_H = jnp.sum(
+        jnp.expand_dims(one_rdm_predicted, (-1, -2)) * h1_jac, axis=(-3, -4)
+    ) + 0.5 * jnp.sum(
+        jnp.expand_dims(two_rdm_predicted, (-1, -2)) * h2_jac, axis=(-3, -4, -5, -6)
+    )
 
     return (
         en.real + mol.energy_nuc(),
-        np.array(
-            jnp.einsum("i,ijkl,j->kl", vec, jac_H, vec)
-            + grad.RHF(scf.RHF(mol)).grad_nuc()
-        ),
+        np.array(jac_H + grad.RHF(scf.RHF(mol)).grad_nuc()),
     )
