@@ -291,13 +291,31 @@ def converge_EVCont_MD(
         elif data_addition == "farthest_point_ham":
             trn_time = 0
             if rank == 0:
-                num_points = EVCont_obj.one_rdm.shape[0]
-                trn_geometries_one_rdms = EVCont_obj.one_rdm[
-                    np.arange(num_points), np.arange(num_points)
+                # Reconstruct training geometries
+                trajs = [
+                    np.load("traj_EVCont_{}.npy".format(i))
+                    for i in range(len(trn_times))
                 ]
-                trn_geometries_two_rdms = EVCont_obj.two_rdm[
-                    np.arange(num_points), np.arange(num_points)
+
+                trn_geometries = [trajs[0][0]] + [
+                    trajs[k][trn_times[k + 1]] for k in range(len(trajs) - 1)
                 ]
+
+                h1_trn = np.zeros((len(trn_geometries), init_mol.nao, init_mol.nao))
+                h2_trn = np.zeros(
+                    (
+                        len(trn_geometries),
+                        init_mol.nao,
+                        init_mol.nao,
+                        init_mol.nao,
+                        init_mol.nao,
+                    )
+                )
+                for j, trn_geom in enumerate(trn_geometries):
+                    mol = init_mol.copy().set_geom_(trn_geom)
+                    h1, h2 = get_integrals(mol, get_basis(mol))
+                    h1_trn[j] = h1
+                    h2_trn[j] = h2
 
                 farthest_point = None
 
@@ -306,10 +324,8 @@ def converge_EVCont_MD(
                     h1, h2 = get_integrals(mol, get_basis(mol))
 
                     distance = np.sum(
-                        abs(h1 - trn_geometries_one_rdms) ** 2, axis=(-1, -2)
-                    ) + np.sum(
-                        abs(h2 - trn_geometries_two_rdms) ** 2, axis=(-1, -2, -3, -4)
-                    )
+                        abs(h1 - h1_trn) ** 2, axis=(-1, -2)
+                    ) + 0.5 * np.sum(abs(h2 - h2_trn) ** 2, axis=(-1, -2, -3, -4))
                     min_dist = np.min(distance)
                     if farthest_point is None or min_dist > farthest_point:
                         farthest_point = min_dist
