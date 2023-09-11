@@ -6,6 +6,7 @@ from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
 
 from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
 
+from EVCont.electron_integral_utils import get_basis, get_integrals
 
 from mpi4py import MPI
 
@@ -287,6 +288,33 @@ def converge_EVCont_MD(
                     axis=0,
                 )
             )
+        elif data_addition == "farthest_point_ham":
+            trn_time = 0
+            if rank == 0:
+                num_points = EVCont_obj.one_rdm.shape[0]
+                trn_geometries_one_rdms = EVCont_obj.one_rdm[
+                    np.arange(num_points), np.arange(num_points)
+                ]
+                trn_geometries_two_rdms = EVCont_obj.two_rdm[
+                    np.arange(num_points), np.arange(num_points)
+                ]
+
+                farthest_point = None
+
+                for j, geometry in enumerate(trajectory):
+                    mol = init_mol.copy().set_geom_(geometry)
+                    h1, h2 = get_integrals(mol, get_basis(mol))
+
+                    distance = np.sum(
+                        abs(h1 - trn_geometries_one_rdms) ** 2, axis=(-1, -2)
+                    ) + np.sum(
+                        abs(h2 - trn_geometries_two_rdms) ** 2, axis=(-1, -2, -3, -4)
+                    )
+                    min_dist = np.min(distance)
+                    if farthest_point is None or min_dist > farthest_point:
+                        farthest_point = min_dist
+                        trn_time = j
+            trn_time = MPI.COMM_WORLD.bcast(trn_time, root=0)
         else:
             assert False
 
