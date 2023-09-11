@@ -72,7 +72,7 @@ init_geometry = (
 mol = get_mol(init_geometry)
 
 
-steps = 50
+steps = 300
 dt = 5
 
 
