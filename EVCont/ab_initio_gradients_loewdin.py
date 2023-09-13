@@ -213,15 +213,14 @@ def get_two_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
     return h2_grad
 
 
-def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
-    # Construct h1 and h2
-    ao_mo_trafo = np.array(
-        get_loewdin_trafo(jnp.array(mol.intor("int1e_ovlp"))), dtype=float
-    )
-    ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=None):
+    if ao_mo_trafo is None:
+        ao_mo_trafo = np.array(
+            get_loewdin_trafo(jnp.array(mol.intor("int1e_ovlp"))), dtype=float
+        )
 
-    h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
-    h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
+    if ao_mo_trafo_grad is None:
+        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
 
     h1_jac = get_one_el_grad(
         mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
@@ -231,15 +230,31 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
         mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
     )
 
+    jac_H = jnp.sum(
+        jnp.expand_dims(one_rdm, (-1, -2)) * h1_jac, axis=(-3, -4)
+    ) + 0.5 * jnp.sum(
+        jnp.expand_dims(two_rdm, (-1, -2)) * h2_jac, axis=(-3, -4, -5, -6)
+    )
+
+    return np.array(jac_H)
+
+
+def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
+    # Construct h1 and h2
+    ao_mo_trafo = np.array(
+        get_loewdin_trafo(jnp.array(mol.intor("int1e_ovlp"))), dtype=float
+    )
+
+    h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
+    h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
+
     en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
 
     one_rdm_predicted = np.array(jnp.einsum("i,ijkl,j->kl", vec, one_RDM, vec))
     two_rdm_predicted = np.array(jnp.einsum("i,ijklmn,j->klmn", vec, two_RDM, vec))
 
-    jac_H = jnp.sum(
-        jnp.expand_dims(one_rdm_predicted, (-1, -2)) * h1_jac, axis=(-3, -4)
-    ) + 0.5 * jnp.sum(
-        jnp.expand_dims(two_rdm_predicted, (-1, -2)) * h2_jac, axis=(-3, -4, -5, -6)
+    jac_H = get_grad_elec_OAO(
+        mol, one_rdm_predicted, two_rdm_predicted, ao_mo_trafo=ao_mo_trafo
     )
 
     return (
