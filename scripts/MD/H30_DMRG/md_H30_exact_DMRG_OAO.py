@@ -2,12 +2,17 @@ from pyscf import md, gto, scf, mcscf, lo, ao2mo, fci, lib, grad
 
 import numpy as np
 
-from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
+from EVCont.ab_initio_gradients_loewdin import get_grad_elec_OAO
+
+from pyblock2.driver.core import DMRGDriver, SymmetryTypes
+
 from EVCont.MD_utils import get_trajectory
 
 from EVCont.CustomDMRGCI import CustomDMRGCI
 
 from EVCont.converge_dmrg import converge_dmrg
+
+from EVCont.electron_integral_utils import get_basis, get_integrals
 
 
 import os
@@ -30,6 +35,7 @@ def default_solver_fun(h1, h2, nelec):
         tolerance=1.0e-5,
         restart_tag="MPS",
         bond_dim_schedule=np.round(1.8 ** np.arange(7, 16)).astype(int),
+        mem=20,
     )
 
 
@@ -52,14 +58,53 @@ steps = 300
 dt = 5
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
+
+
+class Base:
+    converged = True
+
+
+class Scanner(lib.GradScanner):
+    def __init__(self):
+        self.base = Base()
+
+    def __call__(self, mol):
+        self.mol = mol
+
+        basis = get_basis(mol)
+
+        h1, h2 = get_integrals(mol, basis)
+
+        state, en = default_solver_fun(
+            h1,
+            h2,
+            mol.nelec,
+        )
+
+        mps_solver = DMRGDriver(
+            symm_type=SymmetryTypes.SU2,
+            mpi=(MPI.COMM_WORLD.size > 1),
+            stack_mem=20 << 30,
+        )
+        mps_solver.initialize_system(
+            mol.nao, n_elec=np.sum(mol.nelec), spin=(mol.nelec[0] - mol.nelec[1])
+        )
+
+        one_rdm = np.array(mps_solver.get_1pdm(state, bra=state))
+        two_rdm = np.array(
+            np.transpose(mps_solver.get_2pdm(state, bra=state), (0, 3, 1, 2))
+        )
+
+        print(en)
+
+        return mol.energy_nuc() + en, grad.RHF(
+            scf.RHF(mol)
+        ).grad_nuc() + get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=basis)
+
+
 init_mol = mol.copy()
-solver = CustomDMRGCI(
-    mol, 30, 30, "OAO", converge_dmrg_fun=default_solver_fun, reorder_orbitals=False
-)
-solver.converged = True
 
-scanner_fun = solver.nuc_grad_method().as_scanner()
-
+scanner_fun = Scanner()
 
 frames = []
 scanner_fun.mol = init_mol.copy()
