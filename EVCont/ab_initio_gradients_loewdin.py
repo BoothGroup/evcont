@@ -14,6 +14,8 @@ from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state
 
 from EVCont.electron_integral_utils import get_loewdin_trafo
 
+from functools import partial
+
 
 def get_overlap_grad(mol):
     inner_deriv = mol.intor("int1e_ipovlp", comp=3)
@@ -130,87 +132,49 @@ def get_one_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
     return h1_grad
 
 
-def get_two_el_grad_ao(mol):
-    inner_deriv = mol.intor("int2e_ip1", comp=3)
-
-    deriv = np.zeros((3, mol.natm, mol.nao, mol.nao, mol.nao, mol.nao))
-    for i in range(mol.natm):
-        _, _, x, y = mol.aoslice_by_atom()[i]
-        deriv[:, i, x:y, :, :, :] -= inner_deriv[:, x:y]
-
-    deriv = (
-        deriv
-        + deriv.transpose(0, 1, 3, 2, 5, 4)
-        + deriv.transpose(0, 1, 4, 5, 2, 3)
-        + deriv.transpose(0, 1, 5, 4, 3, 2)
+@partial(jax.jit, static_argnums=5)
+def two_el_grad(h2_ao, two_rdm, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slices):
+    two_el_contraction = jnp.einsum(
+        "ijkl,abcd,aimn,bj,ck,dl->mn",
+        two_rdm
+        + jnp.transpose(two_rdm, (1, 0, 2, 3))
+        + jnp.transpose(two_rdm, (3, 2, 1, 0))
+        + jnp.transpose(two_rdm, (2, 3, 0, 1)),
+        h2_ao,
+        ao_mo_trafo_grad,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        optimize="optimal",
     )
 
-    return np.transpose(deriv, (2, 3, 4, 5, 1, 0))
+    two_rdm_ao = jnp.einsum(
+        "ijkl,ai,bj,ck,dl->abcd",
+        two_rdm,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        optimize="optimal",
+    )
 
+    two_el_contraction_from_grad = jnp.einsum(
+        "nmbcd,abcd->nma",
+        h2_ao_deriv,
+        two_rdm_ao
+        + jnp.transpose(two_rdm_ao, (1, 0, 3, 2))
+        + jnp.transpose(two_rdm_ao, (2, 3, 0, 1))
+        + jnp.transpose(two_rdm_ao, (3, 2, 1, 0)),
+        optimize="optimal",
+    )
 
-def get_two_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
-    if ao_mo_trafo is None:
-        ao_mo_trafo = np.array(
-            get_loewdin_trafo(jnp.array(mol.intor("int1e_ovlp"))), dtype=float
+    h2_grad_ao_b = jnp.zeros((3, len(atm_slices), two_rdm.shape[0], two_rdm.shape[1]))
+    for i, slice in enumerate(atm_slices):
+        h2_grad_ao_b = h2_grad_ao_b.at[:, i, slice[0] : slice[1], :].add(
+            -two_el_contraction_from_grad[:, slice[0] : slice[1], :]
         )
 
-    h2_ao = mol.intor("int2e")
-
-    if ao_mo_trafo_grad is None:
-        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
-
-    h2_grad_ao = jnp.array(get_two_el_grad_ao(mol))
-
-    h2_grad = jnp.einsum(
-        "abcd,aimn,bj,ck,dl->ijklmn",
-        h2_ao,
-        ao_mo_trafo_grad,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        optimize="optimal",
-    )
-
-    # TODO: This can certainly be done faster via appropriate transpose operations
-    h2_grad += jnp.einsum(
-        "abcd,ai,bjmn,ck,dl->ijklmn",
-        h2_ao,
-        ao_mo_trafo,
-        ao_mo_trafo_grad,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        optimize="optimal",
-    )
-    h2_grad += jnp.einsum(
-        "abcd,ai,bj,ckmn,dl->ijklmn",
-        h2_ao,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        ao_mo_trafo_grad,
-        ao_mo_trafo,
-        optimize="optimal",
-    )
-    h2_grad += jnp.einsum(
-        "abcd,ai,bj,ck,dlmn->ijklmn",
-        h2_ao,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        ao_mo_trafo_grad,
-        optimize="optimal",
-    )
-
-    h2_grad += jnp.einsum(
-        "abcdmn,ai,bj,ck,dl->ijklmn",
-        h2_grad_ao,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        optimize="optimal",
-    )
-
-    return h2_grad
+    return two_el_contraction + jnp.einsum("nmbb->mn", h2_grad_ao_b)
 
 
 def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=None):
@@ -226,17 +190,29 @@ def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=
         mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
     )
 
-    h2_jac = get_two_el_grad(
-        mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
+    h2_ao = mol.intor("int2e")
+    h2_ao_deriv = mol.intor("int2e_ip1", comp=3)
+
+    two_el_gradient = two_el_grad(
+        h2_ao,
+        two_rdm,
+        ao_mo_trafo,
+        ao_mo_trafo_grad,
+        h2_ao_deriv,
+        tuple(
+            [
+                (mol.aoslice_by_atom()[i][2], mol.aoslice_by_atom()[i][3])
+                for i in range(mol.natm)
+            ]
+        ),
     )
 
-    jac_H = jnp.sum(
-        jnp.expand_dims(one_rdm, (-1, -2)) * h1_jac, axis=(-3, -4)
-    ) + 0.5 * jnp.sum(
-        jnp.expand_dims(two_rdm, (-1, -2)) * h2_jac, axis=(-3, -4, -5, -6)
+    grad_elec = (
+        jnp.sum(jnp.expand_dims(one_rdm, (-1, -2)) * h1_jac, axis=(-3, -4))
+        + 0.5 * two_el_gradient
     )
 
-    return np.array(jac_H)
+    return np.array(grad_elec)
 
 
 def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
@@ -253,11 +229,11 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
     one_rdm_predicted = np.array(jnp.einsum("i,ijkl,j->kl", vec, one_RDM, vec))
     two_rdm_predicted = np.array(jnp.einsum("i,ijklmn,j->klmn", vec, two_RDM, vec))
 
-    jac_H = get_grad_elec_OAO(
+    grad_elec = get_grad_elec_OAO(
         mol, one_rdm_predicted, two_rdm_predicted, ao_mo_trafo=ao_mo_trafo
     )
 
     return (
         en.real + mol.energy_nuc(),
-        np.array(jac_H + grad.RHF(scf.RHF(mol)).grad_nuc()),
+        np.array(grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc()),
     )
