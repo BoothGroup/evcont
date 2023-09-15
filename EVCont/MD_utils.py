@@ -93,7 +93,7 @@ def converge_EVCont_MD(
     convergence_thresh=1.0e-3,
     prune_irrelevant_data=False,
     trn_times=[],
-    data_addition="energy",
+    data_addition="farthest_point_ham",
 ):
     if len(trn_times) < 1:
         i = 0
