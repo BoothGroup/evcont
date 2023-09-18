@@ -14,7 +14,7 @@ def get_mol(geometry):
 
     mol.build(
         atom=[("H", geometry[0]), ("H", geometry[1]), ("O", geometry[2])],
-        basis="6-31G",
+        basis="cc-pVDZ",
         symmetry=False,
         unit="Bohr",
     )
@@ -22,21 +22,24 @@ def get_mol(geometry):
     return mol
 
 
+ncas = 8
+neleca = 4
+
 overlap = np.load("overlap.npy")
 one_rdm = np.load("one_rdm.npy")
 two_rdm = np.load("two_rdm.npy")
 
 num_points = overlap.shape[0]
 
-trajectory = np.load("traj_EVCont_{}.npy".format(num_points - 1))
+trajectory = np.load("traj_EVCont_{}.npy".format(overlap.shape[0] - 1))
 
 
-with open("force_error_6_31_G.txt", "w") as fl:
+with open("force_error_vdz_active.txt", "w") as fl:
     for i in range(num_points):
         fl.write("Force error ({} trn. geometries)  ".format(i + 1))
     fl.write("\n")
-with open("predicted_energies_6_31_G.txt", "w") as fl:
-    fl.write("Energy exact")
+with open("predicted_energies_vdz_active.txt", "w") as fl:
+    fl.write("Energy CAS")
     for i in range(num_points):
         fl.write("  Energy predicted ({} trn. geometries)".format(i + 1))
     fl.write("\n")
@@ -49,12 +52,12 @@ for i, pos in enumerate(trajectory):
 
     mf = mol.RHF()
     en_exact, grad_exact = (
-        mcscf.CASCI(mf, mol.nao, np.sum(mol.nelec)).nuc_grad_method().as_scanner()(mol)
+        mcscf.CASCI(mf, ncas, neleca).nuc_grad_method().as_scanner()(mol)
     )
 
-    with open("predicted_energies_6_31_G.txt", "a") as fl:
+    with open("predicted_energies_vdz_active.txt", "a") as fl:
         fl.write("{}".format(en_exact))
-        with open("force_error_6_31_G.txt", "a") as fl2:
+        with open("force_error_vdz_active.txt", "a") as fl2:
             h1, h2 = get_integrals(mol, get_basis(mol))
             for j in range(num_points):
                 en, grad = get_energy_with_grad(
