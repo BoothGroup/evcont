@@ -76,7 +76,7 @@ trn_mols = [init_mol.copy()]
 
 
 converge_EVCont_MD(
-    DMRG_EVCont_obj(dmrg_converge_fun=dmrg_converge_fun),
+    DMRG_EVCont_obj(dmrg_converge_fun=dmrg_converge_fun, mem=100),
     init_mol,
     steps=steps,
     dt=dt,
