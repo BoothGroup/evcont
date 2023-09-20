@@ -76,7 +76,7 @@ dt = 5
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 
-trajectory = np.load("traj_DRMG.npy")
+trajectory = np.load("traj_DMRG.npy")
 
 open("continued_energies.txt", "w").close()
 
