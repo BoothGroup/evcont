@@ -23,8 +23,8 @@ from mpi4py import MPI
 
 rank = MPI.COMM_WORLD.rank
 
-ncas = 4
-neleca = 2
+ncas = 8
+neleca = 4
 
 
 def get_mol(geometry):
