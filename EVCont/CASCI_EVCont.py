@@ -92,7 +92,7 @@ def owndata(x):
 
 
 class CASCI_EVCont_obj:
-    def __init__(self, ncas, neleca):
+    def __init__(self, ncas, neleca, casci_solver=CASCI):
         self.ncas = ncas
         self.neleca = neleca
 
@@ -101,6 +101,8 @@ class CASCI_EVCont_obj:
         self.one_rdm = None
         self.two_rdm = None
 
+        self.casci_solver = casci_solver
+
     def append_to_rdms(self, mol):
         overlap = self.overlap
         one_rdm = self.one_rdm
@@ -108,8 +110,11 @@ class CASCI_EVCont_obj:
 
         mf = mol.copy().RHF()
         mf.kernel()
+
+        assert mf.converged
+
         MPI.COMM_WORLD.Bcast(mf.mo_coeff)
-        casci_bra = CASCI(mf, self.ncas, self.neleca)
+        casci_bra = self.casci_solver(mf, self.ncas, self.neleca)
 
         self.cascis.append(casci_bra)
 
@@ -117,7 +122,14 @@ class CASCI_EVCont_obj:
         n_cascis = len(cascis)
 
         casci_bra.kernel()
+
+        assert casci_bra.fcisolver.converged
+
+        if hasattr(casci_bra, "converged"):
+            assert casci_bra.converged
+
         MPI.COMM_WORLD.Bcast(casci_bra.ci)
+        MPI.COMM_WORLD.Bcast(casci_bra.mo_coeff)
 
         mo_coeff_bra = casci_bra.mo_coeff
         mol_bra = casci_bra.mol
