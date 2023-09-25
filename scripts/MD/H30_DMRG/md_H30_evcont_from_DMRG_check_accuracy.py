@@ -30,19 +30,16 @@ import os
 rank = MPI.COMM_WORLD.rank
 
 
-def dmrg_converge_fun(h1, h2, nelec, tag):
-    MPI.COMM_WORLD.Bcast(h1, root=0)
-
-    h2_slice = np.empty((h2.shape[2], h2.shape[3]))
-
-    for i in range(h2.shape[0]):
-        for j in range(h2.shape[1]):
-            np.copyto(h2_slice, h2[i, j, :, :])
-            MPI.COMM_WORLD.Bcast(h2_slice, root=0)
-            np.copyto(h2[i, j, :, :], h2_slice)
-
+def default_solver_fun(h1, h2, nelec):
     return converge_dmrg(
-        h1, h2, nelec, tag, tolerance=1.0e-3, mpi=MPI.COMM_WORLD.size > 1
+        h1,
+        h2,
+        nelec,
+        "MPS",
+        tolerance=1.0e-5,
+        restart_tag="MPS",
+        bond_dim_schedule=np.round(1.8 ** np.arange(7, 16)).astype(int),
+        mem=20,
     )
 
 
@@ -62,12 +59,6 @@ def get_mol(geometry):
     return mol
 
 
-overlap = np.load("overlap.npy")
-one_rdm = np.load("one_rdm.npy")
-two_rdm = np.load("two_rdm.npy")
-
-no_data = overlap.shape[0]
-
 init_dist = 1.9
 
 steps = 300
@@ -76,19 +67,17 @@ dt = 5
 
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 
-trajectory = np.load("traj_DMRG.npy")
+trajectory = np.load("traj_EVCont_46.npy")
 
-open("continued_energies.txt", "w").close()
+open("DMRG_energies.txt", "w").close()
 
 for pos in trajectory:
     inner_mol = mol.copy().set_geom_(pos)
-    with open("continued_energies.txt", "a") as fl:
-        for i in range(no_data):
-            en = approximate_ground_state_OAO(
-                inner_mol,
-                one_rdm[: (i + 1), : (i + 1)],
-                two_rdm[: (i + 1), : (i + 1)],
-                overlap[: (i + 1), : (i + 1)],
-            )[0]
-            fl.write("{} ".format(en))
-        fl.write("\n")
+    h1, h2 = get_integrals(mol, get_basis(mol))
+    state, en = default_solver_fun(
+        h1,
+        h2,
+        inner_mol.nelec,
+    )
+    with open("DMRG_energies.txt", "a") as fl:
+        fl.write("{}\n".format(en))
