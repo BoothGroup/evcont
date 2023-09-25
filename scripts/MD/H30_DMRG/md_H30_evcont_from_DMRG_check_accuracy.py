@@ -81,14 +81,14 @@ open("continued_energies.txt", "w").close()
 
 for pos in trajectory:
     inner_mol = mol.copy().set_geom_(pos)
-    h1, h2 = get_integrals(mol, get_basis(mol))
+    h1, h2 = get_integrals(inner_mol, get_basis(inner_mol))
     state, en = default_solver_fun(
         h1,
         h2,
         inner_mol.nelec,
     )
     with open("DMRG_energies.txt", "a") as fl:
-        fl.write("{}\n".format(en + mol.energy_nuc()))
+        fl.write("{}\n".format(en + inner_mol.energy_nuc()))
 
     with open("continued_energies.txt", "a") as fl:
         for i in range(no_data):
