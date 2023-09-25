@@ -65,11 +65,19 @@ steps = 300
 dt = 5
 
 
+overlap = np.load("overlap.npy")
+one_rdm = np.load("one_rdm.npy")
+two_rdm = np.load("two_rdm.npy")
+
+no_data = overlap.shape[0]
+
+
 mol = get_mol(np.array([[0, 0, init_dist * i] for i in range(nelec)]))
 
 trajectory = np.load("traj_EVCont_46.npy")
 
 open("DMRG_energies.txt", "w").close()
+open("continued_energies.txt", "w").close()
 
 for pos in trajectory:
     inner_mol = mol.copy().set_geom_(pos)
@@ -80,4 +88,15 @@ for pos in trajectory:
         inner_mol.nelec,
     )
     with open("DMRG_energies.txt", "a") as fl:
-        fl.write("{}\n".format(en))
+        fl.write("{}\n".format(en + mol.energy_nuc()))
+
+    with open("continued_energies.txt", "a") as fl:
+        for i in range(no_data):
+            en = approximate_ground_state_OAO(
+                inner_mol,
+                one_rdm[: i + 1, : i + 1],
+                two_rdm[: i + 1, : i + 1],
+                overlap[: i + 1, : i + 1],
+            )[0]
+            fl.write("{}  ".format(en))
+        fl.write("\n")
