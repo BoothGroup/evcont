@@ -1,8 +1,6 @@
 import numpy as np
 
-import jax.numpy as jnp
-
-from EVCont.electron_integral_utils import get_basis, transform_integrals
+from EVCont.electron_integral_utils import get_basis
 
 from pygnme import wick, utils
 
@@ -287,12 +285,18 @@ class CASCI_EVCont_obj:
             if rank == 0:
                 overlap_new[-1, i] = overlap_accumulate
                 overlap_new[i, -1] = overlap_accumulate.conj()
-                rdm1 = jnp.einsum("...ij,ai->...aj", rdm1, trafo_ket)
-                rdm1 = np.array(jnp.einsum("...aj,bj->...ab", rdm1, trafo_bra))
-                rdm2 = jnp.einsum("...ijkl,ai->...ajkl", rdm2, trafo_bra)
-                rdm2 = jnp.einsum("...ajkl,bj->...abkl", rdm2, trafo_ket)
-                rdm2 = jnp.einsum("...abkl,ck->...abcl", rdm2, trafo_bra)
-                rdm2 = np.array(jnp.einsum("...abcl,dl->...abcd", rdm2, trafo_ket))
+                rdm1 = np.einsum(
+                    "...ij,ai,bj->...ab", rdm1, trafo_ket, trafo_bra, optimize="optimal"
+                )
+                rdm2 = np.einsum(
+                    "...ijkl,ai,bj,ck,dl->...abcd",
+                    rdm2,
+                    trafo_bra,
+                    trafo_ket,
+                    trafo_bra,
+                    trafo_ket,
+                    optimize="optimal",
+                )
 
                 one_rdm_new[-1, i, :, :] = rdm1
                 one_rdm_new[i, -1, :, :] = rdm1.conj()

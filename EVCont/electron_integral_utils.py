@@ -1,39 +1,26 @@
-from jax import config
-
-config.update("jax_enable_x64", True)
-
 import numpy as np
-
-import jax.numpy as jnp
 
 from pyscf import scf, lo, ao2mo
 
 
 def get_loewdin_trafo(overlap_mat):
-    vals, vecs = jnp.linalg.eigh(overlap_mat)
-    inverse_sqrt_vals = jnp.where(vals > 1.0e-15, 1 / jnp.sqrt(vals), 0.0)
-    return np.array(jnp.dot(vecs * inverse_sqrt_vals, vecs.conj().T))
+    vals, vecs = np.linalg.eigh(overlap_mat)
+    inverse_sqrt_vals = np.where(vals > 1.0e-15, 1 / np.sqrt(vals), 0.0)
+    return np.array(np.dot(vecs * inverse_sqrt_vals, vecs.conj().T))
 
 
 def transform_integrals(h1, h2, trafo):
-    h1 = jnp.array(h1)
-    h2 = jnp.array(h2)
-    trafo = jnp.array(trafo)
-    h1 = jnp.einsum("...ij,ai->...aj", h1, trafo)
-    h1 = jnp.einsum("...aj,bj->...ab", h1, trafo)
-    h2 = jnp.einsum("...ijkl,ai->...ajkl", h2, trafo)
-    h2 = jnp.einsum("...ajkl,bj->...abkl", h2, trafo)
-    h2 = jnp.einsum("...abkl,ck->...abcl", h2, trafo)
-    h2 = jnp.einsum("...abcl,dl->...abcd", h2, trafo)
-    return np.array(h1), np.array(h2)
+    h1 = np.einsum("...ij,ai,bj->...ab", h1, trafo, optimize="optimal")
+    h2 = np.einsum("...ijkl,ai,bj,ck,dl->...abcd", h2, trafo, optimize="optimal")
+    return h1, h2
 
 
 def get_basis(mol, basis_type="OAO"):
     if basis_type == "OAO":
-        basis = np.array(get_loewdin_trafo(mol.intor("int1e_ovlp")))
+        basis = get_loewdin_trafo(mol.intor("int1e_ovlp"))
     else:
         myhf = scf.RHF(mol)
-        ehf = myhf.scf()
+        _ = myhf.scf()
         basis = myhf.mo_coeff
         if basis_type == "split":
             localizer = lo.Boys(mol, basis[:, : mol.nelec[0]])
