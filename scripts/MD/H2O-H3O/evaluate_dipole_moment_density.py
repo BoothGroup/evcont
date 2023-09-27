@@ -1,14 +1,16 @@
 import numpy as np
 
-from pyscf import gto, md, fci, scf, mcscf
+from pyscf import gto
 
 from pyscf.scf import hf
-
-import numpy as np
 
 from EVCont.electron_integral_utils import get_basis, get_integrals
 
 from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state
+
+import sys
+
+num_training_points = int(sys.argv[1])
 
 
 def get_mol(geometry):
@@ -39,46 +41,43 @@ two_rdm = np.load("two_rdm.npy")
 
 num_points = overlap.shape[0]
 
-trajectory = np.load("traj_EVCont_{}.npy".format(num_points - 1))
+trajectory = np.load("traj_EVCont_{}.npy".format(num_training_points - 1))
 
 
-for i in range(num_points):
-    open("dipole_moment_{}.txt".format(i), "w")
-    open("atom_charges_{}.txt".format(i), "w")
-
-
+open("dipole_moment_{}.txt".format(num_training_points - 1), "w")
+open("atom_charges_{}.txt".format(num_training_points - 1), "w")
 for i, pos in enumerate(trajectory):
     print(i)
     mol = get_mol(pos)
 
     basis = get_basis(mol)
     h1, h2 = get_integrals(mol, basis)
-    for j in range(num_points):
-        red_one_rdm = one_rdm[: j + 1, : j + 1, :, :]
-        en, vec = approximate_ground_state(
-            h1,
-            h2,
-            (red_one_rdm),
-            (two_rdm[: j + 1, : j + 1, :, :, :, :]),
-            (overlap[: j + 1, : j + 1]),
-            hermitian=True,
-        )
+    red_one_rdm = one_rdm[:num_training_points, :num_training_points, :, :]
+    en, vec = approximate_ground_state(
+        h1,
+        h2,
+        (red_one_rdm),
+        (two_rdm[:num_training_points, :num_training_points, :, :, :, :]),
+        (overlap[:num_training_points, :num_training_points]),
+        hermitian=True,
+    )
 
-        predicted_one_rdm = np.sum(
-            red_one_rdm * vec.reshape((-1, 1, 1)) * vec.reshape((-1, 1, 1, 1)),
-            axis=(0, 1),
-        )
+    predicted_one_rdm = np.sum(
+        red_one_rdm * vec.reshape((-1, 1, 1)) * vec.reshape((-1, 1, 1, 1)),
+        axis=(0, 1),
+    )
 
-        predicted_one_rdm = basis.dot(predicted_one_rdm).dot(basis.T)
+    predicted_one_rdm = basis.dot(predicted_one_rdm).dot(basis.T)
 
-        dipole_moment = hf.dip_moment(mol, predicted_one_rdm)
-        atomic_charges = hf.mulliken_meta(mol, predicted_one_rdm)[1]
+    dipole_moment = hf.dip_moment(mol, predicted_one_rdm)
+    atomic_charges = hf.mulliken_meta(mol, predicted_one_rdm)[1]
 
-        with open("dipole_moment_{}.txt".format(j), "a") as fl:
-            for el in dipole_moment:
-                fl.write("{}  ".format(el))
-            fl.write("\n")
-        with open("atom_charges_{}.txt".format(j), "a") as fl:
-            for el in atomic_charges:
-                fl.write("{}  ".format(el))
-            fl.write("\n")
+    with open("dipole_moment_{}.txt".format(num_training_points - 1), "a") as fl:
+        for el in dipole_moment:
+            fl.write("{}  ".format(el))
+        fl.write("\n")
+
+    with open("atom_charges_{}.txt".format(num_training_points - 1), "a") as fl:
+        for el in atomic_charges:
+            fl.write("{}  ".format(el))
+        fl.write("\n")
