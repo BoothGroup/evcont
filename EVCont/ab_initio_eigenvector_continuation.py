@@ -9,8 +9,8 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
     """Returns the electronic ground state approximation from solving the generalised eigenvalue problem
     defined via the one- and two-body transition RDMs.
     """
-    H = np.sum(one_RDM * h1, axis=(-1, -2)) + 0.5 * np.sum(
-        two_RDM * h2, axis=(-1, -2, -3, -4)
+    H = np.einsum("ijkl,kl->ij", one_RDM, h1, optimize="optimal") + 0.5 * np.einsum(
+        "ijklmn,klmn->ij", two_RDM, h2, optimize="optimal"
     )
     if hermitian is True:
         vals, vecs = eigh(H, S)

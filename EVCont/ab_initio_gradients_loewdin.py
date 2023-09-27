@@ -97,7 +97,7 @@ def get_derivative_ao_mo_trafo(mol):
     overlap_grad = get_overlap_grad(mol)
     trafo_grad = jnp.einsum(
         "ijkl, ijmn->klmn",
-        np.array(loewdin_trafo_grad(mol.intor("int1e_ovlp")), dtype=float),
+        loewdin_trafo_grad(mol.intor("int1e_ovlp")),
         overlap_grad,
     )
 
@@ -226,8 +226,10 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
 
     en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
 
-    one_rdm_predicted = np.array(jnp.einsum("i,ijkl,j->kl", vec, one_RDM, vec))
-    two_rdm_predicted = np.array(jnp.einsum("i,ijklmn,j->klmn", vec, two_RDM, vec))
+    one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec, one_RDM, vec, optimize="optimal")
+    two_rdm_predicted = np.einsum(
+        "i,ijklmn,j->klmn", vec, two_RDM, vec, optimize="optimal"
+    )
 
     grad_elec = get_grad_elec_OAO(
         mol, one_rdm_predicted, two_rdm_predicted, ao_mo_trafo=ao_mo_trafo
