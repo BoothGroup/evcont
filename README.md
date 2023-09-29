@@ -23,8 +23,8 @@ Optional dependencies include:
 ## Code
 
 This repository is merely a collection of utility functions and scripts for the eigenvector continuation (in particular, interfacing different codes).
-The [evcont]() folder contains common helper functions and bundles the main utilities (which can be installed).
-The [scripts]() folder contains scripts generate the data from our upcoming manuscript.
+The [evcont](./evcont) folder contains common helper functions and bundles the main utilities (which can be installed).
+The [scripts](./scripts) folder contains scripts generate the data from our upcoming manuscript.
 These should also serve as a good first point of entry into the general functionality of the codebase.
 
 The following scripts are included:
