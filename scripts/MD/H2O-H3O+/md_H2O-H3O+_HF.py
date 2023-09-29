@@ -5,6 +5,11 @@ from pyscf.scf import hf
 import numpy as np
 
 
+"""
+MD simulation with HF, this also calculates the predicted dipole moment.
+"""
+
+
 def get_mol(geometry):
     mol = gto.Mole()
 
@@ -79,6 +84,7 @@ myintegrator = md.NVE(
     veloc=None,
     trajectory_output="HF_trajectory.xyz",
     energy_output="HF_energy.xyz",
+    callback=callback,
 )
 myintegrator.run()
 
