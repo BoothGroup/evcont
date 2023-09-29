@@ -51,6 +51,7 @@ The following scripts are included:
     - [scripts/MD/H2O-H3O+/evaluate_dipole_moment_e_density.py](./scripts/MD/H2O-H3O+/evaluate_dipole_moment_e_density.py): Evaluates the dipole moment and the electron density for the MD trajectories from an eigenvector continuation.
     - [scripts/MD/H2O-H3O+/md_H2O-H3O+_continuation_DMRG.py](./scripts/MD/H2O-H3O+/md_H2O-H3O+_continuation_DMRG.py): MD simulation from an eigenvector continuation with MPS.
     - [scripts/MD/H2O-H3O+/md_H2O-H3O+_HF.py](./scripts/MD/H2O-H3O+/md_H2O-H3O+_HF.py): MD simulation with Hartree-Fock, this also calculates the predicted dipole moment.
+    - [scripts/MD/H2O-H3O+/md_H2O-H3O+_CCSD.py](./scripts/MD/H2O-H3O+/md_H2O-H3O+_CCSD.py): MD simulation with CCSD, this also calculates the predicted dipole moment.
     - [scripts/MD/H2O-H3O+/md_H2O-H3O+_DFT.py](./scripts/MD/H2O-H3O+/md_H2O-H3O+_DFT.py): MD simulation with DFT (B3LYP exchange correlation function), this also calculates the predicted dipole moment.
 
 
