@@ -2,14 +2,14 @@ from pyscf import md, gto, scf, lib, grad
 
 import numpy as np
 
-from EVCont.ab_initio_gradients_loewdin import get_grad_elec_OAO
+from evcont.ab_initio_gradients_loewdin import get_grad_elec_OAO
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 
-from EVCont.converge_dmrg import converge_dmrg
+from evcont.converge_dmrg import converge_dmrg
 
-from EVCont.electron_integral_utils import get_basis, get_integrals
+from evcont.electron_integral_utils import get_basis, get_integrals
 
 
 from mpi4py import MPI

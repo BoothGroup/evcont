@@ -2,11 +2,11 @@ from pyscf import gto
 
 import numpy as np
 
-from EVCont.MD_utils import converge_EVCont_MD
-from EVCont.converge_dmrg import converge_dmrg
+from evcont.MD_utils import converge_EVCont_MD
+from evcont.converge_dmrg import converge_dmrg
 
 
-from EVCont.DMRG_EVCont import DMRG_EVCont_obj
+from evcont.DMRG_EVCont import DMRG_EVCont_obj
 
 
 import os

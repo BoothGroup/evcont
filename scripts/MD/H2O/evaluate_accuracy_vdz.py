@@ -2,9 +2,9 @@ import numpy as np
 
 from pyscf import gto, mcscf
 
-from EVCont.electron_integral_utils import get_basis, get_integrals
+from evcont.electron_integral_utils import get_basis, get_integrals
 
-from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
+from evcont.ab_initio_gradients_loewdin import get_energy_with_grad
 
 """
 Evaluates the energy and force along the converged trajectory in the cc-pVDZ basis

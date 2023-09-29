@@ -2,10 +2,10 @@ import numpy as np
 
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
-from EVCont.electron_integral_utils import get_basis, get_integrals, transform_integrals
-from EVCont.converge_dmrg import converge_dmrg
+from evcont.electron_integral_utils import get_basis, get_integrals, transform_integrals
+from evcont.converge_dmrg import converge_dmrg
 
-from EVCont.MPS_orb_rotation import converge_orbital_rotation_mps
+from evcont.MPS_orb_rotation import converge_orbital_rotation_mps
 
 from mpi4py import MPI
 

@@ -1,6 +1,6 @@
 import numpy as np
 
-from EVCont.electron_integral_utils import get_basis
+from evcont.electron_integral_utils import get_basis
 
 from pygnme import wick, utils
 

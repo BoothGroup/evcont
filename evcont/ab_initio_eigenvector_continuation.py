@@ -2,7 +2,7 @@ import numpy as np
 
 from scipy.linalg import eigh, eig
 
-from EVCont.electron_integral_utils import get_basis, get_integrals
+from evcont.electron_integral_utils import get_basis, get_integrals
 
 
 def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):

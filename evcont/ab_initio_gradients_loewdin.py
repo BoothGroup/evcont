@@ -2,9 +2,9 @@ import numpy as np
 
 from pyscf import scf, ao2mo, grad
 
-from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state
+from evcont.ab_initio_eigenvector_continuation import approximate_ground_state
 
-from EVCont.electron_integral_utils import get_loewdin_trafo
+from evcont.electron_integral_utils import get_loewdin_trafo
 
 
 def get_overlap_grad(mol):

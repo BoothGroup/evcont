@@ -2,11 +2,11 @@ from pyscf import gto
 
 import numpy as np
 
-from EVCont.electron_integral_utils import get_basis, get_integrals
-from EVCont.converge_dmrg import converge_dmrg
+from evcont.electron_integral_utils import get_basis, get_integrals
+from evcont.converge_dmrg import converge_dmrg
 
 
-from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
+from evcont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
 
 
 from mpi4py import MPI

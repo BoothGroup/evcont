@@ -8,7 +8,7 @@ from ase import Atoms
 from dscribe.kernels import AverageKernel
 
 
-from EVCont.electron_integral_utils import get_basis, get_integrals
+from evcont.electron_integral_utils import get_basis, get_integrals
 
 """
 MD simulation with GAP predictions (using the same training data from a continuation

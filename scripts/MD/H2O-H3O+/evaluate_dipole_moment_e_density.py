@@ -4,9 +4,9 @@ from pyscf import gto
 
 from pyscf.scf import hf
 
-from EVCont.electron_integral_utils import get_basis, get_integrals
+from evcont.electron_integral_utils import get_basis, get_integrals
 
-from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state
+from evcont.ab_initio_eigenvector_continuation import approximate_ground_state
 
 import sys
 

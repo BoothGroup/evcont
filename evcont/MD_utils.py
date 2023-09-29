@@ -2,11 +2,11 @@ from pyscf import md, scf, lib, grad
 
 import numpy as np
 
-from EVCont.ab_initio_gradients_loewdin import get_energy_with_grad
+from evcont.ab_initio_gradients_loewdin import get_energy_with_grad
 
-from EVCont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
+from evcont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
 
-from EVCont.electron_integral_utils import get_basis, get_integrals
+from evcont.electron_integral_utils import get_basis, get_integrals
 
 from mpi4py import MPI
 
