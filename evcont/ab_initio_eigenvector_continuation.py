@@ -49,7 +49,7 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
 
 def approximate_excited_states(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True):
     """
-    Returns the electronic ground state approximation from solving the generalised
+    Returns the approximate electronic excited states from solving the generalised
     eigenvalue problem defined via the one- and two-body transition RDMs.
 
     Args:
@@ -125,7 +125,7 @@ def approximate_ground_state_OAO(mol, one_RDM, two_RDM, S, hermitian=True):
 
 def approximate_excited_states_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
     """
-    This function approximates the ground state energy and wavefunction of a given
+    This function approximates the excite state energies and wavefunctions of a given
     molecule from an eigenvector continuation with t-RDMS and the overlap matrix S.
 
     Args:
