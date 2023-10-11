@@ -6,13 +6,13 @@ from evcont.electron_integral_utils import get_basis, get_integrals
 
 from evcont.FCI_EVCont import FCI_EVCont_obj
 
-from evcont.ab_initio_eigenvector_continuation import approximate_excited_states_OAO
+from evcont.ab_initio_eigenvector_continuation import approximate_multistate_OAO
 
 import numpy as np
 
 """
-Prediction of the excited state PES for a 6-atom H chain from different GS and 
-excited eigenstates
+Prediction of the ground and excited state PES for a 6-atom H chain from 
+different GS and excited eigenstates
 """
 
 n_atoms = 6
@@ -77,7 +77,7 @@ for ri, roots_train in enumerate(roots_train_l):
         open("predicted_surface_rootstrain_{}_datapoints.txt".format(roots_train_str), "w").close()
         for test_dist in test_range:
             mol = get_mol(test_dist)
-            en, _ = approximate_excited_states_OAO(
+            en, _ = approximate_multistate_OAO(
                 mol,
                 continuation_object.one_rdm,
                 continuation_object.two_rdm,
@@ -90,7 +90,7 @@ for ri, roots_train in enumerate(roots_train_l):
     
         test_dist = 2.2
         mol = get_mol(test_dist)
-        _, c = approximate_excited_states_OAO(
+        _, c = approximate_multistate_OAO(
             mol,
             continuation_object.one_rdm,
             continuation_object.two_rdm,
