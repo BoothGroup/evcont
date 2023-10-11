@@ -11,8 +11,8 @@ from evcont.ab_initio_eigenvector_continuation import approximate_excited_states
 import numpy as np
 
 """
-Prediction of the excited state PES for a 6-atom H chain from different training points as depicted in
-the schematic (Fig. (1) of the manuscript)
+Prediction of the excited state PES for a 6-atom H chain from different GS and 
+excited eigenstates
 """
 
 n_atoms = 6

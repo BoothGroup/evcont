@@ -32,6 +32,7 @@ class FCI_EVCont_obj:
         Attributes:
             fcivecs (list): The FCI training states.
             ens (list): The FCI training energies.
+            mol_index (list): The molecule indices of the FCI training states
             overlap (ndarray): Overlap matrix.
             one_rdm (ndarray): One-electron t-RDM.
             two_rdm (ndarray): Two-electron t-RDM.
@@ -46,7 +47,7 @@ class FCI_EVCont_obj:
             self.roots_train = roots_train
             assert isinstance(roots_train,list)
 
-        # Initialize variables to store
+        # Initialize attributes
         self.fcivecs = []
         self.ens = []
         self.mol_index = []
