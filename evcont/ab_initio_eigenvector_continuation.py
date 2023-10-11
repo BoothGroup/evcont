@@ -47,9 +47,9 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
     return en_approx, gs_approx
 
 
-def approximate_excited_states(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True):
+def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True):
     """
-    Returns the approximate electronic excited states from solving the generalised
+    Returns multiple approximate electronic states from solving the generalised
     eigenvalue problem defined via the one- and two-body transition RDMs.
 
     Args:
@@ -123,9 +123,9 @@ def approximate_ground_state_OAO(mol, one_RDM, two_RDM, S, hermitian=True):
 
     return total_energy, vec
 
-def approximate_excited_states_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
+def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
     """
-    This function approximates the excite state energies and wavefunctions of a given
+    This function approximates multiple state energies and wavefunctions of a given
     molecule from an eigenvector continuation with t-RDMS and the overlap matrix S.
 
     Args:
@@ -147,7 +147,7 @@ def approximate_excited_states_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian
     h1, h2 = get_integrals(mol, get_basis(mol))
 
     # Approximate the ground state energy and wavefunction in projected subspace
-    en, vec = approximate_excited_states(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
+    en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
 
     # Calculate the total energy by adding the nuclear repulsion energy
     total_energy = en.real + mol.energy_nuc()
