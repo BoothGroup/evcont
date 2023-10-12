@@ -2,7 +2,10 @@ import numpy as np
 
 from pyscf import scf, ao2mo, grad
 
-from evcont.ab_initio_eigenvector_continuation import approximate_ground_state
+from evcont.ab_initio_eigenvector_continuation import (
+    approximate_ground_state,
+    approximate_multistate
+)
 
 from evcont.electron_integral_utils import get_loewdin_trafo
 
@@ -329,6 +332,50 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
 
     en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
+
+    one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec, one_RDM, vec, optimize="optimal")
+    two_rdm_predicted = np.einsum(
+        "i,ijklmn,j->klmn", vec, two_RDM, vec, optimize="optimal"
+    )
+
+    grad_elec = get_grad_elec_OAO(
+        mol, one_rdm_predicted, two_rdm_predicted, ao_mo_trafo=ao_mo_trafo
+    )
+
+    return (
+        en.real + mol.energy_nuc(),
+        grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+    )
+
+def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
+    """
+    Calculates the potential energy and its gradient w.r.t. nuclear positions of a
+    molecule from the eigenvector continuation.
+
+    Args:
+        mol : pyscf.gto.Mole
+            The molecule object.
+        one_RDM : numpy.ndarray
+            The one-electron t-RDM.
+        two_RDM : numpy.ndarray
+            The two-electron t-RDM.
+        S : numpy.ndarray
+            The overlap matrix.
+        hermitian (bool, optional):
+            Whether problem is solved with eigh or with eig. Defaults to True.
+
+    Returns:
+        tuple
+            A tuple containing the total potential energy and its gradient.
+    """
+    # Construct h1 and h2
+    ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+
+    h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
+    h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
+
+    #en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
+    en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
 
     one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec, one_RDM, vec, optimize="optimal")
     two_rdm_predicted = np.einsum(
