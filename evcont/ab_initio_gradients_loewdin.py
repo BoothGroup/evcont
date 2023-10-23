@@ -650,7 +650,8 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
 
     en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
     
-    # Note: Get the gradient of one and two-electron integrals 
+    # Get the gradient of one and two-electron integrals before contracting onto
+    # rdms of different states
     h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
     
     grad_elec_all = []
@@ -703,7 +704,8 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
 
     en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
 
-    # Note: Get the gradient of one and two-electron integrals 
+    # Get the gradient of one and two-electron integrals before contracting onto
+    # rdms and trmds of different states
     h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
     
     grad_elec_all = []
@@ -766,15 +768,15 @@ if __name__ == '__main__':
     
     #CASE = 'NAC'
     CASE = 'Exc-Grad'
+    #CASE = 'Time'
     
-    nstate = 3 #1st excited state
-    nroots_evcont = 4
+    nstate = 2 #1st excited state
+    nroots_evcont = 3
     cibasis = 'canonical'
     
-    natom = 6
+    natom = 4
     
     test_range = np.linspace(0.8, 3.0,20)
-    
 
     def get_mol(positions):
         mol = gto.Mole()
@@ -902,6 +904,8 @@ if __name__ == '__main__':
         mol = get_mol(positions)
         continuation_object.append_to_rdms(mol)
     
+    print('Finished training')
+    
     if CASE == 'Exc-Grad':
         
         st = time()
@@ -912,7 +916,7 @@ if __name__ == '__main__':
             
             # Predictions from mutistate continuation
             """
-            en_continuation_ms_old, grad_continuation_ms_old = get_multistate_energy_with_grad(
+            en_continuation_ms, grad_continuation_ms = get_multistate_energy_with_grad(
                 mol,
                 continuation_object.one_rdm,
                 continuation_object.two_rdm,
@@ -927,8 +931,21 @@ if __name__ == '__main__':
                 continuation_object.overlap,
                 nroots=nstate+1
             )
+            
+            en_continuation_ms_old, grad_continuation_ms_old, nac_continuation_old = get_multistate_energy_with_grad_and_NAC_old(
+                mol,
+                continuation_object.one_rdm,
+                continuation_object.two_rdm,
+                continuation_object.overlap,
+                nroots=nstate+1
+            )
             #"""
-    
+            
+            assert np.allclose(en_continuation_ms,en_continuation_ms_old)
+            assert np.allclose(grad_continuation_ms,grad_continuation_ms_old)
+            for key in nac_continuation.keys():
+                assert np.allclose(nac_continuation[key],nac_continuation_old[key])
+            
             # Predictions from Hartree-Fock
             hf_energy, hf_grad = mol.RHF().nuc_grad_method().as_scanner()(mol)
     
@@ -936,9 +953,15 @@ if __name__ == '__main__':
             #en_exact, grad_exact = CASCI(mol.RHF(), natom, natom).nuc_grad_method().as_scanner()(mol)
             
             # Fci excited state reference values
-            mc = CASCI(mol.RHF(), natom, natom)
+            mc = CASCI(mol.RHF(), natom,natom)
+            #mc = CASCI(mol.RHF(), 10,6) Li2
             mc.fcisolver = fci.direct_spin0.FCI()
             mc.fcisolver.nroots = nstate+1
+            #mc.fcisolver.nroots = 6
+            #mc.fcisolver.conv_tol = 1.e-14
+            #mc.fcisolver.max_space=30
+            #mc.fcisolver.max_cycle=250
+            
             ci_scan_exc = mc.nuc_grad_method().as_scanner(state=nstate)
             ci_scan_0 = mc.nuc_grad_method().as_scanner(state=0)
             
@@ -959,6 +982,69 @@ if __name__ == '__main__':
             assert np.allclose(grad_exc_exact,grad_continuation_ms[nstate],atol=1e-6)
             
         print(f'Time taken: {time()-st:.1f} sec')
+        
+    if CASE == 'Time':
+        
+        n = 200
+        test_range = np.linspace(0.8, 3.0,n)
+
+        st = time()
+        for i, test_dist in enumerate(test_range):
+            positions = [(x, 0.0, 0.0) for x in test_dist * np.arange(natom)]
+            mol = get_mol(positions)
+            h1, h2 = get_integrals(mol, get_basis(mol))
+            """
+            # Continuation
+            en_continuation_ms, _, nac_continuation = get_multistate_energy_with_grad_and_NAC(
+                mol,
+                continuation_object.one_rdm,
+                continuation_object.two_rdm,
+                continuation_object.overlap,
+                nroots=nstate+1
+            )
+            """
+            # Continuation
+            en_continuation_ms, _ = get_multistate_energy_with_grad(
+                mol,
+                continuation_object.one_rdm,
+                continuation_object.two_rdm,
+                continuation_object.overlap,
+                nroots=nstate+1
+            )
+            #"""
+        tt = time()-st
+        print(f'Total time taken (new): {tt:.1f} sec')
+        print(f'Time per gradient (new): {tt/n/(nstate+1):.5f} sec')
+        
+        
+        st = time()
+        for i, test_dist in enumerate(test_range):
+            positions = [(x, 0.0, 0.0) for x in test_dist * np.arange(natom)]
+            mol = get_mol(positions)
+            h1, h2 = get_integrals(mol, get_basis(mol))
+            """
+            # Continuation
+            en_continuation_ms, _, nac_continuation = get_multistate_energy_with_grad_and_NAC_old(
+                mol,
+                continuation_object.one_rdm,
+                continuation_object.two_rdm,
+                continuation_object.overlap,
+                nroots=nstate+1
+            )
+            """
+            # Continuation
+            en_continuation_ms, _ = get_multistate_energy_with_grad_old(
+                mol,
+                continuation_object.one_rdm,
+                continuation_object.two_rdm,
+                continuation_object.overlap,
+                nroots=nstate+1
+            )
+            #"""
+        tt = time()-st
+        print(f'Total time taken (old): {tt:.1f} sec')
+        print(f'Time per gradient (old): {tt/n/(nstate+1):.5f} sec')
+
             
         
     # Test NACs
@@ -1046,7 +1132,7 @@ if __name__ == '__main__':
         axes[1][0].set_ylabel(r'$||\mathbf{d}_{ij}||$ (a$_0$$^{-1}$)',fontsize=labelsize)
         axes[0][0].set_ylabel(r'Energy (Hartree)',fontsize=labelsize)
         
-        axes[1][0].set_ylim(ymin=0,ymax=min(10,axes[1][0].get_ylim()[1]))
+        axes[1][0].set_ylim(ymin=-0.2, ymax=min(10,axes[1][0].get_ylim()[1]))
         
         plt.show()
     
