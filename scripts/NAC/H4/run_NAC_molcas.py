@@ -25,7 +25,7 @@ inp_f_text = \
 H  xxx  0.000000  0.000000\nH  yyy  0.000000  0.000000\n\
 H  zzz  0.000000  0.000000\nBasis=sto-3g\nGroup=Nosymm\n\
 &SEWARD\n&RASSCF\nnactel = 4 0 0 \ninactive = 0 \nras2 = 4\nciroot =%i %i 1\n\
-&ALASKA\n NAC = 1 2\n\n'%(nroots, nroots)
+&ALASKA\n NAC = 1 2\n\n'%(nroots+1, nroots+1)
     
 fname = 'H4.input'
 
@@ -63,11 +63,23 @@ def read_nac_molcas(outf):
                     
     #print(all_NAC)
     return [np.array(i) for i in all_NAC]
+
+def read_en_molcas(outf):
+    
+    en = []
+    with open(outf) as f:
+        for line in f.readlines():
+            
+            if '::' in line:
+                en += [float(line.split()[-1])]
+                
+    return en
 ###########################################################################
 test_NACs = {}
+test_energies = []
 for i, dist_i in enumerate(test_range):
     print(i)
-    
+    save_en = True
     # Save the current directory
     cwd = os.getcwd()
     
@@ -99,8 +111,15 @@ for i, dist_i in enumerate(test_range):
             
             #os.system('sleep 2')
             
+            # Read NACs
             allNAC = read_nac_molcas('out')
             nac_i['%i%i'%(i,j)] = allNAC
+            
+            # Read energies
+            if save_en:
+                en_i = read_en_molcas('out')
+                test_energies.append(en_i)
+                save_en = False # Same for different NACs
             
             os.chdir(cwd_mid)
             
@@ -114,6 +133,9 @@ for i, dist_i in enumerate(test_range):
 with open('test_NACs.pkl','wb') as f:
     pickle.dump(test_NACs,f)
             
+# Write energies
+with open('test_en.npy', 'wb') as f:
+    np.save(f, np.array(test_energies))
             
             
         

@@ -390,6 +390,47 @@ def get_grad_elec_from_gradH(one_rdm, two_rdm, h1_jac, h2_jac):
     
     return grad_elec
 
+
+def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None):
+    """ 
+    For orbital contribution to nonadiabatic coupling vectors;
+    < Phi_a | d/dR Phi_b> where Phi are MOs, SAO in our case
+    
+    Includes two terms:
+        - With derivative of SAO transformation: \sum_{ik}
+    """
+    if ao_mo_trafo is None:
+        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+
+    if ao_mo_trafo_grad is None:
+        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+    
+    # Contraction of the SAO transformation derivative
+    # \sum_{ik} dC_{ij}/dR * C_{kl} * s_{ik}
+    ovlp = mol.intor("int1e_ovlp")
+    trafo_deriv_contraction = np.einsum("ijAx,ik,kl->jlAx",ao_mo_trafo_grad, ovlp, ao_mo_trafo,optimize="optimal")
+    #trafo_deriv_contraction += np.swapaxes(trafo_deriv_contraction, 0, 1)
+    #trafo_deriv_contraction = 0
+
+    # Orbital derivative contraction
+    # \sum_{ik} C_{ij} * C_{kl} * < bas_i | d bas_j/dR >
+    atm_slices = tuple(
+                [
+                    (mol.aoslice_by_atom()[i][2], mol.aoslice_by_atom()[i][3])
+                    for i in range(mol.natm)
+                ]
+            )
+    
+    deriv_ov = np.zeros((len(atm_slices),3,mol.nao,mol.nao))
+    for i, slice in enumerate(atm_slices):
+        deriv_ov[i,:, slice[0] : slice[1], :] -= mol.intor("int1e_ipovlp")[:, slice[0] : slice[1], :]
+        
+    orb_deriv_contraction = np.einsum("ij,Axik,kl->jlAx",ao_mo_trafo, deriv_ov, ao_mo_trafo,optimize="optimal")
+    #orb_deriv_contraction += np.swapaxes(orb_deriv_contraction, 0, 1)
+    #orb_deriv_contraction = 0
+   
+    return trafo_deriv_contraction +  orb_deriv_contraction
+
 def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
     """
     Calculates the potential energy and its gradient w.r.t. nuclear positions of a
@@ -404,12 +445,14 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
             The two-electron t-RDM.
         S : numpy.ndarray
             The overlap matrix.
+        nroots (optional): int
+            Number of states in the solver.
         hermitian (bool, optional):
             Whether problem is solved with eigh or with eig. Defaults to True.
 
     Returns:
         tuple
-            A tuple containing the total potential energy and its gradient.
+            A tuple containing the total potential energies and its gradients.
     """
     # Construct h1 and h2
     ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
@@ -446,8 +489,9 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
 
 def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
     """
-    Calculates the potential energy and its gradient w.r.t. nuclear positions of a
-    molecule from the eigenvector continuation.
+    Calculates the potential energiesm its gradient w.r.t. nuclear positions of a
+    molecule and nonadiabatic couplings from eigenvector continuation for both
+    ground and excited states.
 
     Args:
         mol : pyscf.gto.Mole
@@ -458,45 +502,66 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
             The two-electron t-RDM.
         S : numpy.ndarray
             The overlap matrix.
-        hermitian (bool, optional):
+        nroots (optional): int
+            Number of states in the solver.
+        hermitian (optional): bool
             Whether problem is solved with eigh or with eig. Defaults to True.
 
     Returns:
-        tuple
-            A tuple containing the total potential energy and its gradient.
+        tuple (en, grad_all, nac_all, nac_all_hfonly)
+            A tuple containing the total potential energies, its gradients and NACs:
+            
+            en: ndarray(nroot,)
+                Total potential energies for both ground and excited states
+                
+            grad_all: list of ndarray(nat,3)
+                Gradients of multistate energies
+                
+            nac_all: dictionary of np.darray(nat,3)
+                Nonadiabatic coupling vectors between all states,
+                e.g. nac_all['02'] is NAC along ground state and 2nd excited state
+                
+            nac_all_hfonly: dictionary of ndarray(nat,3)
+                Hellman-Feynmann contribution to NACs
     """
+                
     # Construct h1 and h2
     ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
 
     h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
 
+    # Diagonalization of the subspace Hamiltonian for the continuation of
+    # energies and eigenstates
     en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
 
     # Get the gradient of one and two-electron integrals before contracting onto
     # rdms and trmds of different states
     h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
     
-    grad_elec_all = []
-    for i_state in range(nroots):
-        vec_i = vec[i_state,:]
-
-
+    # Get the orbital derivative coupling for NACs
+    orb_deriv = get_orbital_derivative_coupling(mol,ao_mo_trafo=ao_mo_trafo)
+    
+    # Nuclear part of the gradient
     grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
         
     grad_elec_all = []
     nac_all = {}
+    nac_all_hfonly = {}
+    # Iterate over pairs of eigenstates
     for i_state in range(nroots):
         vec_i = vec[i_state,:]
 
         for j_state in range(nroots):
             vec_j = vec[j_state,:]
             
+            # Contracting to subspace eigenstate in hand
             one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec_i, one_RDM, vec_j, optimize="optimal")
             two_rdm_predicted = np.einsum(
                 "i,ijklmn,j->klmn", vec_i, two_RDM, vec_j, optimize="optimal"
             )
-        
+            
+            # d\dR of subspace Hamiltonian
             grad_elec = get_grad_elec_from_gradH(
                 one_rdm_predicted, two_rdm_predicted, h1_jac, h2_jac
             )
@@ -507,16 +572,25 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
                 
             # Nonadiabatic couplings
             else:
-                nac_ij = grad_elec/(en[j_state]-en[i_state])
+                #np.einsum("ij,ijkl->kl", one_rdm, h1_jac, optimize="optimal")
+                #np.fill_diagonal(one_rdm_predicted, 0.)
+                nac_orb = np.einsum("ij,ijkl->kl",one_rdm_predicted, orb_deriv, optimize="optimal")
+                #nac_orb = np.einsum("ij,ijkl->kl",one_rdm_predicted, 
+                #                    orb_deriv-np.swapaxes(orb_deriv, 0, 1), optimize="optimal")
+                #print(np.linalg.norm(nac_orb))
+                nac_hf = grad_elec/(en[j_state]-en[i_state])
+                nac_ij = nac_hf + nac_orb
                 nac_all[str(i_state)+str(j_state)] = nac_ij
+                nac_all_hfonly[str(i_state)+str(j_state)] = nac_hf
 
-    
+    # Add the nuclear contribution to gradient
     grad_all = np.array(grad_elec_all) + grad_nuc
 
     return (
         en.real + mol.energy_nuc(),
         grad_all,
-        nac_all
+        nac_all,
+        nac_all_hfonly
     )
 
 if __name__ == '__main__':
@@ -532,11 +606,11 @@ if __name__ == '__main__':
     
     from pyscf.fci.addons import overlap
     
-    
     from time import time
     
     #CASE = 'NAC'
     CASE = 'Exc-Grad'
+    CASE = 'Grad'
     
     nstate = 2 #1st excited state
     nroots_evcont = 3
@@ -681,6 +755,46 @@ if __name__ == '__main__':
     
     print('Finished training')
     
+    if CASE == 'Grad':
+        
+        st = time()
+        # Test the ground and excite state forces and gradients at training points
+        for i, dist in enumerate(trainig_dists):
+            positions = [(x, 0.0, 0.0) for x in dist * np.arange(natom)]
+            mol = get_mol(positions)
+            
+            # Predictions from mutistate continuation
+            en_continuation_ms, grad_continuation_ms = get_energy_with_grad(
+                mol,
+                continuation_object.one_rdm,
+                continuation_object.two_rdm,
+                continuation_object.overlap
+            )
+            
+            # Predictions from Hartree-Fock
+            hf_energy, hf_grad = mol.RHF().nuc_grad_method().as_scanner()(mol)
+    
+            # Fci reference values
+            #en_exact, grad_exact = CASCI(mol.RHF(), natom, natom).nuc_grad_method().as_scanner()(mol)
+            
+            # Fci excited state reference values
+            mc = CASCI(mol.RHF(), natom,natom)
+            #mc = CASCI(mol.RHF(), 10,6) Li2
+            mc.fcisolver = fci.direct_spin0.FCI()
+            
+            ci_scan_0 = mc.nuc_grad_method().as_scanner()
+            
+            en_exact, grad_exact = ci_scan_0(mol)
+            
+            # Checks
+            print(i)
+            
+            assert np.allclose(en_exact,en_continuation_ms)
+            assert np.allclose(grad_exact,grad_continuation_ms)
+            
+        print(f'Time taken: {time()-st:.1f} sec')
+        
+
     if CASE == 'Exc-Grad':
         
         st = time()
