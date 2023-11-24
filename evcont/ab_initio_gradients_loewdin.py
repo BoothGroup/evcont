@@ -132,6 +132,11 @@ def get_derivative_ao_mo_trafo(mol):
 
     return trafo_grad
 
+def fix_gauge(vec):
+    """
+    Make so that the first element is always positive
+    """
+    return np.einsum("i,ij->ij",np.sign(vec)[:,0], vec)
 
 def get_one_el_grad_ao(mol):
     """
@@ -538,7 +543,8 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
     # Diagonalization of the subspace Hamiltonian for the continuation of
     # energies and eigenstates
     en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
-    
+    vec = fix_gauge(vec)
+
     # Get the gradient of one and two-electron integrals before contracting onto
     # rdms and trmds of different states
     h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
