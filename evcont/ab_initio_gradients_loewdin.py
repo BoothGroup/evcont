@@ -136,8 +136,10 @@ def fix_gauge(vec):
     """
     Make so that the first element is always positive
     """
-    return np.einsum("i,ij->ij",np.sign(vec)[:,0], vec)
-
+    for vec_i in vec:
+        idx = np.unravel_index(np.argmax(np.abs(vec_i.real)),vec_i.shape)
+        vec_i *= -np.sign(vec_i[idx])
+            
 def get_one_el_grad_ao(mol):
     """
     Calculate the one-electron integral derivatives in the AO basis.
@@ -409,7 +411,7 @@ def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None)
             Gradient of AO to MO transformation matrix. Is computed if not provided.
 
     Returns:
-        tuple of np.ndarray:
+        tuple of np.ndarray (nbasis, nbasis, nat,3):
             Orbital derivative coupling (to be contracted with 1-trdm).
     """
     if ao_mo_trafo is None:
@@ -543,7 +545,7 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
     # Diagonalization of the subspace Hamiltonian for the continuation of
     # energies and eigenstates
     en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
-    vec = fix_gauge(vec)
+    fix_gauge(vec)
 
     # Get the gradient of one and two-electron integrals before contracting onto
     # rdms and trmds of different states
@@ -620,9 +622,9 @@ if __name__ == '__main__':
     
     from time import time
     
-    #CASE = 'NAC'
-    CASE = 'Exc-Grad'
-    CASE = 'Grad'
+    CASE = 'NAC'
+    #CASE = 'Exc-Grad'
+    #CASE = 'Grad'
     
     nstate = 2 #1st excited state
     nroots_evcont = 3
