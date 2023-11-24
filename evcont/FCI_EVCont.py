@@ -74,7 +74,7 @@ class FCI_EVCont_obj:
         if nroots_train == 1:
             e_all = [e_all]
             fcivec_all = [fcivec_all]
-            
+
         # Transform to OAO basis
         if self.cibasis != 'OAO':
             S = mol.intor("int1e_ovlp")
@@ -84,6 +84,12 @@ class FCI_EVCont_obj:
             
             fcivec_all = [transform_ci(fcivec_i,mol.nelec,u) for fcivec_i in fcivec_all]
 
+        # Fix gauge
+        for fcivec_i in fcivec_all:
+            # Set maximum element to be positive
+            idx = np.unravel_index(np.argmax(np.abs(fcivec_i.real)),fcivec_i.shape)
+            fcivec_i *= np.sign(fcivec_i[idx])
+            
         # Setting molecular index
         if len(self.mol_index) == 0:
             mindex = 0
@@ -121,10 +127,15 @@ class FCI_EVCont_obj:
                     rdm1, rdm2 = self.cisolver.trans_rdm12(
                         self.fcivecs[-1], self.fcivecs[i], mol.nao, mol.nelec
                     )
+                    rdm1_conj, rdm2_conj = self.cisolver.trans_rdm12(
+                        self.fcivecs[i], self.fcivecs[-1], mol.nao, mol.nelec
+                    )
                     one_rdm_new[-1, i, :, :] = rdm1
-                    one_rdm_new[i, -1, :, :] = rdm1.conj()
+                    one_rdm_new[i, -1, :, :] = rdm1_conj
+                    #one_rdm_new[i, -1, :, :] = rdm1.conj()
                     two_rdm_new[-1, i, :, :, :, :] = rdm2
-                    two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                    two_rdm_new[i, -1, :, :, :, :] = rdm2_conj
+                    #two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
         
                 self.overlap = overlap_new
                 self.one_rdm = one_rdm_new
