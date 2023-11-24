@@ -394,10 +394,18 @@ def get_grad_elec_from_gradH(one_rdm, two_rdm, h1_jac, h2_jac):
 def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None):
     """ 
     For orbital contribution to nonadiabatic coupling vectors;
-    < Phi_a | d/dR Phi_b> where Phi are MOs, SAO in our case
+    < Phi_a | d/dR Phi_b> where Phi are MOs
     
-    Includes two terms:
-        - With derivative of SAO transformation: \sum_{ik}
+    Args:
+        mol (object): Molecule object.
+        ao_mo_trafo (ndarray, optional):
+            AO to MO transformation matrix. Is computed if not provided.
+        ao_mo_trafo_grad (ndarray, optional):
+            Gradient of AO to MO transformation matrix. Is computed if not provided.
+
+    Returns:
+        tuple of np.ndarray:
+            Orbital derivative coupling (to be contracted with 1-trdm).
     """
     if ao_mo_trafo is None:
         ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
@@ -409,8 +417,6 @@ def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None)
     # \sum_{ik} dC_{ij}/dR * C_{kl} * s_{ik}
     ovlp = mol.intor("int1e_ovlp")
     trafo_deriv_contraction = np.einsum("ijAx,ik,kl->jlAx",ao_mo_trafo_grad, ovlp, ao_mo_trafo,optimize="optimal")
-    #trafo_deriv_contraction += np.swapaxes(trafo_deriv_contraction, 0, 1)
-    #trafo_deriv_contraction = 0
 
     # Orbital derivative contraction
     # \sum_{ik} C_{ij} * C_{kl} * < bas_i | d bas_j/dR >
@@ -426,8 +432,6 @@ def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None)
         deriv_ov[i,:, slice[0] : slice[1], :] -= mol.intor("int1e_ipovlp")[:, slice[0] : slice[1], :]
         
     orb_deriv_contraction = np.einsum("ij,Axik,kl->jlAx",ao_mo_trafo, deriv_ov, ao_mo_trafo,optimize="optimal")
-    #orb_deriv_contraction += np.swapaxes(orb_deriv_contraction, 0, 1)
-    #orb_deriv_contraction = 0
    
     return trafo_deriv_contraction +  orb_deriv_contraction
 
@@ -474,7 +478,7 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
         two_rdm_predicted = np.einsum(
             "i,ijklmn,j->klmn", vec_i, two_RDM, vec_i, optimize="optimal"
         )
-        
+
         grad_elec = get_grad_elec_from_gradH(
             one_rdm_predicted, two_rdm_predicted, h1_jac, h2_jac
         )
@@ -534,7 +538,7 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
     # Diagonalization of the subspace Hamiltonian for the continuation of
     # energies and eigenstates
     en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
-
+    
     # Get the gradient of one and two-electron integrals before contracting onto
     # rdms and trmds of different states
     h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
@@ -572,14 +576,16 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
                 
             # Nonadiabatic couplings
             else:
-                #np.einsum("ij,ijkl->kl", one_rdm, h1_jac, optimize="optimal")
-                #np.fill_diagonal(one_rdm_predicted, 0.)
-                nac_orb = np.einsum("ij,ijkl->kl",one_rdm_predicted, orb_deriv, optimize="optimal")
-                #nac_orb = np.einsum("ij,ijkl->kl",one_rdm_predicted, 
-                #                    orb_deriv-np.swapaxes(orb_deriv, 0, 1), optimize="optimal")
-                #print(np.linalg.norm(nac_orb))
+                # Hellman-Feynman contribution to NAC
                 nac_hf = grad_elec/(en[j_state]-en[i_state])
+
+                # Orbital contribution to NAC
+                nac_orb = np.einsum("ij,ijkl->kl",one_rdm_predicted, orb_deriv, optimize="optimal")
+
+                # Total NAC
                 nac_ij = nac_hf + nac_orb
+                
+                # Save to dictionaries
                 nac_all[str(i_state)+str(j_state)] = nac_ij
                 nac_all_hfonly[str(i_state)+str(j_state)] = nac_hf
 
@@ -882,7 +888,7 @@ if __name__ == '__main__':
             fci_nac += [nac_all]
             
             # Continuation
-            en_continuation_ms, _, nac_continuation = get_multistate_energy_with_grad_and_NAC(
+            en_continuation_ms, _, nac_continuation, _ = get_multistate_energy_with_grad_and_NAC(
                 mol,
                 continuation_object.one_rdm,
                 continuation_object.two_rdm,
