@@ -613,17 +613,13 @@ if __name__ == '__main__':
     from pyscf import gto, fci
 
     from evcont.FCI_EVCont import FCI_EVCont_obj
-
-    from evcont.electron_integral_utils import get_basis, get_integrals
     
     from pyscf.mcscf import CASCI
-    
-    from pyscf.fci.addons import overlap
-    
+        
     from time import time
     
-    CASE = 'NAC'
-    #CASE = 'Exc-Grad'
+    #CASE = 'NAC'
+    CASE = 'Exc-Grad'
     #CASE = 'Grad'
     
     nstate = 2 #1st excited state
@@ -646,106 +642,8 @@ if __name__ == '__main__':
         )
 
         return mol
-    
-    def set_fd_overlap(mf, mol, coord, ptr, indices, mol0, basis_0, diff):
-        ni, i = indices
-        mol._env[ptr+i] = coord[ni,i] + diff
-        
-        basis_i = get_basis(mol,cibasis)
-        h1, h2 = get_integrals(mol, basis_i)
-        _, fcivec_i = mf.fcisolver.kernel(h1, h2, mol.nao, mol.nelec, tol=1.e-14, max_space=30, nroots=6, max_cycle=250)
-        
-        # Single particle basis overlap
-        s12 = gto.intor_cross('cint1e_ovlp_sph', mol0, mol)
-        s12_pos = np.einsum('ji,jk,kl->il',basis_0,s12,basis_i)
-        
-        return fcivec_i, s12_pos
-        
-                
-    def nac_fd_FCI(mf,mol=None,nroots=None,dx=1e-7,cibasis='OAO'):
-        """ 
-        Compute the nonadiabatic coupling from the central finite difference
-        ( \braket{\psi_a(x)|psi_b(x+dx)} - \braket{\psi_a(x)|psi_b(x-dx)} ) / (2*dx)
-        for dx along each atomic and Cartesian coordinate
-        
-        Args:
-            mf: pyscf.mcscf.CASCI
-                The CASCI solver.
-            mol (optional): pyscf.gto.Mole
-                The molecule object.
-            nroots (optional): int
-                Number of states in the solver.
-            dx (optional): float
-                Grid spacing in the finite difference solution
-            cibasis (optional): str
-                Single particle basis to use in the FCI solution
-        
-        Returns:
-            nac_all: dictionary of np.darray(nat,3)
-                Nonadiabatic coupling vectors between all states,
-                e.g. nac_all['02'] is NAC along ground state and 2nd excited state
-                
-                Note: nac_all['ii'] is technically not well-defined but still 
-                      computed for testing purposes
-        
-        """
-        # Variables
-        if mol == None:
-            mol = mf.mol
-        if nroots == None:
-            nroots = mf.fcisolver.nroots
-                
-        mverbose = mol.verbose
-        mol.verbose = 0
-        coord = mol.atom_coords()
-        
-        # At given molecular coordinates
-        basis_0 = get_basis(mol,cibasis)
-        h1, h2 = get_integrals(mol, basis_0)
-        _, fcivec_0 = mf.fcisolver.kernel(h1, h2, mol.nao, mol.nelec, tol=1.e-14, max_space=30,  nroots=6, max_cycle=250)
-        
-        mol0 = mol.copy()
-        
-        # Initialize nac
-        nac_all = {}
-        for i in range(nroots):
-            for j in range(nroots):
-                nac_all[str(i)+str(j)]=np.zeros([mol.natm,3])
-                
-        for ni in range(mol.natm):
-            ptr = mol._atm[ni,gto.PTR_COORD]
-            for i in range(3):
-                # Positive
-                fcivec_dx, s12_dx = set_fd_overlap(mf, mol, coord, ptr, (ni,i), mol0, basis_0, dx)
-                fcivec_2dx, s12_2dx = set_fd_overlap(mf, mol, coord, ptr, (ni,i), mol0, basis_0, 2*dx)
-                fcivec_3dx, s12_3dx = set_fd_overlap(mf, mol, coord, ptr, (ni,i), mol0, basis_0, 3*dx)
-                
-                # Negative
-                fcivec_negdx, s12_negdx = set_fd_overlap(mf, mol, coord, ptr, (ni,i), mol0, basis_0, -dx)
-                fcivec_neg2dx, s12_neg2dx = set_fd_overlap(mf, mol, coord, ptr, (ni,i), mol0, basis_0, -2*dx)
-                fcivec_neg3dx, s12_neg3dx = set_fd_overlap(mf, mol, coord, ptr, (ni,i), mol0, basis_0, -3*dx)
-                
-                # Iterate over different states
-                for istate in range(nroots):
-                    for jstate in range(nroots):
-                        # Overlaps
-                        ovdx = overlap(fcivec_0[istate],fcivec_dx[jstate],mol0.nao,mol0.nelec,s12_dx)
-                        ovnegdx = overlap(fcivec_0[istate],fcivec_negdx[jstate],mol0.nao,mol0.nelec,s12_negdx)
-                        ov2dx = overlap(fcivec_0[istate],fcivec_2dx[jstate],mol0.nao,mol0.nelec,s12_2dx)
-                        ovneg2dx = overlap(fcivec_0[istate],fcivec_neg2dx[jstate],mol0.nao,mol0.nelec,s12_neg2dx)
-                        ov3dx = overlap(fcivec_0[istate],fcivec_3dx[jstate],mol0.nao,mol0.nelec,s12_3dx)
-                        ovneg3dx = overlap(fcivec_0[istate],fcivec_neg3dx[jstate],mol0.nao,mol0.nelec,s12_neg3dx)
-                        
-                        # Central difference - 6th order
-                        nac_all[str(istate)+str(jstate)][ni,i] = (-ov3dx +9*ov2dx -45*ovdx +45*ovnegdx -9*ovneg2dx +ovneg3dx)/(60*dx)
-                
-                # Return to original coordinates for next iterations
-                mol._env[ptr+i] = coord[ni,i]
-            
-        mol.verbose = mverbose
-        
-        return nac_all
-    
+
+       
     # training geometries
     equilibrium_dist = 1.78596
 
@@ -818,7 +716,7 @@ if __name__ == '__main__':
             mol = get_mol(positions)
             
             # Predictions from mutistate continuation
-            en_continuation_ms, grad_continuation_ms, nac_continuation = get_multistate_energy_with_grad_and_NAC(
+            en_continuation_ms, grad_continuation_ms, nac_continuation, _ = get_multistate_energy_with_grad_and_NAC(
                 mol,
                 continuation_object.one_rdm,
                 continuation_object.two_rdm,
@@ -866,90 +764,5 @@ if __name__ == '__main__':
     # Test NACs
     if CASE == 'NAC':
         
-        fci_en = np.zeros([len(test_range),nstate+1])
-        fci_nac = []
-        cont_en = np.zeros([len(test_range),nstate+1])
-        cont_nac = []
-        
-        for i, test_dist in enumerate(test_range):
-            print(i)
-            positions = [(x, 0.0, 0.0) for x in test_dist * np.arange(natom)]
-            mol = get_mol(positions)
-            h1, h2 = get_integrals(mol, get_basis(mol))
-            
-            mc = CASCI(mol.RHF(), natom, natom)
-            mc.fcisolver = fci.direct_spin0.FCI()
-            mc.fcisolver.nroots = nstate+1
-            #ci_scan_exc = mc.nuc_grad_method().as_scanner(state=nstate)
-            #ci_scan_0 = mc.nuc_grad_method().as_scanner(state=0)
-            
-            #en_exc_exact, grad_exc_exact = ci_scan_exc(mol)
-            #en_exact, grad_exact = ci_scan_0(mol)
-            en_exact, fcivec_pos = mc.fcisolver.kernel(h1, h2, mol.nao, mol.nelec)
-
-            en_exact += mol.energy_nuc()
-            
-            # Get the reference numerical FCI NACs 
-            nac_all = nac_fd_FCI(mc,nroots=nstate+1,cibasis=cibasis)
-            
-            fci_en[i,:] = en_exact
-            fci_nac += [nac_all]
-            
-            # Continuation
-            en_continuation_ms, _, nac_continuation, _ = get_multistate_energy_with_grad_and_NAC(
-                mol,
-                continuation_object.one_rdm,
-                continuation_object.two_rdm,
-                continuation_object.overlap,
-                nroots=nstate+1
-            )
-            
-            cont_en[i,:] = en_continuation_ms
-            cont_nac += [nac_continuation]
-            
-        #######################################################################
-        # Plot NAC comparison
-        import matplotlib.pylab as plt
-        
-        fci_absh = {}
-        cont_absh = {}
-        for istate in range(nstate+1):
-            for jstate in range(nstate+1):
-                if istate != jstate:
-    
-                    st_label = str(istate)+str(jstate)
-                    fci_absh[st_label] = [np.abs(fci_nac[i][st_label]).sum() for i in range(len(test_range))]
-                    cont_absh[st_label] = [np.abs(cont_nac[i][st_label]).sum() for i in range(len(test_range))]
-            
-        # Colors
-        clr_st = {'01':'b', '10':'b',
-                  '02':'r','20':'r',
-                  '03':'pink','30':'pink',
-                  '13':'y','31':'y',
-                  '23':'violet','32':'violet',
-                  '12':'g','21':'g'}
-        
-        labelsize = 15
-        # Plot
-        fig, axes = plt.subplots(nrows=2,ncols=2,sharex=True,sharey='row',
-                                 figsize=[10,10],gridspec_kw={'hspace':0.,'wspace':0},
-                                 height_ratios=[1,1])
-        
-        axes[0][0].plot(test_range,fci_en,'k',alpha=0.8)
-        axes[0][1].plot(test_range,cont_en,'k',alpha=0.8)
-        
-        for key, el in fci_absh.items():
-            axes[1][0].plot(test_range,fci_absh[key],label=key,c=clr_st[key])
-            axes[1][1].plot(test_range,cont_absh[key],label=key,c=clr_st[key])
-    
-        axes[1][0].legend(loc='upper right')
-        
-        axes[0][0].set_title('FCI',fontsize=labelsize)
-        axes[0][1].set_title('EVcont',fontsize=labelsize)
-        axes[1][0].set_ylabel(r'$||\mathbf{d}_{ij}||$ (a$_0$$^{-1}$)',fontsize=labelsize)
-        axes[0][0].set_ylabel(r'Energy (Hartree)',fontsize=labelsize)
-        
-        axes[1][0].set_ylim(ymin=-0.2, ymax=min(10,axes[1][0].get_ylim()[1]))
-        
-        plt.show()
-    
+        # TODO: Write new tests using FCI implementation
+        pass
