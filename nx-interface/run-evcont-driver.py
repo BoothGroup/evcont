@@ -137,9 +137,12 @@ def get_phase(old,new):
 def adjust_phase(natm):
     
     # Read old and current NACs
-    oldnac = np.loadtxt('oldh')
     currentnac = np.loadtxt('nad_vectors')
-    
+    try:
+        oldnac = np.loadtxt('oldh')
+    except:
+        oldnac = currentnac
+        
     # Compute the overlap and adjust the phase
     n_nac = int(oldnac.shape[0]/natm)
     
