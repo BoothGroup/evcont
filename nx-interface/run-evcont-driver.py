@@ -22,7 +22,7 @@ import sys
 
 ############################
 # INPUTS (migth be converted to an input file later on)
-BASIS = "sto-6g"
+BASIS = "sto-3g"
 use_pyscf = True
 
 # FCI related if use_pyscf
@@ -122,8 +122,39 @@ def read_model(path):
     
     return overlap, one_rdm, two_rdm
 
+def get_phase(old,new):
+    
+    #norm_old = np.linalg.norm(old)
+    #norm_new = np.linalg.norm(new)
 
-def evcont_feed_nx(mode):
+    cosq = np.einsum("ij,ij",old, new)
+        
+    if cosq >= 0:
+        return 1.
+    else:
+        return -1.
+    
+def adjust_phase(natm):
+    
+    # Read old and current NACs
+    oldnac = np.loadtxt('oldh')
+    currentnac = np.loadtxt('nad_vectors')
+    
+    # Compute the overlap and adjust the phase
+    n_nac = int(oldnac.shape[0]/natm)
+    
+    adjusted_nacs = []
+    for i in range(n_nac):
+        oldi= oldnac[i*natm : (i+1)*natm, :]
+        curri = currentnac[i*natm : (i+1)*natm, :]
+        
+        phase = get_phase(oldi,curri)
+        adjusted_nacs.append(phase * curri)
+        
+    # Write the adjusted NACs
+    np.savetxt('nad_vectors',np.vstack(adjusted_nacs))
+    
+def evcont_feed_nx(mode, adjustphase=True):
     '''
     Call evcont at the geometry to extract energies, gradients and nonadiabatic 
     coupling vectors (can be extended to other properties)
@@ -184,6 +215,9 @@ def evcont_feed_nx(mode):
 
                     fnad.writelines(' %.13f  %.13f  %.13f\n' % (current[0],current[1],current[2]))
 
+    if adjustphase:
+        adjust_phase(mol.natm)
+        
 	# TODO: Transition moments, Oscillator strengths, energy gaps, etc.
 
     return 1
