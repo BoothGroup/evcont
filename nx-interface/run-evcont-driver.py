@@ -23,11 +23,15 @@ import sys
 ############################
 # INPUTS (migth be converted to an input file later on)
 BASIS = "sto-6g"
+use_pyscf = True
 
+# FCI related if use_pyscf
+fix_singlet = True
 ############################
 # Checks for evcont and pyscf
 try:
    from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC
+   from evcont.FCI_NAC import get_FCI_energy_with_grad_and_NAC
 except:
    print('evcont is not installed!')
    sys.exit()
@@ -37,11 +41,22 @@ try:
 except:
    print('pyscf is not installed!')
    sys.exit()
-
+            
+   
 # Get parameters from nx-interface
 NSTAT  	  = int(sys.argv[1])
 NSTATDYN  = int(sys.argv[2])
 
+
+# Set FCI solver if use_pyscf
+if use_pyscf:
+    from pyscf import fci
+    # Set fci solver to be used
+    FCISOLVER = fci.direct_spin0.FCI()
+    FCISOLVER.nroots = NSTAT+1
+    
+    if fix_singlet:
+        fci.addons.fix_spin_(FCISOLVER,ss=0) # Fix spin
 ############################
 
 def read_mol(basis):
@@ -122,20 +137,29 @@ def evcont_feed_nx(mode):
             1 - dynamics
                     Updates energies, gradients and NACs
     '''
-
-    # Read the intermediate state from continuation training
-    cwd = os.getcwd()
-    cont_ovlp, cont_1rdm, cont_2rdm = read_model(cwd)
     
     # Get the mol object for continuation
     mol = read_mol(BASIS)
     
-    # Get energies, gradients, NACs
-    en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
-        mol,
-        cont_1rdm, cont_2rdm, cont_ovlp,
-        nroots=NSTAT+1
-        )
+    # Get energies, gradients, NAC
+    if not use_pyscf:
+        # Read the intermediate state from continuation training
+        cwd = os.getcwd()
+        cont_ovlp, cont_1rdm, cont_2rdm = read_model(cwd)
+        
+        # From eigenvector continuation
+        en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
+            mol,
+            cont_1rdm, cont_2rdm, cont_ovlp,
+            nroots=NSTAT+1
+            )
+    else:
+        # FCI results in SAO basis
+        en_cont, grad_cont, nac_cont, _ = get_FCI_energy_with_grad_and_NAC(
+            mol,
+            FCISOLVER,
+            nroots=NSTAT+1
+            )
     
     # Write energies and gradients
     with open('epot', 'w') as fepot, open('grad.all', 'w') as fgradall, open('grad', 'w') as fgrad:
