@@ -111,8 +111,9 @@ avg_kernel = AverageKernel(metric="linear", normalize_kernel=True)
 kernel_mat = avg_kernel.create(soap_features_trn)
 soap_features_trn = np.array(soap_features_trn)
 
-# Fitting the GP, we set some rather randomly chosen small noise
+# Fit the GP with a small noise term
 noise_term = np.eye(kernel_mat.shape[0]) * 1.0e-15
+
 # We only need the weights later on so calling lstsq is enough
 weights = np.linalg.lstsq(kernel_mat + noise_term, continuation_object.ens)[0]
 
