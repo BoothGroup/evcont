@@ -9,8 +9,9 @@ from evcont.electron_integral_utils import get_basis, get_integrals
 
 
 """
-Evaluate the PES, dipole moments, and atomic Mulliken charges along the final continuation
-trajectory with DFT (B3LYP exchange correlation functional).
+Evaluates the PES, dipole moments, and atomic Mulliken charges along the final continuation
+trajectory with DFT (B3LYP exchange correlation functional). Requires the output of a
+preceding continuation run.
 """
 
 

@@ -12,10 +12,10 @@ import sys
 
 
 """
-Evaluate the PES, dipole moments, and atomic Mulliken charges predicted by the eigenvector
+Evaluates the PES, dipole moments, and atomic Mulliken charges predicted by the eigenvector
 continuation with a specified number of training points along the trajectories obtained a)
 with the restricted number of training points and b) the final continuation trajectory
-with all training points.
+with all training points. Requires the output of a preceding continuation run.
 """
 
 num_training_points = int(sys.argv[1])

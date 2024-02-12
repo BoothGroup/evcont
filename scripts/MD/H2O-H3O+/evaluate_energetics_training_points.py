@@ -8,8 +8,9 @@ from evcont.ab_initio_eigenvector_continuation import approximate_ground_state_O
 
 
 """
-Evaluate energetics for training points of Zundel cation MD simulation with DMRG,
-eigenvector continuation, HF, DFT, and CCSD.
+Evaluates energetics for training points of Zundel cation MD simulation with DMRG,
+eigenvector continuation, HF, DFT, and CCSD. Requires the output of a preceding
+continuation run.
 """
 
 
