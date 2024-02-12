@@ -79,7 +79,7 @@ mol = get_mol(init_geometry)
 init_mol = mol.copy()
 
 
-steps = 300
+steps = 1000
 dt = 5
 
 

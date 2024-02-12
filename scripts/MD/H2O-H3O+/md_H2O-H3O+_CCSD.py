@@ -6,7 +6,8 @@ import numpy as np
 
 
 """
-MD simulation with CCSD, this also calculates the predicted dipole moment.
+MD simulation with CCSD, this also calculates the predicted dipole moment and Mulliken
+charges.
 """
 
 
@@ -52,23 +53,34 @@ init_mol = mol.copy()
 
 ccsd_object = init_mol.CCSD()
 
-steps = 300
+
+steps = 1000
 dt = 5
 
 scanner_fun = ccsd_object.nuc_grad_method().as_scanner()
 
 open("dipole_moment_CCSD.txt", "w").close()
+open("atom_charges_CCSD.txt", "w").close()
 
 
 def callback(locals):
     mol = locals["mol"]
     ccsd_object = locals["scanner"].base
 
-    one_rdm = ccsd_object.make_rdm1()
+    one_rdm_mo = ccsd_object.make_rdm1()
+
+    basis = ccsd_object.mo_coeff
+    one_rdm = basis.dot(one_rdm_mo).dot(basis.T)
+
     dipole_moment = hf.dip_moment(mol, one_rdm)
+    atomic_charges = hf.mulliken_meta(mol, one_rdm)[1]
 
     with open("dipole_moment_CCSD.txt", "a") as fl:
         for el in dipole_moment:
+            fl.write("{}  ".format(el))
+        fl.write("\n")
+    with open("atom_charges_CCSD.txt", "a") as fl:
+        for el in atomic_charges:
             fl.write("{}  ".format(el))
         fl.write("\n")
 

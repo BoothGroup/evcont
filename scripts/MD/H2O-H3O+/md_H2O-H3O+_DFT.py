@@ -6,8 +6,8 @@ from pyscf.scf import hf
 import numpy as np
 
 """
-MD simulation with DFT (B3LYP exchange correlation function), this also calculates the
-predicted dipole moment.
+MD simulation with DFT (B3LYP exchange correlation function), this also calculates
+the predicted dipole moment and Mulliken charges.
 """
 
 
@@ -55,12 +55,13 @@ mf = dft.RKS(init_mol, xc="b3lyp")
 
 mf.max_cycle = 100
 
-steps = 300
+steps = 1000
 dt = 5
 
 scanner_fun = mf.nuc_grad_method().as_scanner()
 
 open("dipole_moment_DFT.txt", "w").close()
+open("atom_charges_DFT.txt", "w").close()
 
 
 def callback(locals):
@@ -69,9 +70,14 @@ def callback(locals):
 
     one_rdm = dft_obj.make_rdm1()
     dipole_moment = hf.dip_moment(mol, one_rdm)
+    atomic_charges = hf.mulliken_meta(mol, one_rdm)[1]
 
     with open("dipole_moment_DFT.txt", "a") as fl:
         for el in dipole_moment:
+            fl.write("{}  ".format(el))
+        fl.write("\n")
+    with open("atom_charges_DFT.txt", "a") as fl:
+        for el in atomic_charges:
             fl.write("{}  ".format(el))
         fl.write("\n")
 
