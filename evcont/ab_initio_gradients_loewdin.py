@@ -519,9 +519,12 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
             Whether problem is solved with eigh or with eig. Defaults to True.
 
     Returns:
-        tuple (en, grad_all, nac_all, nac_all_hfonly)
-            A tuple containing the total potential energies, its gradients and NACs:
+        tuple (vec, en, grad_all, nac_all, nac_all_hfonly)
+            A tuple containing the continuation eigenvector, total potential energies, its gradients and NACs:
             
+            vec: ndarray(ntrain,)
+                Coefficients of the linear expansion
+                
             en: ndarray(nroot,)
                 Total potential energies for both ground and excited states
                 
@@ -601,6 +604,7 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
     grad_all = np.array(grad_elec_all) + grad_nuc
 
     return (
+        vec,
         en.real + mol.energy_nuc(),
         grad_all,
         nac_all,
@@ -716,7 +720,7 @@ if __name__ == '__main__':
             mol = get_mol(positions)
             
             # Predictions from mutistate continuation
-            en_continuation_ms, grad_continuation_ms, nac_continuation, _ = get_multistate_energy_with_grad_and_NAC(
+            _, en_continuation_ms, grad_continuation_ms, nac_continuation, _ = get_multistate_energy_with_grad_and_NAC(
                 mol,
                 continuation_object.one_rdm,
                 continuation_object.two_rdm,
