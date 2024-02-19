@@ -17,6 +17,7 @@ def converge_dmrg(
     noises=np.append(np.logspace(-2, -7, num=4), 0),
     tolerance=1.0e-4,
     restart_tag=None,
+    nroots=1,
     mem=5,
 ):
     """
@@ -65,9 +66,9 @@ def converge_dmrg(
         "nodex/{}-mps_info.bin".format(restart_tag)
     ):
         # Load a previous DMRG calculation if restart tag is provided
-        ket = mps_solver.load_mps(restart_tag)
+        ket = mps_solver.load_mps(restart_tag, nroots=nroots)
     else:
-        ket = mps_solver.get_random_mps(tag, bond_dim=bond_dim_schedule[0], nroots=1)
+        ket = mps_solver.get_random_mps(tag, bond_dim=bond_dim_schedule[0], nroots=nroots)
 
     final_energies = []
 
@@ -87,7 +88,7 @@ def converge_dmrg(
             tol=tolerance,
         )
         bnd_dms, dws, ens = mps_solver.get_dmrg_results()
-        final_energies.append(ens[-1][0])
+        final_energies.append(ens[-1][:])
         if rank == 0:
             print(bnd_dms, final_energies, dws)
             with open("DMRG_result_{}.txt".format(tag), "a") as fl:
@@ -100,7 +101,7 @@ def converge_dmrg(
                         "{}  {}  {}  {}\n".format(bnd_dms[j], ens[j][0], dws[j], noise)
                     )
         if len(final_energies) > 1:
-            if abs(final_energies[-1] - final_energies[-2]) < tolerance:
+            if np.max(np.abs(final_energies[-1] - final_energies[-2])) < tolerance:
                 break
 
     return ket, final_energies[-1]
