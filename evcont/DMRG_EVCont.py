@@ -21,6 +21,8 @@ def append_to_rdms_OAO_basis(
     one_rdm=None,
     two_rdm=None,
     converge_dmrg_fun=converge_dmrg,
+    nroots=1,
+    roots_train=[1],
     mem=5,
 ):
     """
@@ -30,6 +32,10 @@ def append_to_rdms_OAO_basis(
     """
 
     mol_bra = mols[-1]
+    mol_ind = len(mols)-1
+    mol_tag = mol_ind
+
+    new_tags = tags
 
     h1, h2 = get_integrals(mol_bra, get_basis(mol_bra, basis_type="OAO"))
 
@@ -53,38 +59,79 @@ def append_to_rdms_OAO_basis(
     )
     mps_solver.initialize_system(norb, n_elec=nelec, spin=mol_bra.spin)
 
-    converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(tags[-1]))
+    converge_dmrg_fun(h1, h2, mol_bra.nelec, "MPS_{}".format(mol_tag), nroots=nroots)
 
-    bra = mps_solver.load_mps("MPS_{}".format(tags[-1]))
+    bra = mps_solver.load_mps("MPS_{}".format(mol_tag),nroots=nroots)
 
-    overlap_new = np.ones((len(mols), len(mols)))
-    if overlap is not None:
-        overlap_new[:-1, :-1] = overlap
-    one_rdm_new = np.ones((len(mols), len(mols), norb, norb))
-    if one_rdm is not None:
-        one_rdm_new[:-1, :-1, :, :] = one_rdm
-    two_rdm_new = np.ones((len(mols), len(mols), norb, norb, norb, norb))
-    if two_rdm is not None:
-        two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
+    # If ground state
+    if nroots == 1:
+        bras = [bra]
+    else:
+        bras = [mps_solver.split_mps(bra, ir, tag="MPS_%d_%d"%(mol_tag,ir)) for ir in range(nroots)]
 
-    for i, mol_ket in enumerate(mols):
-        ket = mps_solver.load_mps("MPS_{}".format(tags[i]))
+    # Iterate over ground and excited states include them in the training
+    # if their index is in self.roots_train
+    for ind in range(nroots):
+        if ind in roots_train:
 
-        ovlp = (
-            np.array(mps_solver.expectation(bra, mps_solver.get_identity_mpo(), ket))
-            / n_ranks
-        )
-        o_RDM = np.array(mps_solver.get_1pdm(ket, bra=bra))
-        t_RDM = np.array(np.transpose(mps_solver.get_2pdm(ket, bra=bra), (0, 3, 1, 2)))
+            # Add tags at each time
+            if nroots == 1:
+                new_tags.append(mol_tag)
+            else:
+                tag_ir = "%d_%d"%(mol_ind,ind)
+                new_tags.append(tag_ir)
 
-        overlap_new[-1, i] = ovlp
-        overlap_new[i, -1] = ovlp.conj()
-        one_rdm_new[-1, i, :, :] = o_RDM
-        one_rdm_new[i, -1, :, :] = o_RDM.conj()
-        two_rdm_new[-1, i, :, :, :, :] = t_RDM
-        two_rdm_new[i, -1, :, :, :, :] = t_RDM.conj()
+            # Initialize intermediate representation
+            nvec = len(new_tags)
+            overlap_new = np.ones((nvec, nvec))
+            if overlap is not None:
+                overlap_new[:-1, :-1] = overlap
+            one_rdm_new = np.ones((nvec, nvec, norb, norb))
+            if one_rdm is not None:
+                one_rdm_new[:-1, :-1, :, :] = one_rdm
+            two_rdm_new = np.ones((nvec, nvec, norb, norb, norb, norb))
+            if two_rdm is not None:
+                two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
 
-    return overlap_new, one_rdm_new, two_rdm_new
+            # Iterate over kets and add the new state to the representation
+            print(new_tags)
+            print(overlap_new.shape)
+            for i, tag_i in enumerate(new_tags):
+
+                ket = mps_solver.load_mps("MPS_{}".format(tag_i))#,nroots=nroots)
+
+                ovlp = (
+                    np.array(mps_solver.expectation(bras[ind], mps_solver.get_identity_mpo(), ket))
+                    / n_ranks
+                )
+
+                order_1 = (1, 0)
+                o_RDM = np.array(mps_solver.get_trans_1pdm(bras[ind],ket)).transpose(order_1)
+                o_RDM_conj = np.array(mps_solver.get_trans_1pdm(ket,bras[ind])).transpose(order_1)
+
+                order_2 = (0, 3, 1, 2)
+                #order = (3, 0, 2, 1)
+                t_RDM = np.array(np.transpose(mps_solver.get_trans_2pdm(bras[ind],ket), order_2))
+                t_RDM_conj = np.array(np.transpose(mps_solver.get_trans_2pdm(ket,bras[ind]), order_2))
+
+                overlap_new[-1, i] = ovlp
+                overlap_new[i, -1] = ovlp.conj()
+
+                one_rdm_new[-1, i, :, :] = o_RDM
+                one_rdm_new[i, -1, :, :] = o_RDM_conj
+                #one_rdm_new[i, -1, :, :] = np.transpose(o_RDM.conj(),(1,0))
+                #one_rdm_new[i, -1, :, :] = o_RDM.conj()
+
+                two_rdm_new[-1, i, :, :, :, :] = t_RDM
+                two_rdm_new[i, -1, :, :, :, :] = t_RDM_conj
+                #two_rdm_new[i, -1, :, :, :, :] = np.transpose(t_RDM.conj(), (1,0,3,2))
+
+            # Update for next iteration
+            overlap = overlap_new.copy()
+            two_rdm = two_rdm_new.copy()
+            one_rdm = one_rdm_new.copy()
+
+    return overlap_new, one_rdm_new, two_rdm_new, new_tags
 
 
 def append_to_rdms_rerun(
@@ -438,6 +485,8 @@ class DMRG_EVCont_obj:
         self,
         dmrg_converge_fun=converge_dmrg,
         append_method=append_to_rdms_OAO_basis,
+        nroots=1,
+        roots_train=None,
         mem=5,
     ):
         """
@@ -445,15 +494,24 @@ class DMRG_EVCont_obj:
 
         Args:
             dmrg_converge_fun: The function to converge DMRG at each training point.
-            append_method: The method to append to rdms (see implementations above).
-            mem: The size of usable memory for block2 (in GB).
+            append_method    : The method to append to rdms (see implementations above).
+            nroots (int)     : Number of states to be solved.  Default is 1, the ground state.
+            roots_train (list): Indices of states to include in the continuation
+            mem              : The size of usable memory for block2 (in GB).
         """
         self.solver = dmrg_converge_fun
         self.append_method = append_method
 
+        self.nroots = nroots
+        if roots_train == None:
+            self.roots_train = list(range(nroots))
+        else:
+            self.roots_train = roots_train
+            assert isinstance(roots_train,list)
+
         self.mols = []
         self.tags = []
-        self.max_tag = 0
+        #self.max_tag = 0
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
@@ -467,15 +525,17 @@ class DMRG_EVCont_obj:
             mol: The molecule to append.
         """
         self.mols.append(mol)
-        self.tags.append(self.max_tag)
-        self.max_tag += 1
-        self.overlap, self.one_rdm, self.two_rdm = self.append_method(
+        #self.tags.append(self.max_tag)
+        #self.max_tag += 1
+        self.overlap, self.one_rdm, self.two_rdm, self.tags = self.append_method(
             self.mols,
             self.tags,
             overlap=self.overlap,
             one_rdm=self.one_rdm,
             two_rdm=self.two_rdm,
             converge_dmrg_fun=self.solver,
+            nroots=self.nroots,
+            roots_train=self.roots_train,
             mem=self.mem,
         )
 
