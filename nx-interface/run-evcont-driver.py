@@ -21,9 +21,10 @@ import os
 import sys
 
 ############################
-# INPUTS (migth be converted to an input file later on)
+# INPUTS (might be converted to an input file later on)
 BASIS = "sto-6g"
 use_pyscf = False
+trdm_path = None
 
 # FCI related if use_pyscf
 fix_singlet = True
@@ -196,8 +197,23 @@ def write_traj(mol):
         
         # Write to file
         np.save(fnam, new_traj)
+        
+def write_cont(vec):
+    '''
+    Write positions along the trajectory to a separate file, 'traj_geom.npy' 
+    (to retain more precision than 'dyn.out')
 
+    '''
+    fnam = 'traj_vec.npy'
     
+    if not os.path.isfile(fnam):
+        # Create the first instance
+        np.save(fnam, [vec])
+        
+    else:        
+        # Write to file
+        np.save(fnam, np.concatenate((np.load(fnam),[vec])))
+
 def evcont_feed_nx(mode, adjustphase=True):
     '''
     Call evcont at the geometry to extract energies, gradients and nonadiabatic 
@@ -225,14 +241,19 @@ def evcont_feed_nx(mode, adjustphase=True):
 
         # Read the intermediate state from continuation training
         cwd = os.getcwd()
-        cont_ovlp, cont_1rdm, cont_2rdm = read_model(cwd)
+        if trdm_path is None:
+            cont_ovlp, cont_1rdm, cont_2rdm = read_model(cwd)
+        else:
+            cont_ovlp, cont_1rdm, cont_2rdm = read_model(trdm_path)
         
         # From eigenvector continuation
-        en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
+        vec_cont, en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
             mol,
             cont_1rdm, cont_2rdm, cont_ovlp,
             nroots=NSTAT+1
             )
+        
+        write_cont(vec_cont)
 
     else:
         print('Implementation: pyscf FCI - sym_%s'%fix_sym)
@@ -246,6 +267,8 @@ def evcont_feed_nx(mode, adjustphase=True):
     
     # Checks - write to output (going into EVCont.out)
     print('geom',mol.atom_coords())
+    print()
+    print('vec', vec_cont, vec_cont.shape)
     print()
     print('en',en_cont)
     print()
