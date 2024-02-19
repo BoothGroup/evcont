@@ -2,10 +2,11 @@ import numpy as np
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
-from pyscf import fci
+from pyscf import scf, ao2mo, fci, symm
 
 from pyscf.fci.addons import transform_ci
 
+from evcont.ab_initio_gradients_loewdin import get_loewdin_trafo
 
 class FCI_EVCont_obj:
     """
@@ -18,6 +19,7 @@ class FCI_EVCont_obj:
         cibasis='canonical',
         nroots=1,
         roots_train=None,
+        irrep_name=None
     ):
         """
         Initializes the FCI_EVCont_obj class.
@@ -28,6 +30,8 @@ class FCI_EVCont_obj:
                     Note that after computation, the basis is converted to OAO
             nroots: Number of states to be solved.  Default is 1, the ground state.
             roots_train (list): Indices of states to include in the continuation
+            irrep_name (string): If not None, only include states corresponding 
+                                to the given symmetry irreducible representation
                 
         Attributes:
             fcivecs (list): The FCI training states.
@@ -47,6 +51,17 @@ class FCI_EVCont_obj:
             self.roots_train = roots_train
             assert isinstance(roots_train,list)
 
+        # Symmetry
+        if irrep_name == None:
+            self.use_symmetry = False
+            self.irrep_name = None
+        else:
+            self.use_symmetry = True
+            self.irrep_name = irrep_name
+            
+            # Need canonical basis
+            assert cibasis == 'canonical'
+        
         # Initialize attributes
         self.fcivecs = []
         self.ens = []
@@ -63,12 +78,50 @@ class FCI_EVCont_obj:
             mol (object): Molecular object of the training geometry.
 
         """
+        # Relevant matrices for SAO basis
+        #S = mol.intor("int1e_ovlp")
+        #ao_mo_trafo = get_loewdin_trafo(S)
+        
         basis = get_basis(mol,basis_type=self.cibasis)
         h1, h2 = get_integrals(mol, basis)
         
+        #if not self.use_symmetry:
+        #    # OAO basis
+        #    basis = ao_mo_trafo
+    
+        #else:
+        #    # Use canonical for symmetry adapted
+        #    myhf = scf.RHF(mol)
+        #    _ = myhf.scf()
+        #    basis = myhf.mo_coeff
+            
+        # Construct h1 and h2
+        #h1 = np.linalg.multi_dot((basis.T, scf.hf.get_hcore(mol), basis))
+        #h2 = ao2mo.restore(1, ao2mo.kernel(mol, basis), basis.shape[1])
+        
         nroots_train = max(self.roots_train)+1
-        e_all, fcivec_all = self.cisolver.kernel(h1, h2, mol.nao, mol.nelec,
-                                         nroots=nroots_train)
+
+        # Get FCI energies and wavefunctions in SAO basis
+        if not self.use_symmetry:
+            e_all, fcivec_all = self.cisolver.kernel(h1, h2, mol.nao, mol.nelec,
+                                              nroots=nroots_train)
+            
+        else:
+            orbsym = symm.label_orb_symm(mol, mol.irrep_id, mol.symm_orb, basis)
+            
+            e_all, fcivec_all = self.cisolver.kernel(h1, h2, mol.nao, mol.nelec, 
+                                                     nroots=nroots_train, orbsym=orbsym,)
+            
+            #u = np.einsum('ji,jk,kl->il',basis,S,ao_mo_trafo)
+            #fcivec = [transform_ci(fcivec_i,mol.nelec,u) for fcivec_i in fcivec]
+    
+
+        #basis = get_basis(mol,basis_type=self.cibasis)
+        #h1, h2 = get_integrals(mol, basis)
+        
+        #nroots_train = max(self.roots_train)+1
+        #e_all, fcivec_all = self.cisolver.kernel(h1, h2, mol.nao, mol.nelec,
+        #                                 nroots=nroots_train)
         
         # If ground state
         if nroots_train == 1:
@@ -84,7 +137,7 @@ class FCI_EVCont_obj:
             
             fcivec_all = [transform_ci(fcivec_i,mol.nelec,u) for fcivec_i in fcivec_all]
 
-        # Fix gauge
+        # Fix gauge; probably not necessary
         for fcivec_i in fcivec_all:
             # Set maximum element to be positive
             idx = np.unravel_index(np.argmax(np.abs(fcivec_i.real)),fcivec_i.shape)

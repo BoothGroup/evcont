@@ -10,7 +10,9 @@ Full CI nonadiabatic coupling vectors in SAO basis
 
 import numpy as np
 
-from pyscf import scf, ao2mo, grad, fci
+from pyscf import scf, ao2mo, grad, fci, symm
+
+from pyscf.fci.addons import transform_ci
 
 from evcont.ab_initio_gradients_loewdin import (
     get_one_and_two_el_grad,
@@ -112,6 +114,121 @@ def get_FCI_energy_with_grad_and_NAC(mol, fcisolver, nroots=1, hermitian=True):
         nac_all_hfonly
     )
 
+# For testing, when it works - merge with previous one
+def get_FCI_energy_with_grad_and_NAC_withsym(mol, fcisolver, nroots=1, hermitian=True, irrep_name=None):
+    """
+    Calculates the potential energiesm its gradient w.r.t. nuclear positions of a
+    molecule and nonadiabatic couplings from full CI in SAO basis
+    
+    Args:
+        mol : pyscf.gto.Mole
+            The molecule object.
+        fcisolver : pyscf.fci solver
+            The solver object for full CI
+        nroots (optional): int
+            Number of states in the solver.
+        hermitian (optional): bool
+            Whether problem is solved with eigh or with eig. Defaults to True.
+
+    Returns:
+        tuple (en, grad_all, nac_all, nac_all_hfonly)
+            A tuple containing the total potential energies, its gradients and NACs:
+            
+            en: ndarray(nroot,)
+                Total potential energies for both ground and excited states
+                
+            grad_all: list of ndarray(nat,3)
+                Gradients of multistate energies
+                
+            nac_all: dictionary of np.darray(nat,3)
+                Nonadiabatic coupling vectors between all states,
+                e.g. nac_all['02'] is NAC along ground state and 2nd excited state
+                
+            nac_all_hfonly: dictionary of ndarray(nat,3)
+                Hellman-Feynmann contribution to NACs
+    """
+    # Loewdin orbitals
+    S = mol.intor("int1e_ovlp")
+    ao_mo_trafo = get_loewdin_trafo(S)
+    
+    if irrep_name == None:
+        # OAO basis
+        basis = ao_mo_trafo
+
+    else:
+        # Use canonical for symmetry adapted
+        myhf = scf.RHF(mol)
+        _ = myhf.scf()
+        basis = myhf.mo_coeff
+        
+    # Construct h1 and h2
+    h1 = np.linalg.multi_dot((basis.T, scf.hf.get_hcore(mol), basis))
+    h2 = ao2mo.restore(1, ao2mo.kernel(mol, basis), basis.shape[1])
+    
+    # Get FCI energies and wavefunctions in SAO basis
+    if irrep_name == None:
+        en, fcivec = fcisolver.kernel(h1, h2, mol.nao, mol.nelec)
+        
+    else:
+        orbsym = symm.label_orb_symm(mol, mol.irrep_id, mol.symm_orb, basis)
+        
+        en, fcivec = fcisolver.kernel(h1, h2, mol.nao, mol.nelec, orbsym=orbsym)
+        
+        u = np.einsum('ji,jk,kl->il',basis,S,ao_mo_trafo)
+        
+        fcivec = [transform_ci(fcivec_i,mol.nelec,u) for fcivec_i in fcivec]
+
+    # Get the gradient of one and two-electron integrals before contracting onto
+    # rdms and trmds of different states
+    h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
+    
+    # Get the orbital derivative coupling for NACs
+    orb_deriv = get_orbital_derivative_coupling(mol,ao_mo_trafo=ao_mo_trafo)
+    
+    # Nuclear part of the gradient
+    grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
+        
+    grad_elec_all = []
+    nac_all = {}
+    nac_all_hfonly = {}
+    # Iterate over pairs of eigenstates
+    for i_state in range(nroots):
+        ci_i = fcivec[i_state]
+
+        for j_state in range(nroots):
+            ci_2 = fcivec[j_state]
+            
+            # FCI 1- and 2-particle tRDMs
+            one_rdm, two_rdm = fcisolver.trans_rdm12(ci_i, ci_2, mol.nao, mol.nelec)
+            
+            # d\dR of subspace Hamiltonian
+            grad_elec = get_grad_elec_from_gradH(
+                one_rdm, two_rdm, h1_jac, h2_jac
+            )
+            
+            # Energy gradients
+            if i_state == j_state:
+                grad_elec_all.append(grad_elec)
+                
+            # Nonadiabatic couplings
+            else:
+                nac_orb = np.einsum("ij,ijkl->kl",one_rdm, orb_deriv, optimize="optimal")
+
+                nac_hf = grad_elec/(en[j_state]-en[i_state])
+                nac_ij = nac_hf + nac_orb
+                nac_all[str(i_state)+str(j_state)] = nac_ij
+                nac_all_hfonly[str(i_state)+str(j_state)] = nac_hf
+
+    # Add the nuclear contribution to gradient
+    grad_all = np.array(grad_elec_all) + grad_nuc
+
+    return (
+        en.real + mol.energy_nuc(),
+        grad_all,
+        nac_all,
+        nac_all_hfonly
+    )
+
 if __name__ == '__main__':
 
     from pyscf import gto
@@ -119,21 +236,21 @@ if __name__ == '__main__':
     
     nstate = 2 # Max no of state to compute NACs up to
     
-    natom = 4
+    natom = 8
     
     check_spin = True
     withMolcas = False
     fix_singlet = True
     
+    fix_sym = 'A1g'
+    #fix_sym = None
+    
+    if fix_sym == None:
+        mol_sym = False
+    else:
+        mol_sym = True
+    
     test_range = np.linspace(0.8, 3.0,40)
-    
-    # Set fci solver to be used
-    fcisolver = fci.direct_spin0.FCI()
-    fcisolver.nroots = nstate+4
-    
-    if fix_singlet:
-        fci.addons.fix_spin_(fcisolver,ss=0) # Fix spin
-        
     
     def get_mol(positions):
         mol = gto.Mole()
@@ -142,13 +259,26 @@ if __name__ == '__main__':
             atom=[("H", pos) for pos in positions],
             basis="sto-3g",
             #basis="6-31g",
-            symmetry=False,
+            symmetry=mol_sym,
             unit="Bohr",
             verbose=0
         )
 
         return mol
-
+    
+    mol_dummy = get_mol([(x, 0.0, 0.0) for x in test_range[0] * np.arange(natom)])
+    # Set fci solver to be used
+    if fix_sym == None:
+        fcisolver = fci.direct_spin0.FCI()
+    else:
+        fcisolver = fci.direct_spin0_symm.FCI(mol_dummy)
+        fcisolver.wfnsym = fix_sym
+        
+    fcisolver.nroots = nstate+4
+    
+    if fix_singlet:
+        fci.addons.fix_spin_(fcisolver,ss=0) # Fix spin
+        
     # Prediction on test dataset and comparison against FCI results
     fci_en = np.zeros([len(test_range),nstate+4])
     fci_nac = []
@@ -162,10 +292,11 @@ if __name__ == '__main__':
         #h1, h2 = get_integrals(mol, get_basis(mol))
         
         # Continuation
-        en_f, grad_f, nac_f, nac_f_hfonly = get_FCI_energy_with_grad_and_NAC(
+        en_f, grad_f, nac_f, nac_f_hfonly = get_FCI_energy_with_grad_and_NAC_withsym(
             mol,
             fcisolver,
-            nroots=nstate+1
+            nroots=nstate+1,
+            irrep_name=fix_sym
         )
         
         fci_en[i,:] = en_f
