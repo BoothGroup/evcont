@@ -22,16 +22,18 @@ import sys
 
 ############################
 # INPUTS (migth be converted to an input file later on)
-BASIS = "sto-3g"
-use_pyscf = True
+BASIS = "sto-6g"
+use_pyscf = False
 
 # FCI related if use_pyscf
 fix_singlet = True
+fix_sym = 'A1g' #None
+#fix_sym = None
 ############################
 # Checks for evcont and pyscf
 try:
    from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC
-   from evcont.FCI_NAC import get_FCI_energy_with_grad_and_NAC
+   from evcont.FCI_NAC import get_FCI_energy_with_grad_and_NAC, get_FCI_energy_with_grad_and_NAC_withsym
 except:
    print('evcont is not installed!')
    sys.exit()
@@ -47,16 +49,6 @@ except:
 NSTAT  	  = int(sys.argv[1])
 NSTATDYN  = int(sys.argv[2])
 
-
-# Set FCI solver if use_pyscf
-if use_pyscf:
-    from pyscf import fci
-    # Set fci solver to be used
-    FCISOLVER = fci.direct_spin0.FCI()
-    FCISOLVER.nroots = NSTAT+1
-    
-    if fix_singlet:
-        fci.addons.fix_spin_(FCISOLVER,ss=0) # Fix spin
 ############################
 
 def read_mol(basis):
@@ -82,13 +74,39 @@ def read_mol(basis):
     mol.build(
         atom=atom_f,
         basis=basis,
-        symmetry=False,
+        symmetry=mol_sym,
         unit="Bohr",
         verbose=0
     )
     
     return mol
 
+############################
+# Symmetry
+if fix_sym == None or not use_pyscf:
+    mol_sym = False
+else:
+    mol_sym = True
+    
+MOL = read_mol(BASIS)
+
+# Set FCI solver if use_pyscf
+if use_pyscf:
+    from pyscf import fci
+    # Set fci solver to be used
+    
+    if fix_sym == None:
+        FCISOLVER = fci.direct_spin0.FCI()
+    else:
+        FCISOLVER = fci.direct_spin0_symm.FCI(MOL)
+        FCISOLVER.wfnsym = fix_sym
+        
+    FCISOLVER.nroots = NSTAT+1
+
+    if fix_singlet:
+        fci.addons.fix_spin_(FCISOLVER,ss=0) # Fix spin
+        
+############################
 
 def run_training(path):
     """
@@ -157,6 +175,29 @@ def adjust_phase(natm):
     # Write the adjusted NACs
     np.savetxt('nad_vectors',np.vstack(adjusted_nacs))
     
+def write_traj(mol):
+    '''
+    Write positions along the trajectory to a separate file, 'traj_geom.npy' 
+    (to retain more precision than 'dyn.out')
+
+    '''
+    fnam = 'traj_geom.npy'
+    
+    if not os.path.isfile(fnam):
+        # Create the first instance
+        np.save(fnam, [mol.atom_coords()])
+        
+    else:
+        # Load
+        coord = np.load(fnam)
+        
+        # Add the new geometry
+        new_traj = np.concatenate((coord,[mol.atom_coords()]))
+        
+        # Write to file
+        np.save(fnam, new_traj)
+
+    
 def evcont_feed_nx(mode, adjustphase=True):
     '''
     Call evcont at the geometry to extract energies, gradients and nonadiabatic 
@@ -175,8 +216,13 @@ def evcont_feed_nx(mode, adjustphase=True):
     # Get the mol object for continuation
     mol = read_mol(BASIS)
     
+    # Add the current geometry to list of geometries along the trajectory
+    write_traj(mol)
+    
     # Get energies, gradients, NAC
     if not use_pyscf:
+        print('Implementation: evcont')
+
         # Read the intermediate state from continuation training
         cwd = os.getcwd()
         cont_ovlp, cont_1rdm, cont_2rdm = read_model(cwd)
@@ -187,13 +233,26 @@ def evcont_feed_nx(mode, adjustphase=True):
             cont_1rdm, cont_2rdm, cont_ovlp,
             nroots=NSTAT+1
             )
+
     else:
+        print('Implementation: pyscf FCI - sym_%s'%fix_sym)
         # FCI results in SAO basis
-        en_cont, grad_cont, nac_cont, _ = get_FCI_energy_with_grad_and_NAC(
+        en_cont, grad_cont, nac_cont, _ = get_FCI_energy_with_grad_and_NAC_withsym(
             mol,
             FCISOLVER,
-            nroots=NSTAT+1
+            nroots=NSTAT+1,
+            irrep_name=fix_sym
             )
+    
+    # Checks - write to output (going into EVCont.out)
+    print('geom',mol.atom_coords())
+    print()
+    print('en',en_cont)
+    print()
+    print('grad', grad_cont)
+    print()
+    print('nac',nac_cont)
+    print()
     
     # Write energies and gradients
     with open('epot', 'w') as fepot, open('grad.all', 'w') as fgradall, open('grad', 'w') as fgrad:
@@ -227,9 +286,34 @@ def evcont_feed_nx(mode, adjustphase=True):
 
 if __name__ == '__main__':
     
+    check = False
     #mol = read_mol(basis=BASIS)
 
     # Dynamics only for now
     evcont_feed_nx(1)
 
+    # Try for specific cases
+    if check:
+        import os
+        
+        drc = '/Users/katalar/Code/newtonx/Analysis/H8/S2-dt01/evcont-ntrain11/TEMP'
+        
+        cwd = os.getcwd()
+        
+        os.chdir(drc)
+        #evcont_feed_nx(1)
+    
+        mol = read_mol(BASIS)
+        
+        tmpd = os.getcwd()
+        cont_ovlp, cont_1rdm, cont_2rdm = read_model(tmpd)
+        
+        # From eigenvector continuation
+        en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
+            mol,
+            cont_1rdm, cont_2rdm, cont_ovlp,
+            nroots=NSTAT+1
+            )
+        
+        os.chdir(cwd)
 
