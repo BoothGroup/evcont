@@ -4,6 +4,7 @@ from scipy.linalg import eigh, eig
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
+from pyscf.lib import safe_eigh
 
 def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
     """
@@ -29,7 +30,8 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
 
     if hermitian is True:
         # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
-        vals, vecs = eigh(H, S)
+        #vals, vecs = eigh(H, S)
+        vals, vecs, _ = safe_eigh(H, S)
     else:
         # Solve the generalized eigenvalue problem for non-Hermitian Hamiltonian
         vals, vecs = eig(H, S)
@@ -72,7 +74,9 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
 
     if hermitian is True:
         # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
-        vals, vecs = eigh(H, S)
+        #vals, vecs = eigh(H, S)
+        vals, vecs, _ = safe_eigh(H, S)
+        
     else:
         # Solve the generalized eigenvalue problem for non-Hermitian Hamiltonian
         vals, vecs = eig(H, S)
