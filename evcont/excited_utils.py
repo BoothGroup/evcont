@@ -63,13 +63,16 @@ def make_rdm1(mol, one_rdm, vec):
     return predicted_one_rdm
 
 
-def trans_dip_moment(mol, one_trdm_inp):
+def trans_dip_moment(mol, one_trdm_inp,ref=None):
     
     # Set gauge for dipole integrals
-    charges = mol.atom_charges()
-    coords = mol.atom_coords()
-    nuc_charge_center = np.einsum('z,zx->x', charges, coords) / charges.sum()
-    mol.set_common_orig_(nuc_charge_center)
+    if ref is None:
+        charges = mol.atom_charges()
+        coords = mol.atom_coords()
+        nuc_charge_center = np.einsum('z,zx->x', charges, coords) / charges.sum()
+        mol.set_common_orig_(nuc_charge_center)
+    else:
+        mol.set_common_orig_(ref)
     dip_ints = mol.intor('cint1e_r_sph', comp=3)
     
     single = True
