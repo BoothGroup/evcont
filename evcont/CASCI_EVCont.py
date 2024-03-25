@@ -228,7 +228,9 @@ class CAS_EVCont_obj:
             )
 
             orbitals = wick.wick_orbitals[float, float](
-                bra_ref_state, ket_ref_state, owndata(mol_bra.get_ovlp())
+                bra_ref_state,
+                ket_ref_state,
+                owndata(mol_bra.intor_symmetric("int1e_ovlp")),
             )
 
             wick_mb = wick.wick_rscf[float, float, float](orbitals, 0.0)
