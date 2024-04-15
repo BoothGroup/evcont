@@ -1,6 +1,6 @@
 import numpy as np
 
-from evcont.electron_integral_utils import get_basis
+from evcont.electron_integral_utils import get_basis, get_integrals
 
 from pygnme import wick, utils
 
@@ -138,8 +138,9 @@ class CAS_EVCont_obj:
 
         #self.casci_solver.fcisolver.nroots = nroots
 
-    def otf_hamiltonian(self, h1, h2):
+    def otf_hamiltonian_old(self, h1, h2):
         """ 
+        OLD VERSION WITH INTERMEDIATE RDM COMPUTATION
         Generate subspace Hamiltonian on the fly from precomputed training states (self.cascis)
         Note: Still need to test if the MPI version works
 
@@ -292,10 +293,11 @@ class CAS_EVCont_obj:
                 MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, rdm2, op=MPI.SUM)
                 
                 if rank == 0:
-
+                    '''
                     rdm1 = np.einsum(
                         "...ij,ai,bj->...ab", rdm1, trafo_ket, trafo_bra, optimize="optimal"
                     )
+                    
                     rdm2 = np.einsum(
                         "...ijkl,ai,bj,ck,dl->...abcd",
                         rdm2,
@@ -305,11 +307,194 @@ class CAS_EVCont_obj:
                         trafo_ket,
                         optimize="optimal",
                     )
-
-                    H[a,b] = np.einsum("kl,kl", rdm1, h1, optimize="optimal") + 0.5 * np.einsum(
-                        "klmn,klmn", rdm2, h2, optimize="optimal"
+                    '''
+                    #'''
+                    # Alternatively pass the transformation to integrals (working)
+                    h1e = np.einsum(
+                        "ai,bj,ab->ij", trafo_ket, trafo_bra, h1, optimize="optimal"
                     )
+
+                    h2e = np.einsum(
+                        "ai,bj,ck,dl,abcd->ijkl",
+                        trafo_bra,
+                        trafo_ket,
+                        trafo_bra,
+                        trafo_ket,
+                        h2,
+                        optimize="optimal",
+                    )
+                    #'''
+                    H[a,b] = np.einsum("...kl,kl", rdm1, h1e, optimize="optimal") + 0.5 * np.einsum(
+                        "...klmn,klmn", rdm2, h2e, optimize="optimal"
+                    )
+
+                    # Alternative contraction (works)
+                    #H[a,b] = np.einsum( "...ij,ai,bj,ab", rdm1, trafo_ket, trafo_bra, h1, optimize="optimal") \
+                    #+ 0.5 * np.einsum("...ijkl,ai,bj,ck,dl,abcd",
+                    #    rdm2,
+                    #    trafo_bra,
+                    #    trafo_ket,
+                    #    trafo_bra,
+                    #    trafo_ket,
+                    #    h2,
+                    #    optimize="optimal"
+                    #)
                     
+
+                    S[a,b] = overlap_accumulate
+                
+        return H, S
+
+    def otf_hamiltonian(self, h1, h2):
+        """ 
+        Generate subspace Hamiltonian on the fly from precomputed training states (self.cascis)
+        Note: Still need to test if the MPI version works
+
+        Args:
+            h1 (np.array): 1-electron integrals at the test geometry in SAO basis.
+            h2 (np.array): 2-electron integrals at the test geometry in SAO basis.
+        """
+        states = self.cascis
+
+        nwf = len(states)
+        H = np.zeros([nwf,nwf])
+        S = np.zeros([nwf,nwf])
+        
+        # Iterate over bra states
+        for a, casci_bra in enumerate(states):
+
+            MPI.COMM_WORLD.Bcast(casci_bra.ci)
+            MPI.COMM_WORLD.Bcast(casci_bra.mo_coeff)
+
+            mo_coeff_bra = casci_bra.mo_coeff
+            mol_bra = casci_bra.mol
+
+            ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
+            basis_OAO_bra = get_basis(mol_bra)
+            trafo_bra = basis_OAO_bra.T.dot(ovlp_bra).dot(mo_coeff_bra)
+
+            bra_ref_state = wick.reference_state[float](
+                mo_coeff_bra.shape[0],
+                mo_coeff_bra.shape[0],
+                mol_bra.nelec[0],
+                casci_bra.ncas,
+                casci_bra.ncore,
+                owndata(mo_coeff_bra),
+            )
+
+            bra_occ_strings = utils.fci_bitset_list(
+                mol_bra.nelec[0] - casci_bra.ncore, casci_bra.ncas
+            )
+
+            # Generate and transform 1- and 2-electron integrals
+            # AO(test) to AO(bra) transformation
+            #basis_test_bra = np.dot(get_basis(mol),np.linalg.inv(basis_OAO_bra))
+            #h1e, h2e = get_integrals(mol, basis_test_bra)
+
+            # Transform 1- and 2-electron integrals into AO basis of bra
+            inv_basis_OAO_bra = np.linalg.inv(basis_OAO_bra)
+            h1e = np.einsum(
+                "ia,bj,ij->ab", inv_basis_OAO_bra, inv_basis_OAO_bra, h1, optimize="optimal"
+            )
+
+            h2e = np.einsum(
+                "ia,bj,kc,dl,ijkl->abcd",
+                inv_basis_OAO_bra,
+                inv_basis_OAO_bra,
+                inv_basis_OAO_bra,
+                inv_basis_OAO_bra,
+                h2,
+                optimize="optimal",
+            )
+
+            # Iterate over ket states
+            for b, casci_ket in enumerate(states):
+
+                # Prepare ket state                
+                mo_coeff_ket = casci_ket.mo_coeff
+                mol_ket = casci_ket.mol
+
+                ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
+                basis_OAO_ket = get_basis(mol_ket)
+                trafo_ket = basis_OAO_ket.T.dot(ovlp_ket).dot(mo_coeff_ket)
+
+                trafo_ket_bra = basis_OAO_bra.dot(trafo_ket)
+
+                ket_ref_state = wick.reference_state[float](
+                    mo_coeff_ket.shape[0],
+                    mo_coeff_ket.shape[0],
+                    mol_ket.nelec[0],
+                    casci_ket.ncas,
+                    casci_ket.ncore,
+                    owndata(trafo_ket_bra),
+                )
+
+                orbitals = wick.wick_orbitals[float, float](
+                    bra_ref_state, ket_ref_state, owndata(ovlp_bra)
+                )
+
+                mb = wick.wick_rscf[float, float, float](orbitals, 0.0)
+
+                # Add one- and two-body contributions
+                h1e = owndata(h1e)
+                h2e = owndata(h2e.reshape(h1e.shape[0]**2, h1e.shape[0]**2))
+                mb.add_one_body(h1e)
+                mb.add_two_body(h2e)
+
+                ket_occ_strings = utils.fci_bitset_list(
+                    mol_ket.nelec[0] - casci_ket.ncore, casci_ket.ncas
+                )
+
+                overlap_accumulate = 0.0
+                hamiltonian_accumulate = 0.0
+
+                all_ids = np.array(
+                    [
+                        [iabra, ibbra, iaket, ibket]
+                        for iabra in range(len(bra_occ_strings))
+                        for ibbra in range(len(bra_occ_strings))
+                        for iaket in range(len(ket_occ_strings))
+                        for ibket in range(len(ket_occ_strings))
+                    ]
+                )
+
+                n_ranks = MPI.COMM_WORLD.Get_size()
+
+                all_ids_local = np.array_split(all_ids, n_ranks)[rank]
+
+                if rank == 0:
+                    pbar = tqdm(total=len(all_ids_local))
+
+                for ids in all_ids_local:
+                    iabra, ibbra, iaket, ibket = ids
+
+                    # Compute S and H contribution for this pair of determinants
+                    stmp, htmp = mb.evaluate(bra_occ_strings[iabra], 
+                                             bra_occ_strings[ibbra],
+                                             ket_occ_strings[iaket],
+                                             ket_occ_strings[ibket],
+                                             1.0)
+
+                    hamiltonian_accumulate += htmp * casci_bra.ci[iabra, ibbra] *  casci_ket.ci[iaket, ibket]
+                    overlap_accumulate += stmp * casci_bra.ci[iabra, ibbra] * casci_ket.ci[iaket, ibket]
+
+                    if rank == 0:
+                        pbar.update(1)
+
+                if rank == 0:
+                    pbar.close()
+
+                overlap_accumulate = MPI.COMM_WORLD.allreduce(
+                    overlap_accumulate, op=MPI.SUM
+                )
+                hamiltonian_accumulate = MPI.COMM_WORLD.allreduce(
+                    hamiltonian_accumulate, op=MPI.SUM
+                )
+
+                if rank == 0:
+                    #print(hamiltonian_accumulate, overlap_accumulate)
+
+                    H[a,b] = hamiltonian_accumulate
                     S[a,b] = overlap_accumulate
                 
         return H, S

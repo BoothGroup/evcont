@@ -99,8 +99,10 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
     return en_approx, evec_approx
 
 
+import matplotlib.pylab as plt
+import seaborn as sb 
 
-def approximate_multistate_otf(h1, h2, one_RDM=None, two_RDM=None, S=None, otf_hamiltonian=None, nroots=1, hermitian=True):
+def approximate_multistate_otf(h1, h2, one_RDM=None, two_RDM=None, S=None, otf_hamiltonian=None, nroots=1, hermitian=True, mol=None):
     """
     Returns multiple approximate electronic states from solving the generalised
     eigenvalue problem defined via the one- and two-body transition RDMs.
@@ -134,10 +136,16 @@ def approximate_multistate_otf(h1, h2, one_RDM=None, two_RDM=None, S=None, otf_h
             "ijklmn,klmn->ij", two_RDM, h2, optimize="optimal"
         )
     else:
-        H, S = otf_hamiltonian(h1, h2)
+        if mol is None:
+            H, S = otf_hamiltonian(h1, h2)
+        else:
+            H, S = otf_hamiltonian(mol)
 
     #print('  Hamiltonian')
     #print(H)
+    #plt.figure()
+    #sb.heatmap(H, annot=True)
+    #plt.savefig('hamiltonian_%i.png'%(rdm_computation))
     #print('  Overlap')
     #print(S)
 
@@ -259,6 +267,47 @@ def approximate_multistate_otf_OAO(mol, one_RDM=None, two_RDM=None, S=None, otf_
 
     # Approximate the ground state energy and wavefunction in projected subspace
     en, vec = approximate_multistate_otf(h1, h2, one_RDM, two_RDM, S, otf_hamiltonian, nroots=nroots, hermitian=hermitian)
+
+    # Calculate the total energy by adding the nuclear repulsion energy
+    total_energy = en.real + mol.energy_nuc()
+
+    return total_energy, vec
+
+def approximate_multistate_otf_OAO(mol, one_RDM=None, two_RDM=None, S=None, otf_hamiltonian=None, nroots=1, hermitian=True, passmol=False):
+    """
+    This function approximates multiple state energies and wavefunctions of a given
+    molecule from an eigenvector continuation with t-RDMS and the overlap matrix S.
+
+    Args:
+        mol (Molecule): The molecule object representing the system.
+        one_RDM (ndarray): The one-electron t-RDM.
+        two_RDM (ndarray): The two-electron t-RDM.
+        S (ndarray): The overlap matrix.
+        nroots: Number of states to be solved.  Default is 1, the ground state.
+        hermitian (bool, optional):
+            Whether problem is solved with eigh or with eig. Defaults to True.
+
+    Returns:
+        tuple: A tuple containing the approximate ground state energy and the
+        ground state wavefunction in the learning subspace as a vector of expansion
+        coefficients.
+
+    """
+
+    # Check that either RDMs or the otf generator is given
+    if (one_RDM is None or two_RDM is None or S is None) and otf_hamiltonian is None:
+        print('Error in approximate_multistate_otf_OAO: Neither RDMs or OTF generator is given')
+        sys.exit()
+
+    # Construct h1 and h2
+    if not passmol:
+        h1, h2 = get_integrals(mol, get_basis(mol))
+
+        # Approximate the ground state energy and wavefunction in projected subspace
+        en, vec = approximate_multistate_otf(h1, h2, one_RDM, two_RDM, S, otf_hamiltonian, nroots=nroots, hermitian=hermitian)
+    else:
+         # Approximate the ground state energy and wavefunction in projected subspace
+        en, vec = approximate_multistate_otf(None, None, one_RDM, two_RDM, S, otf_hamiltonian, nroots=nroots, hermitian=hermitian, mol=mol)       
 
     # Calculate the total energy by adding the nuclear repulsion energy
     total_energy = en.real + mol.energy_nuc()
