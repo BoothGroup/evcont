@@ -135,8 +135,9 @@ class CAS_EVCont_obj:
             print('Wrong solver in CAS_EVCont_obj')
             sys.exit()
 
-
-        #self.casci_solver.fcisolver.nroots = nroots
+        # Set flags for using add_state vs append_to_rdms
+        # (to prevent double addition into self.cascis or missing states in tRDMs)
+        self.use_rdm = None
 
     def otf_hamiltonian_old(self, h1, h2):
         """ 
@@ -360,12 +361,21 @@ class CAS_EVCont_obj:
         H = np.zeros([nwf,nwf])
         S = np.zeros([nwf,nwf])
         
+        #time_pre_bra = 0.
+        #time_pre_ket_worb = 0.
+        #n_bra_pre = 0
+        #n_ket_pre = 0
+
+        #st = time()
+
         # Iterate over bra states
         for a, casci_bra in enumerate(states):
 
             MPI.COMM_WORLD.Bcast(casci_bra.ci)
             MPI.COMM_WORLD.Bcast(casci_bra.mo_coeff)
-
+            
+            #st_bra = time()
+            
             mo_coeff_bra = casci_bra.mo_coeff
             mol_bra = casci_bra.mol
 
@@ -393,12 +403,16 @@ class CAS_EVCont_obj:
 
             # Transform 1- and 2-electron integrals into AO basis of bra
             inv_basis_OAO_bra = np.linalg.inv(basis_OAO_bra)
+
+            #time_pre_bra += time()-st_bra
+            #n_bra_pre += 1
+
             h1e = np.einsum(
-                "ia,bj,ij->ab", inv_basis_OAO_bra, inv_basis_OAO_bra, h1, optimize="optimal"
+                "ia,jb,ij->ab", inv_basis_OAO_bra, inv_basis_OAO_bra, h1, optimize="optimal"
             )
 
             h2e = np.einsum(
-                "ia,bj,kc,dl,ijkl->abcd",
+                "ia,jb,kc,ld,ijkl->abcd",
                 inv_basis_OAO_bra,
                 inv_basis_OAO_bra,
                 inv_basis_OAO_bra,
@@ -407,8 +421,14 @@ class CAS_EVCont_obj:
                 optimize="optimal",
             )
 
+            MPI.COMM_WORLD.Bcast(h1e)
+            MPI.COMM_WORLD.Bcast(h2e)
+
             # Iterate over ket states
-            for b, casci_ket in enumerate(states):
+            #for b, casci_ket in enumerate(states):
+            for b in range(a, nwf):
+                casci_ket = states[b]
+                #st_ket = time()
 
                 # Prepare ket state                
                 mo_coeff_ket = casci_ket.mo_coeff
@@ -429,21 +449,24 @@ class CAS_EVCont_obj:
                     owndata(trafo_ket_bra),
                 )
 
+                ket_occ_strings = utils.fci_bitset_list(
+                    mol_ket.nelec[0] - casci_ket.ncore, casci_ket.ncas
+                )
+
                 orbitals = wick.wick_orbitals[float, float](
                     bra_ref_state, ket_ref_state, owndata(ovlp_bra)
                 )
 
                 mb = wick.wick_rscf[float, float, float](orbitals, 0.0)
 
+                #time_pre_ket_worb += time()-st_ket
+                #n_ket_pre += 1
+
                 # Add one- and two-body contributions
                 h1e = owndata(h1e)
                 h2e = owndata(h2e.reshape(h1e.shape[0]**2, h1e.shape[0]**2))
                 mb.add_one_body(h1e)
                 mb.add_two_body(h2e)
-
-                ket_occ_strings = utils.fci_bitset_list(
-                    mol_ket.nelec[0] - casci_ket.ncore, casci_ket.ncas
-                )
 
                 overlap_accumulate = 0.0
                 hamiltonian_accumulate = 0.0
@@ -496,8 +519,66 @@ class CAS_EVCont_obj:
 
                     H[a,b] = hamiltonian_accumulate
                     S[a,b] = overlap_accumulate
+
+                    H[b,a] = np.conj(hamiltonian_accumulate)
+                    S[b,a] = np.conj(overlap_accumulate)
                 
+        #print('----------------------------------------------')
+        #print('Time per Hamiltonian: %.5f'%(time()-st))
+        #print('Time available for precomputation: %.5f'%(time_pre_bra+time_pre_ket_worb))
+        #print('Bra preparation time: %.5f, (%.5f per each bra)'%(time_pre_bra, time_pre_bra/n_bra_pre))
+        #print('Ket preparation time with orbital object definition: %.5f, (%.5f per each ket)'%(time_pre_ket_worb, time_pre_ket_worb/n_ket_pre))
+        #print('----------------------------------------------')
         return H, S
+
+    def add_state(self, mol):
+        """ 
+        Compute the wavefunctions and store them in this object for on-the-fly continuation
+        later on.
+        ALTERNATIVE to append_to_rdms
+
+        Args:
+            mol (object): Molecular object of the training geometry.
+
+        Raises:
+            AssertionError: If the mean-field calculation is not converged.
+        """
+        # Some checks
+        if self.use_rdm is None:
+            use_rdm = False
+        elif self.use_rdm:
+            print('Error in add_state: already using append_to_rdms')
+            sys.exit()
+
+        # Run mean field calculations for the orbitals
+        mf = scf.RHF(mol.copy())
+        mf.kernel()
+
+        assert mf.converged
+
+        MPI.COMM_WORLD.Bcast(mf.mo_coeff)
+
+        # Specificy the CAS solver for the current state
+        if self.solver == 'SA-CASSCF':
+            mc = mcscf.CASSCF(mf, self.ncas, self.neleca).state_average_([1/self.nroots]*self.nroots)
+            mc.kernel()
+            mo_sacasscf = mc.mo_coeff
+
+        # Iterate over different states
+        for istate in range(self.nroots):
+
+            if self.solver == 'CASCI':
+                casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+            elif self.solver == 'SS-CASSCF':
+                cas_ss = mcscf.CASSCF(mf, self.ncas, self.neleca).state_specific_(istate)
+                cas_ss.kernel()
+                casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+                casci_bra.casci(cas_ss.mo_coeff)
+            else:
+                casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+                casci_bra.casci(mo_sacasscf)
+
+            self.cascis.append(casci_bra)
 
     def append_to_rdms(self, mol):
         """
@@ -510,6 +591,13 @@ class CAS_EVCont_obj:
         Raises:
             AssertionError: If the mean-field calculation is not converged.
         """
+        # Some checks
+        if self.use_rdm is None:
+            use_rdm = True
+        elif not self.use_rdm:
+            print('Error in append_to_rdms: already using add_state')
+            sys.exit()
+
         # Run mean field calculations for the orbitals
         #mf = mol.copy().RHF()
         mf = scf.RHF(mol.copy())
