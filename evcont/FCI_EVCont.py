@@ -19,7 +19,8 @@ class FCI_EVCont_obj:
         cibasis='canonical',
         nroots=1,
         roots_train=None,
-        irrep_name=None
+        irrep_name=None,
+        lowrank=False
     ):
         """
         Initializes the FCI_EVCont_obj class.
@@ -85,20 +86,6 @@ class FCI_EVCont_obj:
         basis = get_basis(mol,basis_type=self.cibasis)
         h1, h2 = get_integrals(mol, basis)
         
-        #if not self.use_symmetry:
-        #    # OAO basis
-        #    basis = ao_mo_trafo
-    
-        #else:
-        #    # Use canonical for symmetry adapted
-        #    myhf = scf.RHF(mol)
-        #    _ = myhf.scf()
-        #    basis = myhf.mo_coeff
-            
-        # Construct h1 and h2
-        #h1 = np.linalg.multi_dot((basis.T, scf.hf.get_hcore(mol), basis))
-        #h2 = ao2mo.restore(1, ao2mo.kernel(mol, basis), basis.shape[1])
-        
         nroots_train = max(self.roots_train)+1
 
         # Get FCI energies and wavefunctions in SAO basis
@@ -111,17 +98,6 @@ class FCI_EVCont_obj:
             
             e_all, fcivec_all = self.cisolver.kernel(h1, h2, mol.nao, mol.nelec, 
                                                      nroots=nroots_train, orbsym=orbsym,)
-            
-            #u = np.einsum('ji,jk,kl->il',basis,S,ao_mo_trafo)
-            #fcivec = [transform_ci(fcivec_i,mol.nelec,u) for fcivec_i in fcivec]
-    
-
-        #basis = get_basis(mol,basis_type=self.cibasis)
-        #h1, h2 = get_integrals(mol, basis)
-        
-        #nroots_train = max(self.roots_train)+1
-        #e_all, fcivec_all = self.cisolver.kernel(h1, h2, mol.nao, mol.nelec,
-        #                                 nroots=nroots_train)
         
         # If ground state
         if nroots_train == 1:
