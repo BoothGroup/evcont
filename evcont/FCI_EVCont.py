@@ -1,4 +1,5 @@
 import numpy as np
+import sys
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
@@ -7,6 +8,8 @@ from pyscf import scf, ao2mo, fci, symm
 from pyscf.fci.addons import transform_ci
 
 from evcont.ab_initio_gradients_loewdin import get_loewdin_trafo
+
+from evcont.low_rank_utils import reduce_2rdm
 
 class FCI_EVCont_obj:
     """
@@ -20,7 +23,8 @@ class FCI_EVCont_obj:
         nroots=1,
         roots_train=None,
         irrep_name=None,
-        lowrank=False
+        lowrank=False,
+        **kwargs
     ):
         """
         Initializes the FCI_EVCont_obj class.
@@ -70,7 +74,19 @@ class FCI_EVCont_obj:
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
-
+        
+        ### Initialize low-rank attributes
+        self.lowrank = lowrank
+        if lowrank:
+            #self.truncation_style = kwargs['truncation_style']
+            self.kwargs = kwargs
+            
+        # Diagonals of 2-cumulants ([nbra, nket, 3, norb, norb])
+        self.cum_diagonal = None 
+        # Low rank eigendecomposition of the rest of 2-cumulant
+        # dictionary[(nbra, nket)] = (vals_trunc, vecs_trunc)
+        self.vecs_lowrank = {}
+    
     def append_to_rdms(self, mol):
         """
         Append a new training geometry by growing the t-RDMs.
@@ -137,18 +153,33 @@ class FCI_EVCont_obj:
         
                 self.ens.append(e + mol.energy_nuc())
                 self.mol_index.append(mindex)
-        
-                overlap_new = np.ones((len(self.fcivecs), len(self.fcivecs)))
+                            
+                new_ntrain = len(self.fcivecs)
+                
+                overlap_new = np.ones((new_ntrain, new_ntrain))
                 if self.overlap is not None:
                     overlap_new[:-1, :-1] = self.overlap
                 one_rdm_new = np.ones((len(self.fcivecs), len(self.fcivecs), mol.nao, mol.nao))
                 if self.one_rdm is not None:
                     one_rdm_new[:-1, :-1, :, :] = self.one_rdm
-                two_rdm_new = np.ones(
-                    (len(self.fcivecs), len(self.fcivecs), mol.nao, mol.nao, mol.nao, mol.nao)
-                )
-                if self.two_rdm is not None:
-                    two_rdm_new[:-1, :-1, :, :, :, :] = self.two_rdm
+                
+                # Only define two_rdm if not lowrank
+                if not self.lowrank:
+                    two_rdm_new = np.ones(
+                        (len(self.fcivecs), len(self.fcivecs), mol.nao, mol.nao, mol.nao, mol.nao)
+                    )
+                    if self.two_rdm is not None:
+                        two_rdm_new[:-1, :-1, :, :, :, :] = self.two_rdm
+                        
+                else:
+                    cum_diagonal_new = np.ones(
+                        (len(self.fcivecs), len(self.fcivecs), 3, mol.nao, mol.nao)
+                    )
+                    if self.cum_diagonal is not None:
+                        cum_diagonal_new[:-1, :-1, :, :, :] = self.cum_diagonal
+                    
+                        
+                # Iterate over training states to add RDMs to the existing states
                 for i in range(len(self.fcivecs)):
                     ovlp = self.fcivecs[-1].flatten().conj().dot(self.fcivecs[i].flatten())
                     overlap_new[-1, i] = ovlp
@@ -162,13 +193,34 @@ class FCI_EVCont_obj:
                     one_rdm_new[-1, i, :, :] = rdm1
                     one_rdm_new[i, -1, :, :] = rdm1_conj
                     #one_rdm_new[i, -1, :, :] = rdm1.conj()
-                    two_rdm_new[-1, i, :, :, :, :] = rdm2
-                    two_rdm_new[i, -1, :, :, :, :] = rdm2_conj
-                    #two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                    
+                    if not self.lowrank:
+                        two_rdm_new[-1, i, :, :, :, :] = rdm2
+                        two_rdm_new[i, -1, :, :, :, :] = rdm2_conj
+                        #two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                    
+                    # Low rank
+                    else:
+                        # Get low rank representation
+                        diagonals, lowrank_vecs = reduce_2rdm(rdm1, rdm2, ovlp, 
+                                         **self.kwargs)
+                        
+                        diagonals_conj, lowrank_vecs_conj = reduce_2rdm(rdm1_conj, rdm2_conj, ovlp, 
+                                         **self.kwargs)
+                        
+                        cum_diagonal_new[-1, i, :, :, :] = diagonals
+                        cum_diagonal_new[i, -1, :, :, :] = diagonals_conj
+                        
+                        self.vecs_lowrank[(new_ntrain-1, i)] = lowrank_vecs
+                        self.vecs_lowrank[(i, new_ntrain-1)] = lowrank_vecs_conj
+                        
         
                 self.overlap = overlap_new
                 self.one_rdm = one_rdm_new
-                self.two_rdm = two_rdm_new
+                if not self.lowrank:
+                    self.two_rdm = two_rdm_new
+                else:
+                    self.cum_diagonal = cum_diagonal_new
 
     def prune_datapoints(self, keep_ids):
         """
@@ -181,6 +233,10 @@ class FCI_EVCont_obj:
             None
         """
 
+        if self.nroots > 1 or self.lowrank:
+            print('Error in prune_datapoints: Pruning has not been implemented for excited states or low rank implementations')
+            sys.exit()
+            
         if self.overlap is not None:
             self.overlap = self.overlap[np.ix_(keep_ids, keep_ids)]
         if self.one_rdm is not None:

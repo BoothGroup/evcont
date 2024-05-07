@@ -19,20 +19,26 @@ import scipy
 import itertools
 from pyscf import scf, gto, ao2mo, fci, lib
 
+from evcont.electron_integral_utils import get_loewdin_trafo
+
+# Threshold on the overlap between states below which cumulant expansion is
+# assumed to be not valid. In that case, the 2tRDM itself is decomposed
+OVLP_THR = 1e-6
+
 def rdm2_from_rdm1(rdm1, ovlp):
     """
     1-body contribution to the 2-(transition) reduced density matrices
     """
     # 
-    rdm1_contribution = ( np.einsum('ij,kl->jilk', rdm1, rdm1) + 0.5 * np.einsum('kj,il->jilk', rdm1, rdm1) ) * 1/ovlp
+    rdm1_contribution = ( np.einsum('ij,kl->jilk', rdm1, rdm1) - 0.5 * np.einsum('kj,il->jilk', rdm1, rdm1) ) * 1/ovlp
 
     return rdm1_contribution
 
-# TODO: For HF, add the option to discard the cumulant and 
-# construct rdm2 from rdm1 using the above function
+# TODO: For HF (or determinant solvers), add the option to discard the cumulant 
+# and construct rdm2 from rdm1 using the above function
 
 def reduce_2rdm(rdm1, rdm2, ovlp, 
-                truncation_style='eigval',nvecs=10, eval_thr=10, ham_thr=,
+                truncation_style='eigval',nvecs=10, eval_thr=10, ham_thr=0.1,
                 diag_mask=None):
     """
     Function to lower the rank of 2-transition-RDM between a pair of 
@@ -90,7 +96,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     if truncation_style in ['eigval','nvec']:
         lowrank_vecs = select_lowrank(evals, evecs, norb, truncation_style=truncation_style, nvecs=nvecs, eval_thr=eval_thr)
 
-    elif truncation_style is 'ham':
+    elif truncation_style == 'ham':
         print('Error in reduce_2rdm: Truncation based on subspace Hamiltonian elements has not been implemented yet.')
         sys.exit()
 
@@ -100,48 +106,90 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
 
     return diagonals, lowrank_vecs
 
-def lowrank_hamiltonian():
+def lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs, sao_basis=None):
     """
-    Construct subspace Hamiltonian using diagonals and low rank vectors of 2-transition-cumulant
-    O(N^3) scaling
+    Construct subspace Hamiltonian using diagonals and low rank vectors of 
+    2-transition-cumulant -- O(N^3) scaling
+    
+    Input:
+        mol (Mole object): pySCF mole object at the test geometry
+        
     """
-    """
-    subspace_h[bra, ket] = np.einsum('kl,kl->', training_1rdms[bra, ket, :, :], h1e_sao)
+    ### Preliminaries
+    ntrain = S.shape[0]
+    subspace_h = np.zeros((ntrain, ntrain))
 
-    # Get Coulomb and exchange matrix with correlated one-body matrices
-    # Note these 1RDMs need to be in the AO representation
-    training_1rdm_ao = np.einsum('ai,ij,bj->ab', sao_basis, training_1rdms[bra, ket, :, :], sao_basis)
-    training_1rdm_ao_conj = np.einsum('ai,ij,bj->ab', sao_basis, training_1rdms[ket, bra, :, :], sao_basis)
-    # Note that we need hermi=0 here to account for the fact that the off-diagonals will not be hermitian
-    vj, vk = mf.get_jk(dm = training_1rdm_ao, hermi=0)
-    #Coul_contrib = 0.5 * np.einsum('ij,ij->', vj, training_1rdm_ao)
-    #assert(np.isclose(Coul_contrib, 0.5 * np.einsum('ij,kl,Pij,Pkl->',training_1rdm_ao, training_1rdm_ao, Lpq_ao, Lpq_ao)))
-    #exch_contrib = 0.25 * np.einsum('ij,ij->', vk, training_1rdm_ao_conj)
-    #assert(np.isclose(exch_contrib, 0.25 * np.einsum('jk,il,Pij,Pkl->',training_1rdm_ao_conj, training_1rdm_ao, Lpq_ao, Lpq_ao)))
-    subspace_h[bra, ket] += 0.5 * np.einsum('ij,ij->', vj, training_1rdm_ao) * 1/training_ovlp[bra, ket]
-    subspace_h[bra, ket] -= 0.25 * np.einsum('ij,ij->', vk, training_1rdm_ao_conj) * 1/training_ovlp[bra, ket]
+    # Initiate the mean field object to use DF integrals (no need to use kernel)
+    mf = scf.RHF(mol).density_fit(auxbasis='weigend')
+    
+    # SAO basis
+    if sao_basis is None:
+        sao_basis = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    
+    # 1-electron integrals with DF
+    h1_ao = mf.get_hcore()
+    h1e_sao = np.einsum('ai,ab,bj->ij', sao_basis, h1_ao, sao_basis)
+    
+    subspace_h = np.einsum('...kl,kl->...', one_RDM, h1e_sao)
+    # 1-RDM in AO basis
+    training_1rdm_ao = np.einsum('ai,...ij,bj->...ab', sao_basis, one_RDM, sao_basis)
 
-    # To get N^3 scaling of the contraction below, we need the dimension of 'a' to be independent of system size.
-    half_cont_cumulant = np.einsum('Pij,ija->Pa', Lpq_sao, lowrank_reps[ind][3])
-    subspace_h[bra, ket] += 0.5 * np.einsum('Pa,a,Pa->', half_cont_cumulant, lowrank_reps[ind][4], half_cont_cumulant)
+    # 1-body Coulomb and exchange matrices
+    vj, vk = mf.with_df.get_jk(dm = training_1rdm_ao.transpose([0,1,3,2]), hermi=0)
+    subspace_h += 0.5 * np.einsum('...ij,...ij->...', vj, training_1rdm_ao) / S
+    subspace_h -= 0.25 * np.einsum('...ij,...ij->...', vk, training_1rdm_ao) / S
 
-    # Finally, we need to add the difference to the diagonals of the cumulant contribution from the exact cumulant/tRDM
-    # remove the i=j part of the ijij and ijji diagonals to avoid double counting
-    double_count = np.diag(np.einsum('iia,a,iia->i', lowrank_reps[ind][3], lowrank_reps[ind][4], lowrank_reps[ind][3]))
-    lowrank_iijj = np.einsum('iia,a,jja->ij', lowrank_reps[ind][3], lowrank_reps[ind][4], lowrank_reps[ind][3])
-    lowrank_ijij = np.einsum('ija,a,ija->ij', lowrank_reps[ind][3], lowrank_reps[ind][4], lowrank_reps[ind][3]) - double_count
-    lowrank_ijji = np.einsum('ija,a,jia->ij', lowrank_reps[ind][3], lowrank_reps[ind][4], lowrank_reps[ind][3]) - double_count
+    # 2-electron integrals with DF
+    Lpq_sao = ao2mo._ao2mo.nr_e2(mf.with_df._cderi, sao_basis,
+        (0, sao_basis.shape[1], 0, sao_basis.shape[1]),aosym="s2",mosym="s2")
+    Lpq_sao = lib.unpack_tril(Lpq_sao)
+    
+    # Construct the subspace Hamiltonian
+    # Would be good to optimize so as to contract for the whole hamiltonian in one go...?
+    for bra in range(ntrain):
+        for ket in range(ntrain):
+            
+            ### 1-body contriubtions
+            
+            #subspace_h[bra, ket] = np.einsum('kl,kl->', one_RDM[bra, ket, :, :], h1e_sao)
+            
+            # 1-RDM in AO basis
+            #training_1rdm_ao = np.einsum('ai,ij,bj->ab', sao_basis, one_RDM[bra, ket, :, :], sao_basis)
+            #training_1rdm_ao_conj = np.einsum('ai,ij,bj->ab', sao_basis, one_RDM[ket, bra, :, :], sao_basis)
+        
+            # Coulomb and exchange matrices
+            #vj, vk = mf.get_jk(dm = training_1rdm_ao, hermi=0)
+            
+            #training_1rdm_ao = one_RDM_ao[bra, ket,:,:]
+            #training_1rdm_ao_conj = one_RDM_ao[ket, bra,:,:]
+            
+            #vj, vk = vj_all[bra,ket,:,:], vk_all[bra,ket,:,:]
+            
+            # Add the 1-body contributions of 2-RDM into subspace Hamiltonian
+            #subspace_h[bra, ket] += 0.5 * np.einsum('ij,ij->', vj, training_1rdm_ao) * 1/S[bra, ket]
+            #subspace_h[bra, ket] -= 0.25 * np.einsum('ij,ij->', vk, training_1rdm_ao_conj) * 1/S[bra, ket]
 
-    # Add in (last two contractions can be combined due to permutational invariance?)
-    subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pii,Pjj->',training_diags[bra, ket, 0, :, :] - lowrank_iijj, Lpq_sao, Lpq_sao)
-    subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pij,Pij->',training_diags[bra, ket, 1, :, :] - lowrank_ijij, Lpq_sao, Lpq_sao)
-    subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pij,Pji->',training_diags[bra, ket, 2, :, :] - lowrank_ijji, Lpq_sao, Lpq_sao)
-    """
-    return 0
+            ### Low rank 2-body cumulant contributions
+            
+            half_cont_cumulant = np.einsum('Pij,ija->Pa', Lpq_sao, lowrank_vecs[(bra, ket)][1])
+            subspace_h[bra, ket] += 0.5 * np.einsum('Pa,a,Pa->', half_cont_cumulant, lowrank_vecs[(bra, ket)][0], half_cont_cumulant)
+
+            # remove the i=j part of the ijij and ijji diagonals to avoid double counting
+            double_count = np.diag(np.einsum('iia,a,iia->i', lowrank_vecs[(bra, ket)][1], lowrank_vecs[(bra, ket)][0], lowrank_vecs[(bra, ket)][1]))
+            lowrank_iijj = np.einsum('iia,a,jja->ij', lowrank_vecs[(bra, ket)][1], lowrank_vecs[(bra, ket)][0], lowrank_vecs[(bra, ket)][1])
+            lowrank_ijij = np.einsum('ija,a,ija->ij', lowrank_vecs[(bra, ket)][1], lowrank_vecs[(bra, ket)][0], lowrank_vecs[(bra, ket)][1]) - double_count
+            lowrank_ijji = np.einsum('ija,a,jia->ij', lowrank_vecs[(bra, ket)][1], lowrank_vecs[(bra, ket)][0], lowrank_vecs[(bra, ket)][1]) - double_count
+
+            # Add in (last two contractions can be combined due to permutational invariance?)
+            subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pii,Pjj->',cum_diagonal[bra, ket, 0, :, :] - lowrank_iijj, Lpq_sao, Lpq_sao)
+            subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pij,Pij->',cum_diagonal[bra, ket, 1, :, :] - lowrank_ijij, Lpq_sao, Lpq_sao)
+            subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pij,Pji->',cum_diagonal[bra, ket, 2, :, :] - lowrank_ijji, Lpq_sao, Lpq_sao)
+
+    return subspace_h
 
 def select_lowrank(evals, evecs, norb, truncation_style='eigval',nvecs=10, eval_thr=10):
     """
-
+    
     """
     # Sort the eigenstates by the square of their eigenvalue
     idx = (-np.power(evals, 2)).argsort()
@@ -149,7 +197,7 @@ def select_lowrank(evals, evecs, norb, truncation_style='eigval',nvecs=10, eval_
     evecs_sort = evecs[:,idx]
 
     # Truncate through either eigvals or a given number of vectors
-    if truncation_style is 'eigval':
+    if truncation_style == 'eigval':
         nvecs = len(evals_sort[np.power(evals_sort,2) > eval_thr])
 
     #norb = np.sqrt(evecs_sort.shape[0],dtype=int)
