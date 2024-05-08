@@ -22,16 +22,21 @@ from pyscf import scf, gto, ao2mo, fci, lib
 from evcont.electron_integral_utils import get_loewdin_trafo
 
 # Threshold on the overlap between states below which cumulant expansion is
-# assumed to be not valid. In that case, the 2tRDM itself is decomposed
-OVLP_THR = 1e-6
+# assumed to be not valid. In that case, the 2tRDM itself is decomposed by
+# assuming cumulant ~ 2tRDM
+OVLP_THR = 1e-8
 
 def rdm2_from_rdm1(rdm1, ovlp):
     """
     1-body contribution to the 2-(transition) reduced density matrices
     """
     # 
-    rdm1_contribution = ( np.einsum('ij,kl->jilk', rdm1, rdm1) - 0.5 * np.einsum('kj,il->jilk', rdm1, rdm1) ) * 1/ovlp
-
+    if np.abs(ovlp) > OVLP_THR:
+        rdm1_contribution = ( np.einsum('ij,kl->jilk', rdm1, rdm1) - 0.5 * np.einsum('kj,il->jilk', rdm1, rdm1) ) * 1/ovlp
+    else:
+        norb = rdm1.shape[0]
+        rdm1_contribution = np.zeros([norb,norb,norb,norb])
+        
     return rdm1_contribution
 
 # TODO: For HF (or determinant solvers), add the option to discard the cumulant 
@@ -134,10 +139,14 @@ def lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs, sao_basis=N
     # 1-RDM in AO basis
     training_1rdm_ao = np.einsum('ai,...ij,bj->...ab', sao_basis, one_RDM, sao_basis)
 
+    # Mask zero overlap to remove their 1RDM contribution
+    # Fixes numerical instability between excited states at same geometry
+    S_masked = np.where(np.abs(S) < OVLP_THR, np.inf, S)
+    
     # 1-body Coulomb and exchange matrices
     vj, vk = mf.with_df.get_jk(dm = training_1rdm_ao.transpose([0,1,3,2]), hermi=0)
-    subspace_h += 0.5 * np.einsum('...ij,...ij->...', vj, training_1rdm_ao) / S
-    subspace_h -= 0.25 * np.einsum('...ij,...ij->...', vk, training_1rdm_ao) / S
+    subspace_h += 0.5 * np.einsum('...ij,...ij->...', vj, training_1rdm_ao) / S_masked
+    subspace_h -= 0.25 * np.einsum('...ij,...ij->...', vk, training_1rdm_ao) / S_masked
 
     # 2-electron integrals with DF
     Lpq_sao = ao2mo._ao2mo.nr_e2(mf.with_df._cderi, sao_basis,
