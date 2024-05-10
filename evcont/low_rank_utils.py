@@ -25,6 +25,8 @@ from evcont.electron_integral_utils import get_loewdin_trafo
 # assumed to be not valid. In that case, the 2tRDM itself is decomposed by
 # assuming cumulant ~ 2tRDM
 OVLP_THR = 1e-8
+OVLP_THR = 5e-2
+#OVLP_THR = 1e-1
 
 def rdm2_from_rdm1(rdm1, ovlp):
     """
@@ -43,8 +45,9 @@ def rdm2_from_rdm1(rdm1, ovlp):
 # and construct rdm2 from rdm1 using the above function
 
 def reduce_2rdm(rdm1, rdm2, ovlp, 
-                truncation_style='eigval',nvecs=10, eval_thr=10, ham_thr=0.1,
-                diag_mask=None):
+                truncation_style='eigval',nvecs=10, eval_thr=0.1, ham_thr=0.001,
+                diag_mask=None,
+                mol=None,train_en=None):
     """
     Function to lower the rank of 2-transition-RDM between a pair of 
     training states into the diagonals of 2-transition-cumulant and
@@ -98,12 +101,30 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     evals, evecs = scipy.linalg.eigh(mat_decomp.reshape((norb_sq, norb_sq)))
 
     # Select low rank vectors
+    
+    # Choose at least one vector when decomposing tRDM vs cumulant
+    if abs(ovlp) < OVLP_THR:
+        min_nvecs = 1
+    else:
+        min_nvecs = 0
+    
     if truncation_style in ['eigval','nvec']:
-        lowrank_vecs = select_lowrank(evals, evecs, norb, truncation_style=truncation_style, nvecs=nvecs, eval_thr=eval_thr)
+        lowrank_vecs = select_lowrank(evals, evecs, norb, truncation_style=truncation_style, 
+                                      nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
 
     elif truncation_style == 'ham':
-        print('Error in reduce_2rdm: Truncation based on subspace Hamiltonian elements has not been implemented yet.')
-        sys.exit()
+        
+        # Make sure the mol and training energy is given for this truncation
+        if mol is None or train_en is None:
+            print('Error in reduce_2rdm: Insufficient input for decomposition based on Hamiltonian error.')
+            sys.exit()
+            
+        lowrank_vecs = select_lowrank_ham(evals, evecs, diagonals, norb,
+                               rdm1, ovlp,
+                               mol, train_en,
+                               ham_thr=ham_thr, min_nvec=min_nvecs)
+        #print('Error in reduce_2rdm: Truncation based on subspace Hamiltonian elements has not been implemented yet.')
+        #sys.exit()
 
     else:
         print('Unknown truncation_style in reduce_2rdm: %s'%truncation_style)
@@ -125,7 +146,8 @@ def lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs, sao_basis=N
     subspace_h = np.zeros((ntrain, ntrain))
 
     # Initiate the mean field object to use DF integrals (no need to use kernel)
-    mf = scf.RHF(mol).density_fit(auxbasis='weigend')
+    #mf = scf.RHF(mol).density_fit(auxbasis='weigend')
+    mf = scf.RHF(mol).density_fit(auxbasis='cc-pvqz-ri')
     
     # SAO basis
     if sao_basis is None:
@@ -135,9 +157,11 @@ def lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs, sao_basis=N
     h1_ao = mf.get_hcore()
     h1e_sao = np.einsum('ai,ab,bj->ij', sao_basis, h1_ao, sao_basis)
     
-    subspace_h = np.einsum('...kl,kl->...', one_RDM, h1e_sao)
     # 1-RDM in AO basis
     training_1rdm_ao = np.einsum('ai,...ij,bj->...ab', sao_basis, one_RDM, sao_basis)
+
+    ### 1-body contributions
+    subspace_h = np.einsum('...kl,kl->...', one_RDM, h1e_sao)
 
     # Mask zero overlap to remove their 1RDM contribution
     # Fixes numerical instability between excited states at same geometry
@@ -196,7 +220,8 @@ def lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs, sao_basis=N
 
     return subspace_h
 
-def select_lowrank(evals, evecs, norb, truncation_style='eigval',nvecs=10, eval_thr=10):
+def select_lowrank(evals, evecs, norb, 
+                   truncation_style='eigval',nvecs=10, eval_thr=0.1, min_nvec=0):
     """
     
     """
@@ -208,13 +233,75 @@ def select_lowrank(evals, evecs, norb, truncation_style='eigval',nvecs=10, eval_
     # Truncate through either eigvals or a given number of vectors
     if truncation_style == 'eigval':
         nvecs = len(evals_sort[np.power(evals_sort,2) > eval_thr])
-
+        nvecs = max(min_nvec, nvecs)
+        
     #norb = np.sqrt(evecs_sort.shape[0],dtype=int)
     vals_trunc = evals_sort[:nvecs]
     vecs_trunc = evecs_sort[:,:nvecs].reshape((norb, norb, nvecs))
 
     return vals_trunc, vecs_trunc
 
+def select_lowrank_ham(evals, evecs, diagonal, norb,
+                       rdm1, ovlp,
+                       mol, training_energy,
+                       ham_thr=0.001, min_nvec=0
+                       ):
+    """
+    Select a low rank decomposition of the cumulant/RDM based on the error on
+    subspace hamiltonian
+    """
+    
+    # Sort the eigenstates by the square of their eigenvalue
+    idx = (-np.power(evals, 2)).argsort()
+    evals_sort = evals[idx]
+    evecs_sort = evecs[:,idx]
+    
+    # Prepare rdms in a suitable format
+    one_RDM = np.zeros([1,1,norb,norb])
+    one_RDM[0,0,:,:] = rdm1
+    
+    cum_diagonal = np.zeros([1,1,3,norb,norb])
+    cum_diagonal[0,0,:,:,:] = diagonal
+    
+    S = np.array([[ovlp]])
+    
+    # Exact element of subspace Hamiltonian
+    ham_training = ovlp * training_energy
+    
+    # Iterate over subset
+    ham_err = [1000,1000]
+    nvecs = 0
+    while (abs(ham_err[-1]) > ham_thr or abs(ham_err[-2]) > ham_thr) and nvecs <= norb*norb:
+        # Truncate
+        vals_trunc = evals_sort[:nvecs]
+        vecs_trunc = evecs_sort[:,:nvecs].reshape((norb, norb, nvecs))
+        lowrank_vecs = {(0,0):(vals_trunc,vecs_trunc)}
+        
+        # Compute subspace Hamiltonian
+        ham_new = lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, 
+                                      lowrank_vecs, sao_basis=None)[0,0]
+        
+        # Compute error and go to next iteration to see if it is good enough
+        ham_err.append(ham_training - ham_new)
+        #print(nvecs, ovlp, training_energy)
+        #print(nvecs, ham_new, ham_training, ham_err[-1])
+        nvecs += 1
+        
+    # Truncated decomposition
+    if nvecs > norb*norb:
+        nvec_select = norb*norb 
+    else:
+        nvec_select = max(min_nvec, nvecs-2)
+        
+    vals_trunc = evals_sort[:nvec_select]
+    vecs_trunc = evecs_sort[:,:nvec_select].reshape((norb, norb, nvec_select))
+    
+    #1/0
+    #print('energy', training_energy, 'overlap', ovlp)
+    #print('     ', ham_new, ham_training, ham_err)
+    
+    return vals_trunc, vecs_trunc
+    
 def build_diag_mask(norb):
     """
     Function that returns a mask array for diagonal matrices of

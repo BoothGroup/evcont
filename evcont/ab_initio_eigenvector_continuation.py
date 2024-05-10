@@ -121,6 +121,14 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
         "ijklmn,klmn->ij", two_RDM, h2, optimize="optimal"
     )
 
+    #print('  Hamiltonian')
+    #print(H.tolist())
+    #plt.figure()
+    #sb.heatmap(H, annot=True)
+    #plt.savefig('hamiltonian_%i.png'%(rdm_computation))
+    #print('  Overlap')
+    #print(S.tolist())
+    
     if hermitian is True:
         # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
         #vals, vecs = eigh(H, S)

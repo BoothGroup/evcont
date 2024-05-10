@@ -70,6 +70,7 @@ class FCI_EVCont_obj:
         # Initialize attributes
         self.fcivecs = []
         self.ens = []
+        self.ens_nuc = []
         self.mol_index = []
         self.overlap = None
         self.one_rdm = None
@@ -151,7 +152,8 @@ class FCI_EVCont_obj:
                 
                 self.fcivecs.append(fcivec)
         
-                self.ens.append(e + mol.energy_nuc())
+                self.ens.append(e)
+                self.ens_nuc.append(mol.energy_nuc())
                 self.mol_index.append(mindex)
                             
                 new_ntrain = len(self.fcivecs)
@@ -202,11 +204,15 @@ class FCI_EVCont_obj:
                     # Low rank
                     else:
                         # Get low rank representation
-                        diagonals, lowrank_vecs = reduce_2rdm(rdm1, rdm2, ovlp, 
-                                         **self.kwargs)
+                        diagonals, lowrank_vecs = \
+                            reduce_2rdm(rdm1, rdm2, ovlp, 
+                                        mol=mol, train_en=e,
+                                        **self.kwargs)
                         
-                        diagonals_conj, lowrank_vecs_conj = reduce_2rdm(rdm1_conj, rdm2_conj, ovlp, 
-                                         **self.kwargs)
+                        diagonals_conj, lowrank_vecs_conj = \
+                            reduce_2rdm(rdm1_conj, rdm2_conj, ovlp,        
+                                        mol=mol, train_en=e,
+                                        **self.kwargs)
                         
                         cum_diagonal_new[-1, i, :, :, :] = diagonals
                         cum_diagonal_new[i, -1, :, :, :] = diagonals_conj
