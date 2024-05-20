@@ -53,7 +53,8 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
     return en_approx, gs_approx
 
 
-def approximate_multistate_lowrank(mol, one_RDM, cum_diagonal, lowrank_vecs, S, nroots=1, hermitian=True):
+def approximate_multistate_lowrank(mol, one_RDM, cum_diagonal, lowrank_vecs, S, 
+                                   nroots=1, hermitian=True, df_basis='weigend'):
     """
     Returns multiple approximate electronic states from solving the generalised
     eigenvalue problem defined via the one- and two-body transition RDMs.
@@ -72,8 +73,18 @@ def approximate_multistate_lowrank(mol, one_RDM, cum_diagonal, lowrank_vecs, S, 
         Tuple[float, np.ndarray]: Energy approximation and ground state approximation.
     """
     # Calculate the Hamiltonian matrix
-    H = lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs)
+    H = lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs,df_basis=df_basis)
 
+    #print('  Hamiltonian')
+    #print(H.tolist())
+    #plt.figure()
+    #sb.heatmap(H, annot=True)
+    #plt.show()
+
+    #plt.savefig('hamiltonian_%i.png'%(rdm_computation))
+    #print('  Overlap')
+    #print(S.tolist())
+    
     if hermitian is True:
         # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
         #vals, vecs = eigh(H, S)
@@ -125,6 +136,7 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
     #print(H.tolist())
     #plt.figure()
     #sb.heatmap(H, annot=True)
+    #plt.show()
     #plt.savefig('hamiltonian_%i.png'%(rdm_computation))
     #print('  Overlap')
     #print(S.tolist())
@@ -291,7 +303,8 @@ def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=Tru
     return total_energy, vec
 
 
-def approximate_multistate_lowrank_OAO(mol, one_RDM, cum_diagonal, lowrank_vecs, S, nroots=1, hermitian=True):
+def approximate_multistate_lowrank_OAO(mol, one_RDM, cum_diagonal, lowrank_vecs, S, 
+                                       nroots=1, hermitian=True, df_basis='weigend'):
     """
     This function approximates multiple state energies and wavefunctions of a given
     molecule from an eigenvector continuation with t-RDMS and the overlap matrix S.
@@ -316,7 +329,8 @@ def approximate_multistate_lowrank_OAO(mol, one_RDM, cum_diagonal, lowrank_vecs,
 
     # Approximate the ground state energy and wavefunction in projected subspace
     #en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
-    en, vec = approximate_multistate_lowrank(mol, one_RDM, cum_diagonal, lowrank_vecs, S, nroots=nroots, hermitian=hermitian)
+    en, vec = approximate_multistate_lowrank(mol, one_RDM, cum_diagonal, lowrank_vecs, S, 
+                                             nroots=nroots, hermitian=hermitian, df_basis=df_basis)
     # Calculate the total energy by adding the nuclear repulsion energy
     total_energy = en.real + mol.energy_nuc()
 

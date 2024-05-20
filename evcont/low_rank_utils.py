@@ -62,7 +62,9 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
             Available options: {'eigval' (default) : Choose vectors whose eigenvalue**2 is more than eval_thr,
                                 'nvec'             : Choose 'nvec' highest eval**2 number of vectors,
                                 'ham' : Choose the minimum number of vectors such that error in the subspace 
-                                        Hamiltonian matrix elements is less than 'ham_thr'}
+                                        Hamiltonian matrix elements is less than 'ham_thr'
+                                'ham_en' : Choose the minimum number of vectors such that error in the subspace 
+                                        Hamiltonian*overlap matrix elements is less than 'ham_thr'}
         nvecs (int): Number of low rank vectors to include
         eval_thr (float): Threshold to choose vectors based on their eval**2
         ham_thr (float): Threshold to choose vectors based on their H matrix elements (Hartree units)
@@ -112,7 +114,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         lowrank_vecs = select_lowrank(evals, evecs, norb, truncation_style=truncation_style, 
                                       nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
 
-    elif truncation_style == 'ham':
+    elif truncation_style in ['ham','ham_en']:
         
         # Make sure the mol and training energy is given for this truncation
         if mol is None or train_en is None:
@@ -122,6 +124,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         lowrank_vecs = select_lowrank_ham(evals, evecs, diagonals, norb,
                                rdm1, ovlp,
                                mol, train_en,
+                               truncation_style=truncation_style,
                                ham_thr=ham_thr, min_nvec=min_nvecs)
         #print('Error in reduce_2rdm: Truncation based on subspace Hamiltonian elements has not been implemented yet.')
         #sys.exit()
@@ -132,7 +135,8 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
 
     return diagonals, lowrank_vecs
 
-def lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs, sao_basis=None):
+def lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs, 
+                        sao_basis=None, df_basis='weigend'):
     """
     Construct subspace Hamiltonian using diagonals and low rank vectors of 
     2-transition-cumulant -- O(N^3) scaling
@@ -147,7 +151,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, lowrank_vecs, sao_basis=N
 
     # Initiate the mean field object to use DF integrals (no need to use kernel)
     #mf = scf.RHF(mol).density_fit(auxbasis='weigend')
-    mf = scf.RHF(mol).density_fit(auxbasis='cc-pvqz-ri')
+    mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
     
     # SAO basis
     if sao_basis is None:
@@ -244,6 +248,7 @@ def select_lowrank(evals, evecs, norb,
 def select_lowrank_ham(evals, evecs, diagonal, norb,
                        rdm1, ovlp,
                        mol, training_energy,
+                       truncation_style='ham',
                        ham_thr=0.001, min_nvec=0
                        ):
     """
@@ -282,7 +287,11 @@ def select_lowrank_ham(evals, evecs, diagonal, norb,
                                       lowrank_vecs, sao_basis=None)[0,0]
         
         # Compute error and go to next iteration to see if it is good enough
-        ham_err.append(ham_training - ham_new)
+        if truncation_style == 'ham':
+            ham_err.append(ham_training - ham_new)
+        elif truncation_style == 'ham_en':
+            ham_err.append(training_energy - ham_new/ovlp)
+
         #print(nvecs, ovlp, training_energy)
         #print(nvecs, ham_new, ham_training, ham_err[-1])
         nvecs += 1
