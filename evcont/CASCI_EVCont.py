@@ -2,6 +2,7 @@ import numpy as np
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
+from evcont.low_rank_utils import reduce_2rdm
 from pygnme import wick, utils
 
 #from pyscf.mcscf.casci import CASCI
@@ -99,7 +100,9 @@ class CAS_EVCont_obj:
     """
 
     def __init__(self, ncas, neleca, #casci_solver=CASCI, 
-                nroots=1, solver='SS-CASSCF'):
+                nroots=1, solver='SS-CASSCF',
+                lowrank=False,
+                **kwargs):
         """
         Initialize the CAS_EVCont_obj.
 
@@ -138,6 +141,18 @@ class CAS_EVCont_obj:
         # Set flags for using add_state vs append_to_rdms
         # (to prevent double addition into self.cascis or missing states in tRDMs)
         self.use_rdm = None
+        
+        ### Initialize low-rank attributes
+        self.lowrank = lowrank
+        if lowrank:
+            #self.truncation_style = kwargs['truncation_style']
+            self.kwargs = kwargs
+            
+        # Diagonals of 2-cumulants ([nbra, nket, 3, norb, norb])
+        self.cum_diagonal = None 
+        # Low rank eigendecomposition of the rest of 2-cumulant
+        # dictionary[(nbra, nket)] = (vals_trunc, vecs_trunc)
+        self.vecs_lowrank = {}
 
     def otf_hamiltonian_old(self, h1, h2):
         """ 
@@ -597,6 +612,8 @@ class CAS_EVCont_obj:
         elif not self.use_rdm:
             print('Error in append_to_rdms: already using add_state')
             sys.exit()
+            
+        lowrank = self.lowrank
 
         # Run mean field calculations for the orbitals
         #mf = mol.copy().RHF()
@@ -622,8 +639,13 @@ class CAS_EVCont_obj:
             # Read the DM representation from existing training states
             overlap = self.overlap
             one_rdm = self.one_rdm
-            two_rdm = self.two_rdm
-
+            if not lowrank:
+                two_rdm = self.two_rdm
+            else:
+                cum_diagonal = self.cum_diagonal
+                vecs_lowrank = self.vecs_lowrank
+                
+            # CAS solver
             if self.solver == 'CASCI':
                 casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
             elif self.solver == 'SS-CASSCF':
@@ -640,8 +662,9 @@ class CAS_EVCont_obj:
             cascis = self.cascis
             n_cascis = len(cascis)
 
-            casci_bra.kernel()
-
+            out = casci_bra.kernel()
+            e = out[0]
+            
             assert np.all(casci_bra.fcisolver.converged)
 
             if hasattr(casci_bra, "converged"):
@@ -685,8 +708,30 @@ class CAS_EVCont_obj:
                         mo_coeff_bra.shape[0],
                     )
                 )
-                if two_rdm is not None:
-                    two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
+                
+                # Only define two_rdm if not lowrank
+                if not lowrank:
+                    two_rdm_new = np.zeros(
+                        (
+                            n_cascis,
+                            n_cascis,
+                            mo_coeff_bra.shape[0],
+                            mo_coeff_bra.shape[0],
+                            mo_coeff_bra.shape[0],
+                            mo_coeff_bra.shape[0],
+                        )
+                    )
+                    if two_rdm is not None:
+                        two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
+                        
+                else:
+                    cum_diagonal_new = np.ones(
+                        (n_cascis,
+                         n_cascis, 3, mo_coeff_bra.shape[0], mo_coeff_bra.shape[0])
+                    )
+                    if cum_diagonal is not None:
+                        cum_diagonal_new[:-1, :-1, :, :, :] = cum_diagonal
+                    
             else:
                 overlap_new = one_rdm_new = two_rdm_new = None
 
@@ -821,11 +866,39 @@ class CAS_EVCont_obj:
 
                     one_rdm_new[-1, i, :, :] = rdm1
                     one_rdm_new[i, -1, :, :] = rdm1.conj()
-                    two_rdm_new[-1, i, :, :, :, :] = rdm2
-                    two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                    
+                    if not lowrank:
+                        two_rdm_new[-1, i, :, :, :, :] = rdm2
+                        two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                        #two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                    
+                    # Low rank
+                    else:
+                        # Get low rank representation
+                        diagonals, lowrank_vecs = \
+                            reduce_2rdm(rdm1, rdm2, overlap_accumulate, 
+                                        mol=mol, train_en=e,
+                                        **self.kwargs)
+                        
+                        #diagonals_conj, lowrank_vecs_conj = \
+                        #    reduce_2rdm(rdm1_conj, rdm2_conj, ovlp,        
+                        #                mol=mol, train_en=e,
+                        #                **self.kwargs)
+                        
+                        cum_diagonal_new[-1, i, :, :, :] = diagonals
+                        #cum_diagonal_new[i, -1, :, :, :] = diagonals_conj
+                        
+                        vecs_lowrank[(n_cascis-1, i)] = lowrank_vecs
+                        #self.vecs_lowrank[(i, new_ntrain-1)] = lowrank_vecs_conj
+                        
+
             self.overlap = overlap_new
             self.one_rdm = one_rdm_new
-            self.two_rdm = two_rdm_new
+            if not lowrank:
+                self.two_rdm = two_rdm_new
+            else:
+                self.cum_diagonal = cum_diagonal_new
+                self.vecs_lowrank = vecs_lowrank
 
     def prune_datapoints(self, keep_ids):
         """
