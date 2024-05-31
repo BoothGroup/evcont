@@ -9,3 +9,5 @@ authors = [{name = "Yannic Rath", email="yannic.rath@kcl.ac.uk"}]
 readme = "README.md"
 dependencies = ["numpy", "scipy", "pyscf"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["evcont"]
