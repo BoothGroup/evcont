@@ -35,6 +35,59 @@ def transform_integrals(h1, h2, trafo):
     return h1, h2
 
 
+def compress_electron_exchange_symmetry(h2, diag_multiplier=1.0):
+    """
+    Transforms two-electron (four-index) quantities to a compressed representation exploiting
+    electron exchange symmetries.
+
+    Parameters:
+        h2 (ndarray): Two-electron quantity with four indices.
+        diag_multiplier (float): Multiplicative factor all elements of the diagonal
+            are multiplied with (e.g. to take into account double counting in contraction).
+
+    Returns:
+        np.ndarray: Compressed representation.
+    """
+    assert np.all(np.array(h2.shape) == h2.shape[0])
+
+    norb = h2.shape[0]
+
+    h2 = h2.reshape(norb * norb, norb * norb)
+
+    h2_diag = np.diag(h2).copy()
+
+    np.fill_diagonal(h2, diag_multiplier * h2_diag)
+
+    compressed_repr = h2[np.tril_indices(norb * norb)].copy()
+
+    # Reverse modification of diagonal to avoid confusion
+    np.fill_diagonal(h2, h2_diag)
+
+    return compressed_repr
+
+
+def restore_electron_exchange_symmetry(h2, norb):
+    """
+    Restores two-electron quantities from a compressed representation exploiting
+    electron exchange symmetries.
+
+    Parameters:
+        h2 (ndarray): Two-electron quantity compressed into one index.
+        norb (int): Number of orbitals.
+
+    Returns:
+        np.ndarray: 4-index representation.
+    """
+    h2_restored = np.zeros((norb * norb, norb * norb))
+    h2_restored[np.tril_indices(norb * norb)] = h2
+
+    h2_restored[np.triu_indices(norb * norb)] = (h2_restored.T)[
+        np.triu_indices(norb * norb)
+    ]
+
+    return h2_restored.reshape((norb, norb, norb, norb))
+
+
 def get_basis(mol, basis_type="OAO"):
     """
     Construct a basis of orthogonal MOs for the given molecule.

@@ -4,7 +4,10 @@ from pyscf import scf, ao2mo, grad
 
 from evcont.ab_initio_eigenvector_continuation import approximate_ground_state
 
-from evcont.electron_integral_utils import get_loewdin_trafo
+from evcont.electron_integral_utils import (
+    get_loewdin_trafo,
+    restore_electron_exchange_symmetry,
+)
 
 
 def get_overlap_grad(mol):
@@ -83,8 +86,9 @@ def loewdin_trafo_grad(overlap_mat):
     ) + 0.5 * np.einsum("abbi,abaj->abij", vecs_rotated, vecs_rotated)
 
     Zji = np.zeros((*overlap_mat.shape, *overlap_mat.shape))
-    Zji[:, :, ~degenerate_subspace] = Vji[:, :, ~degenerate_subspace] / (
-        (vals - np.expand_dims(vals, -1))[~degenerate_subspace]
+    Zji[:, :, ~degenerate_subspace] = (
+        Vji[:, :, ~degenerate_subspace]
+        / ((vals - np.expand_dims(vals, -1))[~degenerate_subspace])
     )
 
     dvecs = np.einsum("abij,abjk->abik", vecs_rotated, Zji)
@@ -330,10 +334,25 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
 
     en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
 
-    one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec, one_RDM, vec, optimize="optimal")
-    two_rdm_predicted = np.einsum(
-        "i,ijklmn,j->klmn", vec, two_RDM, vec, optimize="optimal"
-    )
+    one_rdm_predicted = np.tensordot(np.outer(vec, vec), one_RDM, axes=2)
+
+    if len(two_RDM.shape) == 2 or len(two_RDM.shape) == 5:
+        # symmetry in data points
+        eigenvec_mat = 2 * np.outer(vec, vec)
+
+        np.fill_diagonal(eigenvec_mat, 0.5 * np.diag(eigenvec_mat))
+
+        two_rdm_predicted = np.tensordot(
+            eigenvec_mat[np.tril_indices(len(vec))], two_RDM, axes=1
+        )
+
+    else:
+        two_rdm_predicted = np.tensordot(np.outer(vec, vec), two_RDM, axes=2)
+
+    if len(two_rdm_predicted.shape) != 4:
+        two_rdm_predicted = restore_electron_exchange_symmetry(
+            two_rdm_predicted, mol.nao
+        )
 
     grad_elec = get_grad_elec_OAO(
         mol, one_rdm_predicted, two_rdm_predicted, ao_mo_trafo=ao_mo_trafo
