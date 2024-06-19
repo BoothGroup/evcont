@@ -305,7 +305,9 @@ def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=
     return grad_elec
 
 
-def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
+def get_energy_with_grad(
+    mol, one_RDM, two_RDM, S, hermitian=True, return_density_matrices=False
+):
     """
     Calculates the potential energy and its gradient w.r.t. nuclear positions of a
     molecule from the eigenvector continuation.
@@ -358,7 +360,16 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
         mol, one_rdm_predicted, two_rdm_predicted, ao_mo_trafo=ao_mo_trafo
     )
 
-    return (
-        en.real + mol.energy_nuc(),
-        grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
-    )
+    if return_density_matrices:
+        return (
+            en.real + mol.energy_nuc(),
+            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+            one_rdm_predicted,
+            two_rdm_predicted,
+        )
+
+    else:
+        return (
+            en.real + mol.energy_nuc(),
+            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+        )
