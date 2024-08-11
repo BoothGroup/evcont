@@ -317,8 +317,12 @@ def get_energy_with_grad(
             The molecule object.
         one_RDM : numpy.ndarray
             The one-electron t-RDM.
-        two_RDM : numpy.ndarray
-            The two-electron t-RDM.
+        two_RDM (np.ndarray): Two-body t-RDM. Can have different shape depending on whether
+            symmetry-compressed representations are used or not:
+                No symmetries: shape(two_RDM) = (Ntrn, Ntrn, Norb, Norb, Norb, Norb)
+                Data symmetry only: shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, Norb, Norb, Norb, Norb)
+                RDM electron exchange symmetry only: shape(two_RDM) = (Ntrn, Ntrn, (Norb**2 * (Norb**2 +1)/2)
+                RDM electron exchange symmetry + data symmetry; shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, (Norb**2 * (Norb**2 +1)/2))
         S : numpy.ndarray
             The overlap matrix.
         hermitian (bool, optional):

@@ -18,7 +18,12 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
         h1 (np.ndarray): One-electron integrals.
         h2 (np.ndarray): Two-electron integrals.
         one_RDM (np.ndarray): One-body t-RDM.
-        two_RDM (np.ndarray): Two-body t-RDM.
+        two_RDM (np.ndarray): Two-body t-RDM. Can have different shape depending on whether
+            symmetry-compressed representations are used or not:
+                No symmetries: shape(two_RDM) = (Ntrn, Ntrn, Norb, Norb, Norb, Norb)
+                Data symmetry only: shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, Norb, Norb, Norb, Norb)
+                RDM electron exchange symmetry only: shape(two_RDM) = (Ntrn, Ntrn, (Norb**2 * (Norb**2 +1)/2)
+                RDM electron exchange symmetry + data symmetry; shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, (Norb**2 * (Norb**2 +1)/2))
         S (np.ndarray): Overlap matrix.
         hermitian (bool, optional):
             Whether problem is solved with eigh or with eig. Defaults to True.
@@ -94,7 +99,12 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
         h1 (np.ndarray): One-electron integrals.
         h2 (np.ndarray): Two-electron integrals.
         one_RDM (np.ndarray): One-body t-RDM.
-        two_RDM (np.ndarray): Two-body t-RDM.
+        two_RDM (np.ndarray): Two-body t-RDM. Can have different shape depending on whether
+            symmetry-compressed representations are used or not:
+                No symmetries: shape(two_RDM) = (Ntrn, Ntrn, Norb, Norb, Norb, Norb)
+                Data symmetry only: shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, Norb, Norb, Norb, Norb)
+                RDM electron exchange symmetry only: shape(two_RDM) = (Ntrn, Ntrn, (Norb**2 * (Norb**2 +1)/2)
+                RDM electron exchange symmetry + data symmetry; shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, (Norb**2 * (Norb**2 +1)/2))
         nroots: Number of states to be solved.  Default is 1, the ground state.
         S (np.ndarray): Overlap matrix.
         hermitian (bool, optional):
@@ -173,7 +183,12 @@ def approximate_ground_state_OAO(mol, one_RDM, two_RDM, S, hermitian=True):
     Args:
         mol (Molecule): The molecule object representing the system.
         one_RDM (ndarray): The one-electron t-RDM.
-        two_RDM (ndarray): The two-electron t-RDM.
+        two_RDM (np.ndarray): Two-body t-RDM. Can have different shape depending on whether
+            symmetry-compressed representations are used or not:
+                No symmetries: shape(two_RDM) = (Ntrn, Ntrn, Norb, Norb, Norb, Norb)
+                Data symmetry only: shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, Norb, Norb, Norb, Norb)
+                RDM electron exchange symmetry only: shape(two_RDM) = (Ntrn, Ntrn, (Norb**2 * (Norb**2 +1)/2)
+                RDM electron exchange symmetry + data symmetry; shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, (Norb**2 * (Norb**2 +1)/2))
         S (ndarray): The overlap matrix.
         hermitian (bool, optional):
             Whether problem is solved with eigh or with eig. Defaults to True.
@@ -204,7 +219,12 @@ def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=Tru
     Args:
         mol (Molecule): The molecule object representing the system.
         one_RDM (ndarray): The one-electron t-RDM.
-        two_RDM (ndarray): The two-electron t-RDM.
+        two_RDM (np.ndarray): Two-body t-RDM. Can have different shape depending on whether
+            symmetry-compressed representations are used or not:
+                No symmetries: shape(two_RDM) = (Ntrn, Ntrn, Norb, Norb, Norb, Norb)
+                Data symmetry only: shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, Norb, Norb, Norb, Norb)
+                RDM electron exchange symmetry only: shape(two_RDM) = (Ntrn, Ntrn, (Norb**2 * (Norb**2 +1)/2)
+                RDM electron exchange symmetry + data symmetry; shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, (Norb**2 * (Norb**2 +1)/2))
         S (ndarray): The overlap matrix.
         nroots: Number of states to be solved.  Default is 1, the ground state.
         hermitian (bool, optional):
