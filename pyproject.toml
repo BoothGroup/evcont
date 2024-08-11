@@ -5,7 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "EVCont"
 version = "0.0.1"
-authors = [{name = "Yannic Rath", email="yannic.rath@kcl.ac.uk"}]
+authors = [{name = "Yannic Rath", email="yannic.rath@npl.co.uk"}]
 readme = "README.md"
 dependencies = ["numpy", "scipy", "pyscf"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["evcont"]
