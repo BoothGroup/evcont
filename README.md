@@ -40,4 +40,4 @@ The following scripts are included:
 Questions? Feel free to contact me via [yannic.rath@npl.co.uk](mailto:yannic.rath@npl.co.uk).
 
 ## Manuscript
-[1] Y. Rath and G. H. Booth. Interpolating many-body wave functions for accelerated molecular dynamics on near-exact electronic surfaces
+[1] Y. Rath and G. H. Booth. Interpolating many-body wave functions for accelerated molecular dynamics on the near-exact electronic surface.
