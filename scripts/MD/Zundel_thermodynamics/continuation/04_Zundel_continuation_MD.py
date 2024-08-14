@@ -25,7 +25,8 @@ the initial geometry is specified in the file "../../init_geometry.npy". Script 
 configurations are specified in "../trn_geometries.txt" as produced by the script
 "01_Zundel_continuation_trn_set_generation.py", that MPSs have been constructed by
 the script "02_Zundel_continuation_run_DMRG.py", and that t-RDMs/overlaps have been constructed with
-the script "03_Zundel_continuation_evaluate_MPS_t_RDMs.py".
+the script "03_Zundel_continuation_evaluate_MPS_t_RDMs.py", with outputs for the (i,j) pair stored in
+the directories "../MPS_cross_i_j"
 """
 
 seed = int(sys.argv[1])
