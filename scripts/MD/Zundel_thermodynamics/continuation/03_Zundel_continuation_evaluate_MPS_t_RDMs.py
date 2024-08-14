@@ -28,7 +28,8 @@ Evaluates 1- and 2-t-RDMS between different MPS in the OAO basis for two trainin
 configurations (with ids specified by arguments x and y), this assumes that training
 configurations are specified in "../trn_geometries.txt" as produced by the script
 "01_Zundel_continuation_trn_set_generation.py", and that MPSs have been constructed by
-the script "02_Zundel_continuation_run_DMRG.py"
+the script "02_Zundel_continuation_run_DMRG.py", where each DMRG run was performed in a
+separate directory "../DMRG_{x}"
 """
 
 x = int(sys.argv[1])
