@@ -10,7 +10,7 @@ Script to test low rank construction of eigenvector continuation
 
 import numpy as np
 
-from pyscf import gto, fci, scf, lib, ao2mo
+from pyscf import gto, fci, scf, lib, ao2mo, mcscf
 
 from evcont.FCI_EVCont import FCI_EVCont_obj
 from evcont.CASCI_EVCont import CAS_EVCont_obj
@@ -42,16 +42,18 @@ df_basis = 'weigend'
 
 natom = 6
 
-solver = 'FCI'
+cont_solver = 'CAS'
 cassolver='SS-CASSCF'
-ncas, neleca = 2,2
+#cassolver='CASCI'
+ncas, neleca = 4,4
+figsave = True
 
 #plot_extensive = False
 fix_singlet = True
 #withMolcas = False
 
 fix_sym = 'A1g'
-#fix_sym = None
+fix_sym = None
 
 if fix_sym == None:
     mol_sym = False
@@ -102,9 +104,9 @@ equilibrium_dist = 1.78596
 equilibrium_pos = np.array([(x * equilibrium_dist, 0.0, 0.0) for x in range(10)])
 
 trainig_dists = [0.97, 1.76, 2.60]
-trainig_dists = np.linspace(0.97,2.60,12)
+#trainig_dists = np.linspace(0.97,2.60,12)
 
-if solver == 'FCI':
+if cont_solver == 'FCI':
     continuation_object = FCI_EVCont_obj(nroots=nroots_evcont,
                                          cibasis=cibasis,cisolver=myci,
                                          irrep_name=fix_sym,
@@ -133,7 +135,8 @@ for i, dist in enumerate(trainig_dists):
     
     # Build molecule    
     mol = get_mol(positions)
-    continuation_object.append_to_rdms(mol)
+    #continuation_object.append_to_rdms(mol)
+    continuation_object.append_to_rdms_new(mol)
     continuation_object_full.append_to_rdms(mol)
 
 # Save
@@ -181,6 +184,7 @@ for i, test_dist in enumerate(trainig_dists):
 
 # Prediction on test dataset and comparison against FCI results
 fci_en = np.zeros([len(test_range),nroots_evcont])
+ref_en = np.zeros([len(test_range),nroots_evcont])
 hf_en = np.zeros([len(test_range)])
 cont_en = np.zeros([len(test_range),nroots_evcont])
 cont_lowrank_en = np.zeros([len(test_range),nroots_evcont])
@@ -221,12 +225,43 @@ for i, test_dist in enumerate(test_range):
     Lpq_mo = lib.einsum('pi,qj,Lpq->Lij', mf.mo_coeff, mf.mo_coeff, Lpq_ao)
     df_eri = lib.einsum('Pij,Pkl->ijkl', Lpq_mo, Lpq_mo)
     h1e_mo = np.einsum('ai,ab,bj->ij', mf.mo_coeff, h1_ao, mf.mo_coeff)
+    #print(h1e_mo, df_eri, mol.nao, mol.nelec)
 
-    e_fci, c_fci = myci.kernel(h1e_mo, df_eri, mol.nao, mol.nelec, nroots=nroots_evcont,)
-    e_fci += mol.energy_nuc()
-    fci_en[i,:] = e_fci
-    
-    
+    # Only do FCI if number of orbitals is less than 16
+    if mol.nao < 16:
+        e_fci, c_fci = myci.kernel(h1e_mo, df_eri, mol.nao, mol.nelec, nroots=nroots_evcont)
+        e_fci += mol.energy_nuc()
+        fci_en[i,:] = e_fci
+
+    if cont_solver != 'FCI':
+        # CAS reference
+        #mf2 = scf.RHF(mol.copy()).run()
+        mf2 = mf
+        if cassolver == 'CASCI':
+            mc = mcscf.CASCI(mf2, ncas, neleca)
+            mc.fcisolver.nroots = nroots_evcont
+            e_cas = mc.kernel()[1]
+            ref_en[i,:] = e_cas + mol.energy_nuc()
+        elif cassolver == 'SA-CASSCF':
+            mc_sa = mcscf.CASSCF(mf2, ncas, neleca)#.state_average_([1/nroots_evcont]*nroots_evcont)
+            mc_sa.kernel()
+            mc = mcscf.CASCI(mf2, ncas, neleca)
+            mc.casci(mc_sa.mo_coeff)
+            mc.fcisolver.nroots = nroots_evcont
+            e_cas = mc.kernel()[1]
+            ref_en[i,:] = e_cas + mol.energy_nuc()
+        elif cassolver == 'SS-CASSCF':
+            e_cas = []
+            for istate in range(nroots_evcont):
+                mc_ss = mcscf.CASSCF(mf2, ncas, neleca).state_specific_(istate)
+                mc_ss.kernel()
+                mc = mcscf.CASCI(mf2, ncas, neleca).state_specific_(istate)
+                mc.casci(mc_ss.mo_coeff)
+                #mc.fcisolver.nroots = nroots_evcont
+                e_cas.append(mc.kernel()[1])
+            ref_en[i,:] = np.array(e_cas) + mol.energy_nuc()
+
+    print(ehf, e_fci, e_cas + mol.energy_nuc(),en_continuation_ms, mol.energy_nuc())
     # Full continuation
     print('   full')
     # Find h1 and eris in SAO basis
@@ -251,15 +286,20 @@ for i, test_dist in enumerate(test_range):
 
 
 # PLOT
-fig, [ax1,ax2] = plt.subplots(nrows=2,sharex=True,figsize=[4,5],height_ratios=[3,2])
+fig, [ax1,ax2,ax3] = plt.subplots(nrows=3,sharex=True,figsize=[4,7],height_ratios=[3,1.5,1.5],
+                                 gridspec_kw={'hspace':0.,'wspace':0.})
 
 ax1.plot(test_range, hf_en,'orange',label='HF')
 if nroots_evcont > 1:
     ax1.plot(test_range,fci_en,'k',label=['FCI']+[None]*(nroots_evcont-1))
+    if cont_solver != 'FCI':
+        ax1.plot(test_range,ref_en,'green',label=[cont_solver]+[None]*(nroots_evcont-1))
     ax1.plot(test_range,cont_en,'b',label=['full evcont']+[None]*(nroots_evcont-1))
     ax1.plot(test_range,cont_lowrank_en,'--r',label=['low rank evcont']+[None]*(nroots_evcont-1))
 else:
     ax1.plot(test_range,fci_en,'k',label='FCI')
+    if cont_solver != 'FCI':
+        ax1.plot(test_range,ref_en,'green',label=cont_solver)
     ax1.plot(test_range,cont_en,'b',label='full evcont')
     ax1.plot(test_range,cont_lowrank_en,'--r',label='low rank evcont')
    
@@ -271,10 +311,17 @@ ax1.legend()
 ax2.plot(test_range,cont_en - fci_en,'b')
 ax2.plot(test_range,cont_lowrank_en - fci_en,'--r')
 
+ax3.plot(test_range,cont_en - ref_en,'b')
+ax3.plot(test_range,cont_lowrank_en - ref_en,'--r')
+
 ax1.set_ylabel('Energy (Ha)')
 ax2.set_ylabel(r'$E_{cont}$ - $E_{FCI}$ (Ha)')
-ax2.set_xlabel('Atomic separation ($a_0$)')
-plt.show()
+ax3.set_ylabel(r'$E_{cont}$ - $E_{%s}$ (Ha)'%cont_solver)
+ax3.set_xlabel('Atomic separation ($a_0$)')
+if figsave:
+    plt.savefig('H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png')
+else:
+    plt.show()
 
 # Expansion limit
 no_vec_dic = {}
@@ -290,4 +337,7 @@ ax.grid(alpha=0.5)
 ax.barh(*zip(*no_vec_dic.items()))
 ax.set_xlabel('Number of vectors (max %i)'%(continuation_object.one_rdm.shape[-1]**2))
 ax.set_ylabel('(bra, ket) index')
-plt.show()
+if figsave:
+    plt.savefig('nvecs_H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png')
+else:
+    plt.show()
