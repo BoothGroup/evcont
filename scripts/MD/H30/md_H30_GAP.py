@@ -10,14 +10,15 @@ from dscribe.kernels import AverageKernel
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
+
 """
-MD simulation with GAP predictions (using the same training data from a continuation
-run)
+MD simulation with GAP predictions (using the same training data from previous continuation
+runs)
 """
 
 norb = nelec = number_atoms = 30
 
-soap = SOAP(species=["H"], periodic=False, r_cut=10.0, n_max=10, l_max=30)
+soap = SOAP(species=["H"], periodic=False, r_cut=10.0, n_max=10, l_max=20)
 
 
 def get_mol(geometry):
@@ -81,21 +82,32 @@ def get_scanner(mol, weights, features):
 
 
 def train_GP(ens, features):
+    ens = np.array(ens)
     avg_kernel = AverageKernel(metric="linear", normalize_kernel=True)
 
     kernel_mat = avg_kernel.create(features)
 
     features = np.array(features)
 
-    # Fitting the GP, we set some rather randomly chosen small noise
-    noise_term = np.eye(kernel_mat.shape[0]) * 1.0e-15
+    # Fit the GP with a moderately small degree of noise
+    noise_term = np.eye(kernel_mat.shape[0]) * 1.0e-8
+
     # We only need the weights later on so calling lstsq is enough
     weights = np.linalg.lstsq(kernel_mat + noise_term, ens)[0]
 
     return weights
 
 
-def get_trajectory(init_mol, weights, features, dt=100.0, steps=10, init_veloc=None):
+def get_trajectory(
+    init_mol,
+    weights,
+    features,
+    dt=10.0,
+    steps=10,
+    init_veloc=None,
+    trajectory_output=None,
+    energy_output=None,
+):
     scanner_fun = get_scanner(init_mol, weights, features)
     frames = []
     myintegrator = md.NVE(
@@ -105,6 +117,8 @@ def get_trajectory(init_mol, weights, features, dt=100.0, steps=10, init_veloc=N
         veloc=init_veloc,
         incore_anyway=True,
         frames=frames,
+        trajectory_output=trajectory_output,
+        energy_output=energy_output,
     )
     myintegrator.run()
     trajectory = [frame.coord for frame in frames]
@@ -128,20 +142,39 @@ init_mol = get_mol(geometry).copy()
 
 one_rdm = np.load("one_rdm.npy")
 two_rdm = np.load("two_rdm.npy")
+overlap = np.load("overlap.npy")
+
+# Restore training geometries
+trn_times = list(np.atleast_1d(np.loadtxt("trn_times.txt").astype(int)))
+
+trajs = [np.load("traj_EVCont_{}.npy".format(i)) for i in range(len(trn_times))]
+
+trn_geometries = [trajs[0][0]] + [
+    trajs[k][trn_times[k + 1]] for k in range(len(trajs) - 1)
+]
 
 for i in range(one_rdm.shape[0]):
-    if i != 0:
-        geometry = np.load("trn_geometry_{}.npy".format(i))
+    geometry = trn_geometries[i]
     mol = get_mol(geometry)
-    h1, h2 = get_integrals(init_mol, get_basis(init_mol))
+    h1, h2 = get_integrals(mol, get_basis(mol))
 
-    en = np.sum(one_rdm[i, i, :, :] * h1 + 0.5 * two_rdm[i, i, :, :, :, :] * h2)
+    en = np.sum(one_rdm[i, i, :, :] * h1) + 0.5 * np.sum(two_rdm[i, i, :, :, :, :] * h2)
 
     energies.append(en)
+
     features.append(soap.create(Atoms("H" * number_atoms, geometry)))
 
     weights = train_GP(np.array(energies), np.array(features))
 
-    traj = get_trajectory(init_mol.copy(), weights, features, steps=steps, dt=dt)
+i = one_rdm.shape[0] - 1
+traj = get_trajectory(
+    init_mol.copy(),
+    weights,
+    features,
+    steps=steps,
+    dt=dt,
+    trajectory_output=open("traj_GAP_{}.xyz".format(i), "w"),
+    energy_output=open("ens_GAP_{}.xyz".format(i), "w"),
+)
 
-    np.save("traj_SOAP_{}.npy".format(i), traj)
+np.save("traj_GAP_{}.npy".format(i), traj)

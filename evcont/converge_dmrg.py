@@ -19,6 +19,7 @@ def converge_dmrg(
     restart_tag=None,
     nroots=1,
     mem=5,
+    reorder=None,
 ):
     """
     Converge a DMRG calculation for a given system. See block2 documentation for more
@@ -60,7 +61,7 @@ def converge_dmrg(
     mps_solver = DMRGDriver(symm_type=SymmetryTypes.SU2, mpi=mpi, stack_mem=mem << 30)
     mps_solver.initialize_system(norb, n_elec=np.sum(nelec), spin=(nelec[0] - nelec[1]))
 
-    mpo = mps_solver.get_qc_mpo(h1e=h1, g2e=h2, iprint=1, reorder=None)
+    mpo = mps_solver.get_qc_mpo(h1e=h1, g2e=h2, iprint=1, reorder=reorder)
 
     if restart_tag is not None and os.path.exists(
         "nodex/{}-mps_info.bin".format(restart_tag)

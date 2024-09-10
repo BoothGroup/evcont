@@ -25,6 +25,11 @@ def get_scanner(mol, one_rdm, two_rdm, overlap, hermitian=True):
 
     class Base:
         converged = True
+        ovlp = overlap
+        one_trdm = one_rdm
+        two_trdm = two_rdm
+        predicted_one_rdm = None
+        predicted_two_rdm = None
 
     class Scanner(lib.GradScanner):
         def __init__(self):
@@ -35,9 +40,17 @@ def get_scanner(mol, one_rdm, two_rdm, overlap, hermitian=True):
         def __call__(self, mol):
             self.mol = mol
             if one_rdm is not None and two_rdm is not None and overlap is not None:
-                return get_energy_with_grad(
-                    mol, one_rdm, two_rdm, overlap, hermitian=hermitian
+                en, grad, rdm_o, rdm_t = get_energy_with_grad(
+                    mol,
+                    one_rdm,
+                    two_rdm,
+                    overlap,
+                    hermitian=hermitian,
+                    return_density_matrices=True,
                 )
+                self.base.predicted_one_rdm = rdm_o
+                self.base.predicted_two_rdm = rdm_t
+                return en, grad
             else:
                 return mol.energy_nuc(), grad.RHF(scf.RHF(mol)).grad_nuc()
 

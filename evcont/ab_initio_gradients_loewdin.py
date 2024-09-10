@@ -7,7 +7,10 @@ from evcont.ab_initio_eigenvector_continuation import (
     approximate_multistate
 )
 
-from evcont.electron_integral_utils import get_loewdin_trafo
+from evcont.electron_integral_utils import (
+    get_loewdin_trafo,
+    restore_electron_exchange_symmetry,
+)
 
 
 def get_overlap_grad(mol):
@@ -86,8 +89,9 @@ def loewdin_trafo_grad(overlap_mat):
     ) + 0.5 * np.einsum("abbi,abaj->abij", vecs_rotated, vecs_rotated)
 
     Zji = np.zeros((*overlap_mat.shape, *overlap_mat.shape))
-    Zji[:, :, ~degenerate_subspace] = Vji[:, :, ~degenerate_subspace] / (
-        (vals - np.expand_dims(vals, -1))[~degenerate_subspace]
+    Zji[:, :, ~degenerate_subspace] = (
+        Vji[:, :, ~degenerate_subspace]
+        / ((vals - np.expand_dims(vals, -1))[~degenerate_subspace])
     )
 
     dvecs = np.einsum("abij,abjk->abik", vecs_rotated, Zji)
@@ -193,8 +197,198 @@ def get_one_el_grad(mol, ao_mo_trafo=None, ao_mo_trafo_grad=None):
 
     return h1_grad
 
+def two_el_grad(h2_ao, two_rdm, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slices):
+    """
+    Calculate the two-electron integral gradient.
 
-def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
+    Args:
+        h2_ao (np.ndarray): Two-electron integrals in atomic orbital basis.
+        two_rdm (np.ndarray): Two-electron reduced density matrix.
+        ao_mo_trafo (np.ndarray):
+            Transformation matrix from atomic orbital to molecular orbital basis.
+        ao_mo_trafo_grad (np.ndarray): Gradient of the transformation matrix.
+        h2_ao_deriv (np.ndarray):
+            Derivative of the two-electron integrals with respect to nuclear
+            coordinates.
+        atm_slices (list): List of atom index slices.
+
+    Returns:
+        np.ndarray: The two-electron gradient.
+
+    """
+
+    two_el_contraction = np.einsum(
+        "ijkl,abcd,aimn,bj,ck,dl->mn",
+        two_rdm
+        + np.transpose(two_rdm, (1, 0, 2, 3))
+        + np.transpose(two_rdm, (3, 2, 1, 0))
+        + np.transpose(two_rdm, (2, 3, 0, 1)),
+        h2_ao,
+        ao_mo_trafo_grad,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        optimize="optimal",
+    )
+
+    two_rdm_ao = np.einsum(
+        "ijkl,ai,bj,ck,dl->abcd",
+        two_rdm,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        optimize="optimal",
+    )
+
+    two_el_contraction_from_grad = np.einsum(
+        "nmbcd,abcd->nma",
+        h2_ao_deriv,
+        two_rdm_ao
+        + np.transpose(two_rdm_ao, (1, 0, 3, 2))
+        + np.transpose(two_rdm_ao, (2, 3, 0, 1))
+        + np.transpose(two_rdm_ao, (3, 2, 1, 0)),
+        optimize="optimal",
+    )
+
+    h2_grad_ao_b = np.zeros((3, len(atm_slices), two_rdm.shape[0], two_rdm.shape[1]))
+    for i, slice in enumerate(atm_slices):
+        # Subtract the gradient contribution from the contraction part
+        h2_grad_ao_b[:, i, slice[0] : slice[1], :] -= two_el_contraction_from_grad[
+            :, slice[0] : slice[1], :
+        ]
+
+    # Return the two-electron integral gradient
+    return two_el_contraction + np.einsum("nmbb->mn", h2_grad_ao_b)
+
+
+def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=None):
+    """
+    Calculates the gradient of the electronic energy based on one- and two-rdms
+    in the OAO.
+
+    Args:
+        mol (object): Molecule object.
+        one_rdm (ndarray): One-electron reduced density matrix.
+        two_rdm (ndarray): Two-electron reduced density matrix.
+        ao_mo_trafo (ndarray, optional):
+            AO to MO transformation matrix. Is computed if not provided.
+        ao_mo_trafo_grad (ndarray, optional):
+            Gradient of AO to MO transformation matrix. Is computed if not provided.
+
+    Returns:
+        ndarray: Electronic gradient.
+    """
+
+    if ao_mo_trafo is None:
+        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+
+    if ao_mo_trafo_grad is None:
+        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+
+    h1_jac = get_one_el_grad(
+        mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
+    )
+
+    h2_ao = mol.intor("int2e")
+    h2_ao_deriv = mol.intor("int2e_ip1", comp=3)
+
+    two_el_gradient = two_el_grad(
+        h2_ao,
+        two_rdm,
+        ao_mo_trafo,
+        ao_mo_trafo_grad,
+        h2_ao_deriv,
+        tuple(
+            [
+                (mol.aoslice_by_atom()[i][2], mol.aoslice_by_atom()[i][3])
+                for i in range(mol.natm)
+            ]
+        ),
+    )
+
+    grad_elec = (
+        np.einsum("ij,ijkl->kl", one_rdm, h1_jac, optimize="optimal")
+        + 0.5 * two_el_gradient
+    )
+
+    return grad_elec
+
+
+def get_energy_with_grad(
+    mol, one_RDM, two_RDM, S, hermitian=True, return_density_matrices=False
+):
+    """
+    Calculates the potential energy and its gradient w.r.t. nuclear positions of a
+    molecule from the eigenvector continuation.
+
+    Args:
+        mol : pyscf.gto.Mole
+            The molecule object.
+        one_RDM : numpy.ndarray
+            The one-electron t-RDM.
+        two_RDM (np.ndarray): Two-body t-RDM. Can have different shape depending on whether
+            symmetry-compressed representations are used or not:
+                No symmetries: shape(two_RDM) = (Ntrn, Ntrn, Norb, Norb, Norb, Norb)
+                Data symmetry only: shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, Norb, Norb, Norb, Norb)
+                RDM electron exchange symmetry only: shape(two_RDM) = (Ntrn, Ntrn, (Norb**2 * (Norb**2 +1)/2)
+                RDM electron exchange symmetry + data symmetry; shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, (Norb**2 * (Norb**2 +1)/2))
+        S : numpy.ndarray
+            The overlap matrix.
+        hermitian (bool, optional):
+            Whether problem is solved with eigh or with eig. Defaults to True.
+
+    Returns:
+        tuple
+            A tuple containing the total potential energy and its gradient.
+    """
+    # Construct h1 and h2
+    ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+
+    h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
+    h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
+
+    en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
+
+    one_rdm_predicted = np.tensordot(np.outer(vec, vec), one_RDM, axes=2)
+
+    if len(two_RDM.shape) == 2 or len(two_RDM.shape) == 5:
+        # symmetry in data points
+        eigenvec_mat = 2 * np.outer(vec, vec)
+
+        np.fill_diagonal(eigenvec_mat, 0.5 * np.diag(eigenvec_mat))
+
+        two_rdm_predicted = np.tensordot(
+            eigenvec_mat[np.tril_indices(len(vec))], two_RDM, axes=1
+        )
+
+    else:
+        two_rdm_predicted = np.tensordot(np.outer(vec, vec), two_RDM, axes=2)
+
+    if len(two_rdm_predicted.shape) != 4:
+        two_rdm_predicted = restore_electron_exchange_symmetry(
+            two_rdm_predicted, mol.nao
+        )
+
+    grad_elec = get_grad_elec_OAO(
+        mol, one_rdm_predicted, two_rdm_predicted, ao_mo_trafo=ao_mo_trafo
+    )
+
+    if return_density_matrices:
+        return (
+            en.real + mol.energy_nuc(),
+            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+            one_rdm_predicted,
+            two_rdm_predicted,
+        )
+
+    else:
+        return (
+            en.real + mol.energy_nuc(),
+            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+        )
+      
+def get_energy_with_grad_cpuefficient(mol, one_RDM, two_RDM, S, hermitian=True, return_density_matrices=False):
     """
     Calculates the potential energy and its gradient w.r.t. nuclear positions of a
     molecule from the eigenvector continuation.
@@ -227,12 +421,25 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
     # rdms of different states
     h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
 
-    one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec, one_RDM, vec, optimize="optimal")
-    two_rdm_predicted = np.einsum(
-        "i,ijklmn,j->klmn", vec, two_RDM, vec, optimize="optimal"
-    )
+    one_rdm_predicted = np.tensordot(np.outer(vec, vec), one_RDM, axes=2)
 
+    if len(two_RDM.shape) == 2 or len(two_RDM.shape) == 5:
+        # symmetry in data points
+        eigenvec_mat = 2 * np.outer(vec, vec)
 
+        np.fill_diagonal(eigenvec_mat, 0.5 * np.diag(eigenvec_mat))
+
+        two_rdm_predicted = np.tensordot(
+            eigenvec_mat[np.tril_indices(len(vec))], two_RDM, axes=1
+        )
+
+    else:
+        two_rdm_predicted = np.tensordot(np.outer(vec, vec), two_RDM, axes=2)
+
+    if len(two_rdm_predicted.shape) != 4:
+        two_rdm_predicted = restore_electron_exchange_symmetry(
+            two_rdm_predicted, mol.nao
+        )
 
     grad_elec = get_grad_elec_from_gradH(
         one_rdm_predicted, two_rdm_predicted, h1_jac, h2_jac
@@ -242,7 +449,6 @@ def get_energy_with_grad(mol, one_RDM, two_RDM, S, hermitian=True):
         en.real + mol.energy_nuc(),
         grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
     )
-
 
 ############################################################
 # NEW MULTISTATE - SEPERATED FROM REST FOR TESTING
@@ -442,7 +648,7 @@ def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None)
    
     return trafo_deriv_contraction +  orb_deriv_contraction
 
-def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
+def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True, return_density_matrices=False):
     """
     Calculates the potential energy and its gradient w.r.t. nuclear positions of a
     molecule from the eigenvector continuation.
@@ -452,8 +658,12 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
             The molecule object.
         one_RDM : numpy.ndarray
             The one-electron t-RDM.
-        two_RDM : numpy.ndarray
-            The two-electron t-RDM.
+        two_RDM (np.ndarray): Two-body t-RDM. Can have different shape depending on whether
+            symmetry-compressed representations are used or not:
+                No symmetries: shape(two_RDM) = (Ntrn, Ntrn, Norb, Norb, Norb, Norb)
+                Data symmetry only: shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, Norb, Norb, Norb, Norb)
+                RDM electron exchange symmetry only: shape(two_RDM) = (Ntrn, Ntrn, (Norb**2 * (Norb**2 +1)/2)
+                RDM electron exchange symmetry + data symmetry; shape(two_RDM) = (Ntrn * (Ntrn + 1)/2, (Norb**2 * (Norb**2 +1)/2))
         S : numpy.ndarray
             The overlap matrix.
         nroots (optional): int
@@ -478,25 +688,59 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
     h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
     
     grad_elec_all = []
+    one_rdm_predicted_all = []
+    two_rdm_predicted_all = []
     for i_state in range(nroots):
         vec_i = vec[i_state,:]
 
-        one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec_i, one_RDM, vec_i, optimize="optimal")
-        two_rdm_predicted = np.einsum(
-            "i,ijklmn,j->klmn", vec_i, two_RDM, vec_i, optimize="optimal"
-        )
+        #one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec_i, one_RDM, vec_i, optimize="optimal")
+        #two_rdm_predicted = np.einsum(
+        #    "i,ijklmn,j->klmn", vec_i, two_RDM, vec_i, optimize="optimal"
+        #)
+        
+        one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_i), one_RDM, axes=2)
+        if len(two_RDM.shape) == 2 or len(two_RDM.shape) == 5:
+            # symmetry in data points
+            eigenvec_mat = 2 * np.outer(vec_i, vec_i)
+
+            np.fill_diagonal(eigenvec_mat, 0.5 * np.diag(eigenvec_mat))
+
+            two_rdm_predicted = np.tensordot(
+                eigenvec_mat[np.tril_indices(len(vec_i))], two_RDM, axes=1
+            )
+
+        else:
+            two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_i), two_RDM, axes=2)
+
+        if len(two_rdm_predicted.shape) != 4:
+            two_rdm_predicted = restore_electron_exchange_symmetry(
+                two_rdm_predicted, mol.nao
+            )
+            
 
         grad_elec = get_grad_elec_from_gradH(
             one_rdm_predicted, two_rdm_predicted, h1_jac, h2_jac
         )
+        
+        one_rdm_predicted_all.append(one_rdm_predicted)
+        two_rdm_predicted_all.append(two_rdm_predicted)
         grad_elec_all.append(grad_elec)
         
     grad_elec_all = np.array(grad_elec_all)
 
-    return (
-        en.real + mol.energy_nuc(),
-        grad_elec_all + grad.RHF(scf.RHF(mol)).grad_nuc(),
-    )
+    if return_density_matrices:
+        return (
+            en.real + mol.energy_nuc(),
+            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+            one_rdm_predicted_all,
+            two_rdm_predicted_all,
+        )
+
+    else:
+        return (
+            en.real + mol.energy_nuc(),
+            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+        )
 
 def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
     """
@@ -571,10 +815,28 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
             vec_j = vec[j_state,:]
             
             # Contracting to subspace eigenstate in hand
-            one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec_i, one_RDM, vec_j, optimize="optimal")
-            two_rdm_predicted = np.einsum(
-                "i,ijklmn,j->klmn", vec_i, two_RDM, vec_j, optimize="optimal"
-            )
+            #one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec_i, one_RDM, vec_j, optimize="optimal")
+            #two_rdm_predicted = np.einsum(
+            #    "i,ijklmn,j->klmn", vec_i, two_RDM, vec_j, optimize="optimal"
+            #)
+            one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), one_RDM, axes=2)
+            if len(two_RDM.shape) == 2 or len(two_RDM.shape) == 5:
+                # symmetry in data points
+                eigenvec_mat = 2 * np.outer(vec_i, vec_j)
+
+                np.fill_diagonal(eigenvec_mat, 0.5 * np.diag(eigenvec_mat))
+
+                two_rdm_predicted = np.tensordot(
+                    eigenvec_mat[np.tril_indices(len(vec_i))], two_RDM, axes=1
+                )
+
+            else:
+                two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), two_RDM, axes=2)
+
+            if len(two_rdm_predicted.shape) != 4:
+                two_rdm_predicted = restore_electron_exchange_symmetry(
+                    two_rdm_predicted, mol.nao
+                )
             
             # d\dR of subspace Hamiltonian
             grad_elec = get_grad_elec_from_gradH(

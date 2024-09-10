@@ -6,7 +6,8 @@ import numpy as np
 
 
 """
-MD simulation with HF, this also calculates the predicted dipole moment.
+MD simulation with HF, this also calculates the predicted dipole moment and
+Mulliken charges.
 """
 
 
@@ -52,12 +53,13 @@ init_mol = mol.copy()
 
 mf = init_mol.RHF()
 
-steps = 300
+steps = 1000
 dt = 5
 
 scanner_fun = mf.nuc_grad_method().as_scanner()
 
 open("dipole_moment_HF.txt", "w").close()
+open("atom_charges_HF.txt", "w").close()
 
 
 def callback(locals):
@@ -66,9 +68,14 @@ def callback(locals):
 
     one_rdm = hf_obj.make_rdm1()
     dipole_moment = hf.dip_moment(mol, one_rdm)
+    atomic_charges = hf.mulliken_meta(mol, one_rdm)[1]
 
     with open("dipole_moment_HF.txt", "a") as fl:
         for el in dipole_moment:
+            fl.write("{}  ".format(el))
+        fl.write("\n")
+    with open("atom_charges_HF.txt", "a") as fl:
+        for el in atomic_charges:
             fl.write("{}  ".format(el))
         fl.write("\n")
 

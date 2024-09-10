@@ -13,7 +13,4 @@ dependencies = ["numpy", "scipy", "pyscf"]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-ignore-vcs = true
-include = [
-  "evcont/**"
-]
+packages = ["evcont"]
