@@ -52,8 +52,7 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
         H_twobody = 0.5 * np.tensordot(two_RDM, h2, axes=4)
         H[np.tril_indices(H.shape[0])] += H_twobody
 
-        if not hermitian:
-            H[np.triu_indices(H.shape[0])] = H.T.conj()[np.triu_indices(H.shape[0])]
+        H[np.triu_indices(H.shape[0])] = H.T.conj()[np.triu_indices(H.shape[0])]
 
     elif len(two_RDM.shape) == 3:
         # RDM electron exchange symmetry only; shape(two_RDM) = (a,b,ijkl)
@@ -69,8 +68,7 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
         H_twobody = two_RDM.dot(h2_compressed)
         H[np.tril_indices(H.shape[0])] += H_twobody
 
-        if not hermitian:
-            H[np.triu_indices(H.shape[0])] = H.T.conj()[np.triu_indices(H.shape[0])]
+        H[np.triu_indices(H.shape[0])] = H.T.conj()[np.triu_indices(H.shape[0])]
 
     else:
         assert False
@@ -191,8 +189,7 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
         H_twobody = 0.5 * np.tensordot(two_RDM, h2, axes=4)
         H[np.tril_indices(H.shape[0])] += H_twobody
 
-        if not hermitian:
-            H[np.triu_indices(H.shape[0])] = H.T.conj()[np.triu_indices(H.shape[0])]
+        H[np.triu_indices(H.shape[0])] = H.T.conj()[np.triu_indices(H.shape[0])]
 
     elif len(two_RDM.shape) == 3:
         # RDM electron exchange symmetry only; shape(two_RDM) = (a,b,ijkl)
@@ -208,8 +205,7 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
         H_twobody = two_RDM.dot(h2_compressed)
         H[np.tril_indices(H.shape[0])] += H_twobody
 
-        if not hermitian:
-            H[np.triu_indices(H.shape[0])] = H.T.conj()[np.triu_indices(H.shape[0])]
+        H[np.triu_indices(H.shape[0])] = H.T.conj()[np.triu_indices(H.shape[0])]
 
     else:
         assert False
