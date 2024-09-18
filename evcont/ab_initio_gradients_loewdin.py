@@ -742,7 +742,8 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
             grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
         )
 
-def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
+def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
+                                            savemem=True, hermitian=True):
     """
     Calculates the potential energiesm its gradient w.r.t. nuclear positions of a
     molecule and nonadiabatic couplings from eigenvector continuation for both
@@ -794,10 +795,11 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
     en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
     fix_gauge(vec)
 
-    # Get the gradient of one and two-electron integrals before contracting onto
-    # rdms and trmds of different states
-    h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
-    
+    if not savemem:
+        # Get the gradient of one and two-electron integrals before contracting onto
+        # rdms and trmds of different states
+        h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
+        
     # Get the orbital derivative coupling for NACs
     orb_deriv = get_orbital_derivative_coupling(mol,ao_mo_trafo=ao_mo_trafo)
     
@@ -839,9 +841,15 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
                 )
             
             # d\dR of subspace Hamiltonian
-            grad_elec = get_grad_elec_from_gradH(
-                one_rdm_predicted, two_rdm_predicted, h1_jac, h2_jac
-            )
+            if savemem:
+                grad_elec = get_grad_elec_OAO(
+                    mol, one_rdm_predicted, two_rdm_predicted
+                )
+            else:
+                grad_elec = get_grad_elec_from_gradH(
+                    one_rdm_predicted, two_rdm_predicted, h1_jac, h2_jac
+                )
+            
             
             # Energy gradients
             if i_state == j_state:
