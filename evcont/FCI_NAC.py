@@ -14,14 +14,17 @@ from pyscf import scf, ao2mo, grad, fci, symm
 
 from pyscf.fci.addons import transform_ci
 
+from evcont.electron_integral_utils import get_basis, get_integrals
+
 from evcont.ab_initio_gradients_loewdin import (
     get_one_and_two_el_grad,
     get_loewdin_trafo,
     get_orbital_derivative_coupling,
-    get_grad_elec_from_gradH
+    get_grad_elec_from_gradH,
+    get_grad_elec_OAO
 )
 
-def get_FCI_energy_with_grad_and_NAC(mol, fcisolver, nroots=1, hermitian=True):
+def get_FCI_energy_with_grad_and_NAC(mol, fcisolver, cibasis='canonical', nroots=1, savemem=True, hermitian=True):
     """
     Calculates the potential energiesm its gradient w.r.t. nuclear positions of a
     molecule and nonadiabatic couplings from full CI in SAO basis
@@ -53,19 +56,32 @@ def get_FCI_energy_with_grad_and_NAC(mol, fcisolver, nroots=1, hermitian=True):
             nac_all_hfonly: dictionary of ndarray(nat,3)
                 Hellman-Feynmann contribution to NACs
     """
-                
+
     # Construct h1 and h2
-    ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    basis = get_basis(mol,basis_type=cibasis)
+    h1, h2 = get_integrals(mol, basis)
     
-    h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
-    h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
+    ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+
+    #h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
+    #h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
     
     # Get FCI energies and wavefunctions in SAO basis
     en, fcivec = fcisolver.kernel(h1, h2, mol.nao, mol.nelec)
     
+    # Transform to SAO basis
+    if cibasis != 'OAO':
+        S = mol.intor("int1e_ovlp")
+        basis_oao = ao_mo_trafo #get_basis(mol)
+
+        u = np.einsum('ji,jk,kl->il',basis,S,basis_oao)
+        
+        fcivec = [transform_ci(fcivec_i,mol.nelec,u) for fcivec_i in fcivec]
+
     # Get the gradient of one and two-electron integrals before contracting onto
     # rdms and trmds of different states
-    h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
+    if not savemem:
+        h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
     
     # Get the orbital derivative coupling for NACs
     orb_deriv = get_orbital_derivative_coupling(mol,ao_mo_trafo=ao_mo_trafo)
@@ -86,10 +102,15 @@ def get_FCI_energy_with_grad_and_NAC(mol, fcisolver, nroots=1, hermitian=True):
             # FCI 1- and 2-particle tRDMs
             one_rdm, two_rdm = fcisolver.trans_rdm12(ci_i, ci_2, mol.nao, mol.nelec)
             
-            # d\dR of subspace Hamiltonian
-            grad_elec = get_grad_elec_from_gradH(
-                one_rdm, two_rdm, h1_jac, h2_jac
-            )
+            if savemem:
+                grad_elec = get_grad_elec_OAO(
+                    mol, one_rdm, two_rdm
+                )
+            else:
+                # d\dR of subspace Hamiltonian
+                grad_elec = get_grad_elec_from_gradH(
+                    one_rdm, two_rdm, h1_jac, h2_jac
+                )
             
             # Energy gradients
             if i_state == j_state:
