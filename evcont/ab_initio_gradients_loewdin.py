@@ -241,8 +241,8 @@ def two_el_grad(h2_ao, two_rdm, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_
         optimize="optimal",
     )
 
-    two_el_contraction_from_grad = np.einsum(
-        "nmbcd,abcd->nma",
+    two_el_contraction_from_grad_traced = np.einsum(
+        "nmbcd,mbcd->nm",
         h2_ao_deriv,
         two_rdm_ao
         + np.transpose(two_rdm_ao, (1, 0, 3, 2))
@@ -251,24 +251,14 @@ def two_el_grad(h2_ao, two_rdm, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_
         optimize="optimal",
     )
 
-    """
-    h2_grad_ao_b = np.zeros((3, len(atm_slices), two_rdm.shape[0], two_rdm.shape[1]))
-    for i, slice in enumerate(atm_slices):
-        # Subtract the gradient contribution from the contraction part
-        h2_grad_ao_b[:, i, slice[0] : slice[1], :] -= two_el_contraction_from_grad[
-            :, slice[0] : slice[1], :
-        ]
-    """   
     h2_grad_ao_sum = np.zeros((len(atm_slices),3))
     for i, slice in enumerate(atm_slices):
         # Subtract the gradient contribution from the contraction part
-        h2_grad_ao_sum[i,:] -= two_el_contraction_from_grad[
-            :, slice[0] : slice[1], slice[0] : slice[1]
-        ].trace(axis1=1,axis2=2)
+        h2_grad_ao_sum[i,:] -= two_el_contraction_from_grad_traced[
+            :, slice[0] : slice[1]
+        ].sum(axis=1)
 
-    
     # Return the two-electron integral gradient
-    #return two_el_contraction + np.einsum("nmbb->mn", h2_grad_ao_b)
     return two_el_contraction + h2_grad_ao_sum
 
 
@@ -495,12 +485,6 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
         optimize="optimal",
     )
     
-    """
-    two_el_contraction_ao += \
-        np.transpose(two_el_contraction_ao,(1, 0, 2, 3,4,5)) +\
-        np.transpose(two_el_contraction_ao,(3, 2, 1, 0,4,5)) +\
-        np.transpose(two_el_contraction_ao,(2, 3, 0, 1,4,5))
-    """
     two_el_contraction_from_grad_ao_traced = np.einsum(
         "nmbcd,mi,bj,ck,dl->ijklnm",
         h2_ao_deriv,
@@ -510,38 +494,7 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
         ao_mo_trafo,
         optimize="optimal",
     )
-    """
-    two_el_contraction_from_grad_ao = two_el_contraction_from_grad_ao1+\
-        np.transpose(two_el_contraction_from_grad_ao1,(1, 0, 2, 3, 4,5,6)) +\
-        np.transpose(two_el_contraction_from_grad_ao1,(3, 2, 1, 0, 4,5,6)) +\
-        np.transpose(two_el_contraction_from_grad_ao1,(2, 3, 0, 1, 4,5,6))
-        
-    
-    if False:
-        h2_grad_ao_b = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], 3, len(atm_slices), h2_ao.shape[0], h2_ao.shape[1]))
-        for i, slice in enumerate(atm_slices):
-            # Subtract the gradient contribution from the contraction part
-            h2_grad_ao_b[:,:,:,:, :, i, slice[0] : slice[1], :] -= two_el_contraction_from_grad_ao[
-                :,:,:,:, :, slice[0] : slice[1], :
-            ]
-                
-        h2_grad = two_el_contraction_ao + np.einsum(
-            "ijklnmbb->ijklmn",
-            h2_grad_ao_b,
-            optimize="optimal",
-        )
-        
-    elif False:
-        h2_grad_ao_sum = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], len(atm_slices),3))
-        for i, slice in enumerate(atm_slices):
-            # Subtract the gradient contribution from the contraction part
-            h2_grad_ao_sum[:,:,:,:,i,:] -= two_el_contraction_from_grad_ao[
-                :, :,:,:,:,slice[0] : slice[1], slice[0] : slice[1]
-            ].trace(axis1=5,axis2=6)
-            
-        h2_grad = two_el_contraction_ao + h2_grad_ao_sum
 
-    """
     h2_grad_ao_sum = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], len(atm_slices),3))
     for i, slice in enumerate(atm_slices):
         # Slice for orbitals on atom i
@@ -555,7 +508,6 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
 
     h2_grad = two_el_contraction_ao + h2_grad_ao_sum
     
-    #1/0
     # Return the two-electron integral gradient
     return h2_grad
 
