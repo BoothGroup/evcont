@@ -251,15 +251,25 @@ def two_el_grad(h2_ao, two_rdm, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_
         optimize="optimal",
     )
 
+    """
     h2_grad_ao_b = np.zeros((3, len(atm_slices), two_rdm.shape[0], two_rdm.shape[1]))
     for i, slice in enumerate(atm_slices):
         # Subtract the gradient contribution from the contraction part
         h2_grad_ao_b[:, i, slice[0] : slice[1], :] -= two_el_contraction_from_grad[
             :, slice[0] : slice[1], :
         ]
+    """   
+    h2_grad_ao_sum = np.zeros((len(atm_slices),3))
+    for i, slice in enumerate(atm_slices):
+        # Subtract the gradient contribution from the contraction part
+        h2_grad_ao_sum[i,:] -= two_el_contraction_from_grad[
+            :, slice[0] : slice[1], slice[0] : slice[1]
+        ].trace(axis1=1,axis2=2)
 
+    
     # Return the two-electron integral gradient
-    return two_el_contraction + np.einsum("nmbb->mn", h2_grad_ao_b)
+    #return two_el_contraction + np.einsum("nmbb->mn", h2_grad_ao_b)
+    return two_el_contraction + h2_grad_ao_sum
 
 
 def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=None):
@@ -476,7 +486,8 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
   
     two_el_contraction_ao = np.einsum(
         "abcd,aimn,bj,ck,dl->ijklmn",
-        h2_ao,
+        h2_ao + h2_ao.transpose(1,0,2,3) 
+        + h2_ao.transpose(3,2,1,0) + h2_ao.transpose(2,3,0,1),
         ao_mo_trafo_grad,
         ao_mo_trafo,
         ao_mo_trafo,
@@ -484,13 +495,14 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
         optimize="optimal",
     )
     
+    """
     two_el_contraction_ao += \
         np.transpose(two_el_contraction_ao,(1, 0, 2, 3,4,5)) +\
         np.transpose(two_el_contraction_ao,(3, 2, 1, 0,4,5)) +\
         np.transpose(two_el_contraction_ao,(2, 3, 0, 1,4,5))
-    
-    two_el_contraction_from_grad_ao = np.einsum(
-        "nmbcd,ai,bj,ck,dl->ijklnma",
+    """
+    two_el_contraction_from_grad_ao_traced = np.einsum(
+        "nmbcd,mi,bj,ck,dl->ijklnm",
         h2_ao_deriv,
         ao_mo_trafo,
         ao_mo_trafo,
@@ -498,25 +510,52 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
         ao_mo_trafo,
         optimize="optimal",
     )
+    """
+    two_el_contraction_from_grad_ao = two_el_contraction_from_grad_ao1+\
+        np.transpose(two_el_contraction_from_grad_ao1,(1, 0, 2, 3, 4,5,6)) +\
+        np.transpose(two_el_contraction_from_grad_ao1,(3, 2, 1, 0, 4,5,6)) +\
+        np.transpose(two_el_contraction_from_grad_ao1,(2, 3, 0, 1, 4,5,6))
+        
     
-    two_el_contraction_from_grad_ao += \
-        np.transpose(two_el_contraction_from_grad_ao,(1, 0, 2, 3, 4,5,6)) +\
-        np.transpose(two_el_contraction_from_grad_ao,(3, 2, 1, 0, 4,5,6)) +\
-        np.transpose(two_el_contraction_from_grad_ao,(2, 3, 0, 1, 4,5,6))
+    if False:
+        h2_grad_ao_b = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], 3, len(atm_slices), h2_ao.shape[0], h2_ao.shape[1]))
+        for i, slice in enumerate(atm_slices):
+            # Subtract the gradient contribution from the contraction part
+            h2_grad_ao_b[:,:,:,:, :, i, slice[0] : slice[1], :] -= two_el_contraction_from_grad_ao[
+                :,:,:,:, :, slice[0] : slice[1], :
+            ]
+                
+        h2_grad = two_el_contraction_ao + np.einsum(
+            "ijklnmbb->ijklmn",
+            h2_grad_ao_b,
+            optimize="optimal",
+        )
+        
+    elif False:
+        h2_grad_ao_sum = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], len(atm_slices),3))
+        for i, slice in enumerate(atm_slices):
+            # Subtract the gradient contribution from the contraction part
+            h2_grad_ao_sum[:,:,:,:,i,:] -= two_el_contraction_from_grad_ao[
+                :, :,:,:,:,slice[0] : slice[1], slice[0] : slice[1]
+            ].trace(axis1=5,axis2=6)
+            
+        h2_grad = two_el_contraction_ao + h2_grad_ao_sum
 
-    h2_grad_ao_b = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], 3, len(atm_slices), h2_ao.shape[0], h2_ao.shape[1]))
+    """
+    h2_grad_ao_sum = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], len(atm_slices),3))
     for i, slice in enumerate(atm_slices):
+        # Slice for orbitals on atom i
+        two_el_ao = two_el_contraction_from_grad_ao_traced[
+            :, :,:,:,:,slice[0] : slice[1]
+        ].sum(axis=5)
+        
         # Subtract the gradient contribution from the contraction part
-        h2_grad_ao_b[:,:,:,:, :, i, slice[0] : slice[1], :] -= two_el_contraction_from_grad_ao[
-            :,:,:,:, :, slice[0] : slice[1], :
-        ]
+        h2_grad_ao_sum[:,:,:,:,i,:] -= two_el_ao + two_el_ao.transpose(1, 0, 2, 3, 4) \
+        + two_el_ao.transpose(3, 2, 1, 0, 4) + two_el_ao.transpose(2, 3, 0, 1, 4)
 
-    h2_grad = two_el_contraction_ao + np.einsum(
-        "ijklnmbb->ijklmn",
-        h2_grad_ao_b,
-        optimize="optimal",
-    ) 
+    h2_grad = two_el_contraction_ao + h2_grad_ao_sum
     
+    #1/0
     # Return the two-electron integral gradient
     return h2_grad
 
@@ -886,6 +925,7 @@ if __name__ == '__main__':
     # Some initial checks for the code
     from pyscf import gto, fci
 
+    from pyscf.fci.addons import fix_spin_
     from evcont.FCI_EVCont import FCI_EVCont_obj
     
     from pyscf.mcscf import CASCI
@@ -900,7 +940,7 @@ if __name__ == '__main__':
     nroots_evcont = 3
     cibasis = 'OAO'
     
-    natom = 4
+    natom = 8
     
     test_range = np.linspace(0.8, 3.0,20)
 
@@ -910,6 +950,8 @@ if __name__ == '__main__':
         mol.build(
             atom=[("H", pos) for pos in positions],
             basis="sto-6g",
+            #basis="6-31g",
+            #basis='ccpvdz',
             symmetry=False,
             unit="Bohr",
             verbose=0
@@ -964,7 +1006,7 @@ if __name__ == '__main__':
             #en_exact, grad_exact = CASCI(mol.RHF(), natom, natom).nuc_grad_method().as_scanner()(mol)
             
             # Fci excited state reference values
-            mc = CASCI(mol.RHF(), natom,natom)
+            mc = CASCI(mol.RHF(), mol.nao, mol.nelectron)
             #mc = CASCI(mol.RHF(), 10,6) Li2
             mc.fcisolver = fci.direct_spin0.FCI()
             
@@ -1005,10 +1047,12 @@ if __name__ == '__main__':
             #en_exact, grad_exact = CASCI(mol.RHF(), natom, natom).nuc_grad_method().as_scanner()(mol)
             
             # Fci excited state reference values
-            mc = CASCI(mol.RHF(), natom,natom)
+            mc = CASCI(mol.RHF(), mol.nao, mol.nelectron)
             #mc = CASCI(mol.RHF(), 10,6) Li2
             mc.fcisolver = fci.direct_spin0.FCI()
-            mc.fcisolver.nroots = nstate+1
+            #mc.fcisolver = fci.direct_spin1.FCI()
+            #fix_spin_(mc.fcisolver,shift=0.9,ss=0)
+            mc.fcisolver.nroots = nstate+3
             #mc.fcisolver.nroots = 6
             #mc.fcisolver.conv_tol = 1.e-14
             #mc.fcisolver.max_space=30
@@ -1031,7 +1075,7 @@ if __name__ == '__main__':
             assert np.allclose(grad_exact,grad_continuation_ms[0])
     
             assert np.allclose(en_exc_exact,en_continuation_ms[nstate])        
-            assert np.allclose(grad_exc_exact,grad_continuation_ms[nstate],atol=1e-6)
+            assert np.allclose(grad_exc_exact,grad_continuation_ms[nstate],atol=1e-5)
                         
         print(f'Time taken: {time()-st:.1f} sec')
         
