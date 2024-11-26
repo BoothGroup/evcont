@@ -484,28 +484,24 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
         ao_mo_trafo,
         optimize="optimal",
     )
-    
-    two_el_contraction_from_grad_ao_traced = np.einsum(
-        "nmbcd,mi,bj,ck,dl->ijklnm",
-        h2_ao_deriv,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        ao_mo_trafo,
-        optimize="optimal",
-    )
 
     h2_grad_ao_sum = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], len(atm_slices),3))
     for i, slice in enumerate(atm_slices):
-        # Slice for orbitals on atom i
-        two_el_ao = two_el_contraction_from_grad_ao_traced[
-            :, :,:,:,:,slice[0] : slice[1]
-        ].sum(axis=5)
+        
+        two_el_ao = np.einsum(
+            "nmbcd,mi,bj,ck,dl->ijkln",
+            h2_ao_deriv[:,slice[0] : slice[1],:,:,:],
+            ao_mo_trafo[slice[0] : slice[1],:],
+            ao_mo_trafo,
+            ao_mo_trafo,
+            ao_mo_trafo,
+            optimize="optimal",
+        )
         
         # Subtract the gradient contribution from the contraction part
         h2_grad_ao_sum[:,:,:,:,i,:] -= two_el_ao + two_el_ao.transpose(1, 0, 2, 3, 4) \
         + two_el_ao.transpose(3, 2, 1, 0, 4) + two_el_ao.transpose(2, 3, 0, 1, 4)
-
+    
     h2_grad = two_el_contraction_ao + h2_grad_ao_sum
     
     # Return the two-electron integral gradient
@@ -734,7 +730,7 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
         )
 
 def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
-                                            savemem=True, hermitian=True):
+                                            savemem=False, hermitian=True):
     """
     Calculates the potential energiesm its gradient w.r.t. nuclear positions of a
     molecule and nonadiabatic couplings from eigenvector continuation for both
