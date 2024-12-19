@@ -1,5 +1,5 @@
 # EVCont
-This package bundles different scripts and tools for the application of the eigenvector continuation from few variational *ab initio* states, as discussed in our upcoming manuscript: Y. Rath and G. H. Booth. Interpolating many-body wave functions for accelerated molecular dynamics on near-exact electronic surfaces [1]
+This package bundles different scripts and tools for the application of the eigenvector continuation from few variational *ab initio* states, as discussed in our upcoming manuscript: Y. Rath and G. H. Booth. Interpolating numerically exact many-body wave functions for accelerated molecular dynamics [1]
 
 
 
@@ -40,4 +40,4 @@ The following scripts are included:
 Questions? Feel free to contact me via [yannic.rath@npl.co.uk](mailto:yannic.rath@npl.co.uk).
 
 ## Manuscript
-[1] Y. Rath and G. H. Booth. Interpolating many-body wave functions for accelerated molecular dynamics on the near-exact electronic surface.
+[1] Y. Rath and G. H. Booth. Interpolating numerically exact many-body wave functions for accelerated molecular dynamics
