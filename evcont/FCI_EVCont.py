@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+import itertools
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
@@ -9,7 +10,7 @@ from pyscf.fci.addons import transform_ci
 
 from evcont.ab_initio_gradients_loewdin import get_loewdin_trafo
 
-from evcont.low_rank_utils import reduce_2rdm
+from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
 
 class FCI_EVCont_obj:
     """
@@ -83,11 +84,19 @@ class FCI_EVCont_obj:
             self.kwargs = kwargs
             
         # Diagonals of 2-cumulants ([nbra, nket, 3, norb, norb])
-        self.cum_diagonal = None 
+        self.diagonal_lr = None 
         # Low rank eigendecomposition of the rest of 2-cumulant
-        # dictionary[(nbra, nket)] = (vals_trunc, vecs_trunc)
+        # Old version: dictionary[(nbra, nket)] = (vals_trunc, vecs_trunc)
+        # New version: dictionary['vals': np.array([nbra, nket, nvec]),
+        #                         'vecs': np.array([nbra, nket, nvec, nao, nao])]
+        
         self.vecs_lowrank = {}
     
+    def vectorize_lowrank(self):        
+        vectorize_lowrank(self)
+
+            
+        
     def append_to_rdms(self, mol):
         """
         Append a new training geometry by growing the t-RDMs.
@@ -174,11 +183,11 @@ class FCI_EVCont_obj:
                         two_rdm_new[:-1, :-1, :, :, :, :] = self.two_rdm
                         
                 else:
-                    cum_diagonal_new = np.ones(
+                    diagonal_lr_new = np.ones(
                         (len(self.fcivecs), len(self.fcivecs), 3, mol.nao, mol.nao)
                     )
-                    if self.cum_diagonal is not None:
-                        cum_diagonal_new[:-1, :-1, :, :, :] = self.cum_diagonal
+                    if self.diagonal_lr is not None:
+                        diagonal_lr_new[:-1, :-1, :, :, :] = self.diagonal_lr
                     
                         
                 # Iterate over training states to add RDMs to the existing states
@@ -214,8 +223,11 @@ class FCI_EVCont_obj:
                                         mol=mol, train_en=e,
                                         **self.kwargs)
                         
-                        cum_diagonal_new[-1, i, :, :, :] = diagonals
-                        cum_diagonal_new[i, -1, :, :, :] = diagonals_conj
+                        diagonal_lr_new[-1, i, :, :, :] = diagonals
+                        diagonal_lr_new[i, -1, :, :, :] = diagonals_conj
+                        
+                        self.vecs_lowrank[(new_ntrain-1, i)] = lowrank_vecs
+                        self.vecs_lowrank[(i, new_ntrain-1)] = lowrank_vecs_conj
                         
                         self.vecs_lowrank[(new_ntrain-1, i)] = lowrank_vecs
                         self.vecs_lowrank[(i, new_ntrain-1)] = lowrank_vecs_conj
@@ -226,7 +238,7 @@ class FCI_EVCont_obj:
                 if not self.lowrank:
                     self.two_rdm = two_rdm_new
                 else:
-                    self.cum_diagonal = cum_diagonal_new
+                    self.diagonal_lr = diagonal_lr_new
 
     def prune_datapoints(self, keep_ids):
         """

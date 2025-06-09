@@ -9,11 +9,12 @@ Script to test low rank construction of eigenvector continuation
 """
 
 import numpy as np
+import time
 
 from pyscf import gto, fci, scf, lib, ao2mo, mcscf
 
 from evcont.FCI_EVCont import FCI_EVCont_obj
-from evcont.CASCI_EVCont import CAS_EVCont_obj
+#from evcont.CASCI_EVCont import CAS_EVCont_obj
 
 from evcont.electron_integral_utils import get_basis, get_integrals, get_loewdin_trafo
 
@@ -33,15 +34,14 @@ import matplotlib.pylab as plt
 #import matplotlib as mpl
 plt.style.use('default')
 
-
-nroots_evcont = 2
+nroots_evcont = 3
 cibasis = 'canonical'
 #cibasis = 'OAO'
 
 df_basis = 'weigend'
 df_basis = 'cc-pvdz-jkfit'
 
-natom = 10
+natom = 8
 
 #cont_solver = 'CAS'
 cont_solver = 'FCI'
@@ -52,21 +52,23 @@ ncas, neleca = 4,4
 figsave = True
 
 #plot_extensive = False
-fix_singlet = True
+fix_singlet = False
 #withMolcas = False
 
 fix_sym = 'A1g'
-fix_sym = None
+#fix_sym = None
 
 if fix_sym == None:
     mol_sym = False
 else:
     mol_sym = True
     
-#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':10}
-lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
+lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':12}
+lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-2}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
+
+vectorize = True
 
 test_range = np.linspace(0.8, 3.0,40)
 #test_range = np.linspace(0.4, 1.5,20)
@@ -89,7 +91,7 @@ def get_mol(positions):
 mol_dummy = get_mol([(x, 0.0, 0.0) for x in test_range[0] * np.arange(natom)])
 
 # Set fci solver to be used
-if fix_sym == None:
+if fix_sym is None:
     myci = fci.direct_spin0.FCI()
 else:
     myci = fci.direct_spin0_symm.FCI(mol_dummy)
@@ -107,7 +109,7 @@ equilibrium_dist = 1.78596
 equilibrium_pos = np.array([(x * equilibrium_dist, 0.0, 0.0) for x in range(10)])
 
 trainig_dists = [0.97, 1.76, 2.60]
-#trainig_dists = np.linspace(0.97,2.60,12)
+#trainig_dists = np.linspace(0.97,2.60,5)
 
 if cont_solver == 'FCI':
     continuation_object = FCI_EVCont_obj(nroots=nroots_evcont,
@@ -142,16 +144,24 @@ for i, dist in enumerate(trainig_dists):
     #continuation_object.append_to_rdms_new(mol)
     continuation_object_full.append_to_rdms(mol)
 
+# If vectorize
+if vectorize:
+    continuation_object.vectorize_lowrank()
+    vecs_lr = continuation_object.lowrank_vectorized
+else:
+    vecs_lr = continuation_object.vecs_lowrank
+    
 # Save
 i = 'final'
 np.save("overlap_{}.npy".format(i), continuation_object.overlap)
 np.save("one_rdm_{}.npy".format(i), continuation_object.one_rdm)
 
-np.save("cum_diagonal_{}.npy".format(i), continuation_object.cum_diagonal)
+np.save("diagonal_lr_{}.npy".format(i), continuation_object.diagonal_lr)
 np.save("lowrank_vecs_{}.npy".format(i), continuation_object.vecs_lowrank)
 
 np.save('trn_geometries_{}.npy'.format(i), trn_geometries)
 
+lr_tot = 0.; lr_n_eval = 0
 train_lowrank_en = []
 train_en = []
 for i, test_dist in enumerate(trainig_dists):
@@ -161,15 +171,19 @@ for i, test_dist in enumerate(trainig_dists):
     mol = get_mol(positions)
     h1, h2 = get_integrals(mol, get_basis(mol))
     
+
     # Continuation
+    start = time.time()
+
     en_continuation_ms, vec = approximate_multistate_lowrank_OAO(
         mol, 
         continuation_object.one_rdm,  
-        continuation_object.vecs_lowrank,
-        None, #continuation_object.cum_diagonal, 
+        vecs_lr,
+        None, #continuation_object.diagonal_lr, 
         continuation_object.overlap,
         nroots=nroots_evcont
     )
+    lr_tot += (time.time()-start); lr_n_eval += 1
     
     train_lowrank_en += [en_continuation_ms]
 
@@ -200,16 +214,18 @@ for i, test_dist in enumerate(test_range):
     
     print('   low rank')
     # Continuation
+    start = time.time()
     en_continuation_ms, vec = approximate_multistate_lowrank_OAO(
         mol, 
         continuation_object.one_rdm, 
-        continuation_object.vecs_lowrank, 
-        None, #continuation_object.cum_diagonal, 
+        vecs_lr,
+        None, #continuation_object.diagonal_lr, 
         continuation_object.overlap,
         nroots=nroots_evcont,
         df_basis=df_basis
     )
-    
+    lr_tot += (time.time()-start); lr_n_eval += 1
+
     #cont_lowrank_en += [en_continuation_ms]
     cont_lowrank_en[i,:] = en_continuation_ms
     
@@ -295,6 +311,8 @@ for i, test_dist in enumerate(test_range):
     cont_en[i,:] = en_continuation_ms + mol.energy_nuc()
 
 
+print('Time per low-rank (s): %.2f'%(lr_tot/lr_n_eval))
+
 # PLOT
 fig, [ax1,ax2,ax3] = plt.subplots(nrows=3,sharex=True,figsize=[4,7],height_ratios=[3,1.5,1.5],
                                  gridspec_kw={'hspace':0.,'wspace':0.})
@@ -321,12 +339,17 @@ ax1.legend()
 ax2.plot(test_range,cont_en - fci_en,'b')
 ax2.plot(test_range,cont_lowrank_en - fci_en,'--r')
 
-ax3.plot(test_range,cont_en - ref_en,'b')
-ax3.plot(test_range,cont_lowrank_en - ref_en,'--r')
-
+if cont_solver != 'FCI':
+    ax3.plot(test_range,cont_en - ref_en,'b')
+    ax3.plot(test_range,cont_lowrank_en - ref_en,'--r')
+    ax3.set_ylabel(r'$E_{cont}$ - $E_{%s}$ (Ha)'%cont_solver)
+else:
+    
+    ax3.plot(test_range,cont_lowrank_en - cont_en,'--r')
+    ax3.set_ylabel(r'$E_{cont}$ - $E_{lowrank}$ (Ha)')
+    
 ax1.set_ylabel('Energy (Ha)')
 ax2.set_ylabel(r'$E_{cont}$ - $E_{FCI}$ (Ha)')
-ax3.set_ylabel(r'$E_{cont}$ - $E_{%s}$ (Ha)'%cont_solver)
 ax3.set_xlabel('Atomic separation ($a_0$)')
 if figsave:
     plt.savefig('H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png')

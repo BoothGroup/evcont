@@ -128,8 +128,8 @@ def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S,
     
     if hermitian is True:
         # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
-        vals, vecs = eigh(H, S)
-        #vals, vecs, _ = safe_eigh(H, S)
+        #vals, vecs = eigh(H, S)
+        vals, vecs, _ = safe_eigh(H, S, lindep=1e-2)
         
     else:
         # Solve the generalized eigenvalue problem for non-Hermitian Hamiltonian

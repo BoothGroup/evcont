@@ -112,10 +112,11 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     
     if not save_diag:
         diagonals = None
+
         
     else:
-        print('Error in reduce_2rdm: Saving diagonals not implemented yet.')
-        sys.exit()
+        #print('Error in reduce_2rdm: Saving diagonals not implemented yet.')
+        #sys.exit()
         
         remainder = rdm2 - reconstruct_rdm2_joint(lowrank_vecs)
         
@@ -132,8 +133,8 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         #    diag_mask = build_diag_mask(norb)
         #mat_decomp -= diag_mask*mat_decomp
 
+    print(np.linalg.norm(reconstruct_rdm2_joint(lowrank_vecs, diagonals) - rdm2))
 
-    print(np.linalg.norm(reconstruct_rdm2_joint(lowrank_vecs) - rdm2))
           
     return lowrank_vecs, diagonals
 
@@ -146,6 +147,14 @@ def reconstruct_rdm2_joint(lowrank_vecs, diagonals=None):
     # Add exchange part as well
     rdm2_i -= 0.5*np.einsum('kja,a,ila->ijkl',lr_vecs, lr_vals, lr_vecs,optimize='optimal')
     
+    if diagonals is not None:
+        norb = diagonals.shape[-1]
+        for (i,j) in itertools.product(range(norb), range(norb)):
+            rdm2_i[ i, i, j, j] += diagonals[0, i, j] 
+            if i != j:
+                rdm2_i[ i, j, i, j] += diagonals[1, i, j] 
+                rdm2_i[ i, j, i, j] += diagonals[2, i, j] 
+    
     return rdm2_i
 
 """
@@ -156,7 +165,8 @@ def reconstruct_subspace(lowrank_vecs, h2, ntrain=3):
         subspace_h += 
 """            
 def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
-                        sao_basis=None, df_basis='weigend', use_diag=False):
+                        sao_basis=None, df_basis='weigend', 
+                        use_diag=False):
     """
     Construct subspace Hamiltonian using the low-rank decomposition of 
     2-transition-cumulant
@@ -189,28 +199,61 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     ### 1-body contributions
     subspace_h = np.einsum('...kl,kl->...', one_RDM, h1e_sao)
 
+    # Check if low-rank vectors have been vectorized
+    if ('vals' in lowrank_vecs):
+        vectorized = True
+    else:
+        vectorized = False
+        
+        
     # Construct the subspace Hamiltonian
 
-    # Ideally this should all be vectorized where 
-    # lowrank vectors are of the form ([nbra, nket, nvec, nao, nao])
-    # but for now let's do them separately in a loop for testing
-    for bra in range(ntrain):
-        for ket in range(ntrain):
-            
-            nvec = lowrank_vecs[(bra,ket)][0].shape[0]
+    if not vectorized:
+        # Ideally this should all be vectorized where 
+        # lowrank vectors are of the form ([nbra, nket, nvec, nao, nao])
+        # but for now let's do them separately in a loop for testing
+        for bra in range(ntrain):
+            for ket in range(ntrain):
+                
+                nvec = lowrank_vecs[(bra,ket)][0].shape[0]
+    
+                # Transform the low-rank vecs into
+                lr_vecs_ao = ao2mo._ao2mo.nr_e2(lowrank_vecs[(bra, ket)][1].transpose((2,0,1)), sao_basis.T,
+                (0, norb, 0, norb), aosym='s1', mosym='s1')
+                lr_vecs_ao = lr_vecs_ao.reshape((nvec,norb,norb))
+    
+                # JK build
+                vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+                subspace_h[bra,ket] += 0.5*np.einsum('aij,aij,a->', vj_list - 0.5 * vk_list, lr_vecs_ao, lowrank_vecs[(bra, ket)][0])
+    
+                if use_diag:
+                    print('Error in lowrank_hamiltonian: Diagonal contraction not implemented')
+                    sys.exit()
+                    
+    else:
+        nvec = lowrank_vecs['vals'].shape[2]
+        
+        # Group bra, ket and nvec indices together 
+        # (this can be reduced further since bra and ket are related, i.e. use utril)
+        lr_vecs_grouped = lowrank_vecs['vecs'].reshape([ntrain*ntrain*nvec,norb, norb])
+        
+        # Transform the low-rank vecs into
+        lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, sao_basis.T,
+        (0, norb, 0, norb), aosym='s1', mosym='s1')
+        lr_vecs_ao = lr_vecs_ao.reshape((ntrain*ntrain*nvec,norb,norb))
 
-            # Transform the low-rank vecs into
-            lr_vecs_ao = ao2mo._ao2mo.nr_e2(lowrank_vecs[(bra, ket)][1].transpose((2,0,1)), sao_basis.T,
-            (0, norb, 0, norb), aosym='s1', mosym='s1')
-            lr_vecs_ao = lr_vecs_ao.reshape((nvec,norb,norb))
+        # JK build
+        vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+        vhf = vj_list - 0.5*vk_list
 
-            # JK build
-            vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
-            subspace_h[bra,ket] += 0.5*np.einsum('aij,aij,a->', vj_list - 0.5 * vk_list, lr_vecs_ao, lowrank_vecs[(bra, ket)][0])
+        # Reindex to separate bra, ket, nvec indices
+        vhf = vhf.reshape([ntrain,ntrain,nvec, norb,norb])
+        lr_vecs_ao = lr_vecs_ao.reshape([ntrain,ntrain,nvec, norb,norb])
+        
+        # Contruction for subspace Hamiltonian
+        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'])
+    
 
-            if use_diag:
-                print('Error in lowrank_hamiltonian: Diagonal contraction not implemented')
-                sys.exit()
                 
     return subspace_h
 
@@ -298,6 +341,33 @@ def select_lowrank_ham(evals, evecs, diagonal, norb,
     return vals_trunc, vecs_trunc
     
 
+# Attribute function to vectorize low-rank vectors for EVCont solver classes
+def vectorize_lowrank(self):
+    
+    # Make sure a low-rank decomposition has been performed
+    assert len(self.vecs_lowrank.items()) != 0
+    
+    # Find the largest number of vectors for each bra,ket pair
+    nbra = self.overlap.shape[0]
+    norb = self.one_rdm.shape[-1]
+    nvec_max = 0
+    for i, j in itertools.product(range(nbra), range(nbra)):
+        nvec_max = max(nvec_max, self.vecs_lowrank[(i,j)][0].shape[-1])
+        
+    # Convert the dictionary of states into a np.array
+    vecs_lr = np.zeros([nbra, nbra, nvec_max, norb, norb])
+    vals_lr = np.zeros([nbra, nbra, nvec_max])
+    for i, j in itertools.product(range(nbra), range(nbra)):
+        lr_i = self.vecs_lowrank[(i,j)]
+        nvec_i = lr_i[0].shape[-1]
+        vecs_lr[i,j,:nvec_i] = lr_i[1].transpose(2,0,1) 
+        vals_lr[i,j,:nvec_i] = lr_i[0]
+        
+    # Set this low-rank description
+    self.lowrank_vectorized = {}
+    self.lowrank_vectorized['vals'] = vals_lr
+    self.lowrank_vectorized['vecs'] = vecs_lr
+        
 def rdm2_from_rdm1(rdm1, ovlp):
     """
     1-body contribution to the 2-(transition) reduced density matrices
