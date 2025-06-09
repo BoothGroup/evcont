@@ -204,12 +204,12 @@ class FCI_EVCont_obj:
                     # Low rank
                     else:
                         # Get low rank representation
-                        diagonals, lowrank_vecs = \
+                        lowrank_vecs, diagonals = \
                             reduce_2rdm(rdm1, rdm2, ovlp, 
                                         mol=mol, train_en=e,
                                         **self.kwargs)
                         
-                        diagonals_conj, lowrank_vecs_conj = \
+                        lowrank_vecs_conj, diagonals_conj = \
                             reduce_2rdm(rdm1_conj, rdm2_conj, ovlp,        
                                         mol=mol, train_en=e,
                                         **self.kwargs)

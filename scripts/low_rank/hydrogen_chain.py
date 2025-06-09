@@ -34,15 +34,18 @@ import matplotlib.pylab as plt
 plt.style.use('default')
 
 
-nroots_evcont = 1
+nroots_evcont = 2
 cibasis = 'canonical'
 #cibasis = 'OAO'
 
 df_basis = 'weigend'
+df_basis = 'cc-pvdz-jkfit'
 
-natom = 6
+natom = 10
 
-cont_solver = 'CAS'
+#cont_solver = 'CAS'
+cont_solver = 'FCI'
+
 cassolver='SS-CASSCF'
 #cassolver='CASCI'
 ncas, neleca = 4,4
@@ -60,8 +63,8 @@ if fix_sym == None:
 else:
     mol_sym = True
     
-lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':10}
-lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
+#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':10}
+lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
@@ -76,7 +79,7 @@ def get_mol(positions):
         #basis="sto-3g",
         basis="sto-6g",
         #basis="6-31g",
-        symmetry=True,
+        symmetry=mol_sym,
         unit="Bohr",
         verbose=0
     )
@@ -135,8 +138,8 @@ for i, dist in enumerate(trainig_dists):
     
     # Build molecule    
     mol = get_mol(positions)
-    #continuation_object.append_to_rdms(mol)
-    continuation_object.append_to_rdms_new(mol)
+    continuation_object.append_to_rdms(mol)
+    #continuation_object.append_to_rdms_new(mol)
     continuation_object_full.append_to_rdms(mol)
 
 # Save
@@ -161,9 +164,9 @@ for i, test_dist in enumerate(trainig_dists):
     # Continuation
     en_continuation_ms, vec = approximate_multistate_lowrank_OAO(
         mol, 
-        continuation_object.one_rdm, 
-        continuation_object.cum_diagonal, 
-        continuation_object.vecs_lowrank, 
+        continuation_object.one_rdm,  
+        continuation_object.vecs_lowrank,
+        None, #continuation_object.cum_diagonal, 
         continuation_object.overlap,
         nroots=nroots_evcont
     )
@@ -200,8 +203,8 @@ for i, test_dist in enumerate(test_range):
     en_continuation_ms, vec = approximate_multistate_lowrank_OAO(
         mol, 
         continuation_object.one_rdm, 
-        continuation_object.cum_diagonal, 
         continuation_object.vecs_lowrank, 
+        None, #continuation_object.cum_diagonal, 
         continuation_object.overlap,
         nroots=nroots_evcont,
         df_basis=df_basis
@@ -228,7 +231,7 @@ for i, test_dist in enumerate(test_range):
     #print(h1e_mo, df_eri, mol.nao, mol.nelec)
 
     # Only do FCI if number of orbitals is less than 16
-    if mol.nao < 16:
+    if mol.nao < 16 or cont_solver == 'FCI':
         e_fci, c_fci = myci.kernel(h1e_mo, df_eri, mol.nao, mol.nelec, nroots=nroots_evcont)
         e_fci += mol.energy_nuc()
         fci_en[i,:] = e_fci
@@ -261,7 +264,14 @@ for i, test_dist in enumerate(test_range):
                 e_cas.append(mc.kernel()[1])
             ref_en[i,:] = np.array(e_cas) + mol.energy_nuc()
 
-    print(ehf, e_fci, e_cas + mol.energy_nuc(),en_continuation_ms, mol.energy_nuc())
+    else:
+        ref_en[i,:] = e_fci
+        
+    if cont_solver == 'CAS':
+        print(ehf, e_fci, e_cas + mol.energy_nuc(),en_continuation_ms, mol.energy_nuc())
+    else:
+        print(ehf, ref_en[i,:], en_continuation_ms)
+        
     # Full continuation
     print('   full')
     # Find h1 and eris in SAO basis

@@ -476,14 +476,17 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
   
     two_el_contraction_ao = np.einsum(
         "abcd,aimn,bj,ck,dl->ijklmn",
-        h2_ao + h2_ao.transpose(1,0,2,3) 
-        + h2_ao.transpose(3,2,1,0) + h2_ao.transpose(2,3,0,1),
+        h2_ao + h2_ao.transpose(1,0,3,2) 
+        + h2_ao.transpose(2,3,0,1) + h2_ao.transpose(3,2,0,1),
         ao_mo_trafo_grad,
         ao_mo_trafo,
         ao_mo_trafo,
         ao_mo_trafo,
         optimize="optimal",
     )
+    
+    #    h2_ao + h2_ao.transpose(1,0,2,3) 
+    #    + h2_ao.transpose(3,2,1,0) + h2_ao.transpose(2,3,0,1),
 
     h2_grad_ao_sum = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], len(atm_slices),3))
     for i, slice in enumerate(atm_slices):
@@ -506,6 +509,64 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
     
     # Return the two-electron integral gradient
     return h2_grad
+
+def get_two_el_grad_new(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slices):
+    """
+    Calculate the two-electron integral gradient.
+
+    Args:
+        h2_ao (np.ndarray): Two-electron integrals in atomic orbital basis.
+        two_rdm (np.ndarray): Two-electron reduced density matrix.
+        ao_mo_trafo (np.ndarray):
+            Transformation matrix from atomic orbital to molecular orbital basis.
+        ao_mo_trafo_grad (np.ndarray): Gradient of the transformation matrix.
+        h2_ao_deriv (np.ndarray):
+            Derivative of the two-electron integrals with respect to nuclear
+            coordinates.
+        atm_slices (list): List of atom index slices.
+
+    Returns:
+        np.ndarray: The two-electron gradient.
+
+    """
+  
+    two_el_contraction_ao = np.einsum(
+        "abcd,aimn,bj,ck,dl->ijklmn",
+        h2_ao,
+        ao_mo_trafo_grad,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        ao_mo_trafo,
+        optimize="optimal",
+    )
+    
+    two_el_contraction_ao += \
+        np.transpose(two_el_contraction_ao,(1, 0, 2, 3,4,5)) +\
+        np.transpose(two_el_contraction_ao,(3, 2, 1, 0,4,5)) +\
+        np.transpose(two_el_contraction_ao,(2, 3, 0, 1,4,5))
+    
+    h2_grad_ao_sum = np.zeros((h2_ao.shape[0], h2_ao.shape[1], h2_ao.shape[2], h2_ao.shape[3], len(atm_slices),3))
+    for i, slice in enumerate(atm_slices):
+        
+        two_el_ao = np.einsum(
+            "nmbcd,mi,bj,ck,dl->ijkln",
+            h2_ao_deriv[:,slice[0] : slice[1],:,:,:],
+            ao_mo_trafo[slice[0] : slice[1],:],
+            ao_mo_trafo,
+            ao_mo_trafo,
+            ao_mo_trafo,
+            optimize="optimal",
+        )
+        
+        # Subtract the gradient contribution from the contraction part
+        h2_grad_ao_sum[:,:,:,:,i,:] -= two_el_ao + two_el_ao.transpose(1, 0, 2, 3, 4) \
+        + two_el_ao.transpose(3, 2, 1, 0, 4) + two_el_ao.transpose(2, 3, 0, 1, 4)
+    
+    h2_grad = two_el_contraction_ao + h2_grad_ao_sum
+    
+    # Return the two-electron integral gradient
+    return h2_grad
+
 
 def get_one_and_two_el_grad(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None):
     """
@@ -632,7 +693,7 @@ def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None)
         deriv_ov[i,:, slice[0] : slice[1], :] -= mol.intor("int1e_ipovlp")[:, slice[0] : slice[1], :]
         
     orb_deriv_contraction = np.einsum("ij,Axik,kl->jlAx",ao_mo_trafo, deriv_ov, ao_mo_trafo,optimize="optimal")
-   
+    
     return trafo_deriv_contraction +  orb_deriv_contraction
 
 def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True, return_density_matrices=False):
