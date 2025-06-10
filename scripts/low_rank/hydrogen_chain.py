@@ -41,7 +41,7 @@ cibasis = 'canonical'
 df_basis = 'weigend'
 df_basis = 'cc-pvdz-jkfit'
 
-natom = 8
+natom = 10
 
 #cont_solver = 'CAS'
 cont_solver = 'FCI'
@@ -63,8 +63,8 @@ if fix_sym == None:
 else:
     mol_sym = True
     
-lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':12}
-lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-2}
+lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':4}
+#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-2}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
@@ -171,7 +171,6 @@ for i, test_dist in enumerate(trainig_dists):
     mol = get_mol(positions)
     h1, h2 = get_integrals(mol, get_basis(mol))
     
-
     # Continuation
     start = time.time()
 

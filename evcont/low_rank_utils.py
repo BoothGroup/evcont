@@ -202,12 +202,14 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     # Check if low-rank vectors have been vectorized
     if ('vals' in lowrank_vecs):
         vectorized = True
+        # Whether to use training point symmetry
+        hermitian = lowrank_vecs['hermitian']
+        
     else:
         vectorized = False
         
         
     # Construct the subspace Hamiltonian
-
     if not vectorized:
         # Ideally this should all be vectorized where 
         # lowrank vectors are of the form ([nbra, nket, nvec, nao, nao])
@@ -233,30 +235,42 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     else:
         nvec = lowrank_vecs['vals'].shape[2]
         
-        # Group bra, ket and nvec indices together 
-        # (this can be reduced further since bra and ket are related, i.e. use utril)
-        lr_vecs_grouped = lowrank_vecs['vecs'].reshape([ntrain*ntrain*nvec,norb, norb])
+        # If we have dynamic matrices, so each vector is stacked
+        # nvec1 + nvec2 + nvec3 + nvec4 + ...
+        # Is it easy to disentangle it into bra,ket pairs?
+        # e.g. first 8 belongs to (0,0), second 4 belongs to (0,1), third 5 belongs to (0,2)
+        # If we store these 'n's in a list; nvec_l = [0,8,12,17,...]
+        # Can we disentangle as (0,0) = vecs[nvec_l[0]:nvec_l[1]]
+        # Seems plausible, just need a dictionary mapping (bra,ket) to range [i,j]
+        
+        lr_vecs_grouped = lowrank_vecs['vecs_stacked']
         
         # Transform the low-rank vecs into
         lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, sao_basis.T,
         (0, norb, 0, norb), aosym='s1', mosym='s1')
-        lr_vecs_ao = lr_vecs_ao.reshape((ntrain*ntrain*nvec,norb,norb))
-
+        lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
+        
         # JK build
         vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
         vhf = vj_list - 0.5*vk_list
-
+        
         # Reindex to separate bra, ket, nvec indices
-        vhf = vhf.reshape([ntrain,ntrain,nvec, norb,norb])
-        lr_vecs_ao = lr_vecs_ao.reshape([ntrain,ntrain,nvec, norb,norb])
+        vhf = unpack_vec(vhf, lowrank_vecs['pairloc'],hermitian=hermitian)
+        lr_vecs_ao = unpack_vec(lr_vecs_ao, lowrank_vecs['pairloc'],hermitian=hermitian)
         
         # Contruction for subspace Hamiltonian
-        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'])
+        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'],optimize='optimal')
+        
+    if hermitian:
+        # Set the upper triangle
+        subspace_h[np.triu_indices(ntrain)] = subspace_h.T[np.triu_indices(ntrain)].conj()
     
+    # Check that hermitian
+    #assert np.allclose(subspace_h, subspace_h.T.conj())
 
-                
     return subspace_h
 
+###############################################################################
 def select_lowrank(evals, evecs, norb, 
                    truncation_style='eigval',nvecs=10, eval_thr=0.1, min_nvec=0):
     """
@@ -340,9 +354,115 @@ def select_lowrank_ham(evals, evecs, diagonal, norb,
     
     return vals_trunc, vecs_trunc
     
+###############################################################################
+def stack_lowrank(vecs_lowrank, hermitian=True):
+    """
+    Function to group dynamically chosen low-rank eigenstates for different
+    bra,ket pairs into a compound index for efficient inference
+    """
+    # Prelim
+    nbra = list(vecs_lowrank.keys())[-1][0]+1
+    norb = vecs_lowrank[(0,0)][1].shape[1]
+    
+    # Store the locations of bra,ket pairs in the composite index
+    pair_loc = {}
+    
+    # Start stacking
+    vecs_lr = []
+    vals_lr = []
+    nvec_tot = 0
+    
+    # Only iterarte through lower triangular indices
+    if hermitian:
+        for i in range(nbra):
+            for j in range(i+1):
+                lr_i = vecs_lowrank[(i,j)]
+                nvec_i = lr_i[0].shape[-1]
+                vecs_lr.append(lr_i[1].transpose(2,0,1))
+                vals_lr.append(lr_i[0])
+                
+                pair_loc[(i,j)] = [nvec_tot, nvec_tot + nvec_i]
+                
+                nvec_tot += nvec_i         
+    else:
+        for i, j in itertools.product(range(nbra), range(nbra)):
+            lr_i = vecs_lowrank[(i,j)]
+            nvec_i = lr_i[0].shape[-1]
+            vecs_lr.append(lr_i[1].transpose(2,0,1))
+            vals_lr.append(lr_i[0])
+            
+            pair_loc[(i,j)] = [nvec_tot, nvec_tot + nvec_i]
+            
+            nvec_tot += nvec_i
+        
+    vecs_stacked = np.concatenate(vecs_lr,axis=0)
+    vals_stacked = np.concatenate(vals_lr)
+    
+    stacked_lowrank = {}
+    stacked_lowrank['vals'] = vals_stacked
+    stacked_lowrank['vecs'] = vecs_stacked
+    stacked_lowrank['pairloc'] = pair_loc
+    stacked_lowrank['hermitian'] = hermitian
+    return stacked_lowrank
 
+def unpack_vec(vecs,pair_loc,hermitian=True):
+    """
+    Function to unpack vectors stacked using "stack_lowrank" function
+
+    """
+    nbra = list(pair_loc.keys())[-1][0]+1
+    norb = vecs.shape[1]
+    nvec_max = np.max([j-i for i,j in pair_loc.values()])
+    
+    vecs_unpacked = np.zeros([nbra, nbra, nvec_max,norb,norb])
+    
+    if hermitian:
+        for i in range(nbra):
+            for j in range(i+1):
+                st, en = pair_loc[(i,j)]
+                vecs_unpacked[i,j,:(en-st)] = vecs[st:en]
+    else:
+        for i, j in itertools.product(range(nbra), range(nbra)):
+            st, en = pair_loc[(i,j)]
+            vecs_unpacked[i,j,:(en-st)] = vecs[st:en]
+
+    return vecs_unpacked
+        
+def unpack_lowrank(stacked_lowrank,hermitian=True):
+    """
+    For testing; function to unpack both eigenvectors and eigenvectors
+    from the stacked_lowrank dictionary
+    """
+    
+    vals_stacked = stacked_lowrank['vals']
+    vecs_stacked = stacked_lowrank['vecs']
+    pair_loc = stacked_lowrank['pairloc']
+    
+    # Prelim
+    nbra = list(pair_loc.keys())[-1][0]+1
+    
+    unpacked_vecs = {}
+    if hermitian:
+        for i in range(nbra):
+            for j in range(i+1):
+                st, en = pair_loc[(i,j)]
+                vals_i = vals_stacked[st:en]
+                vecs_i = vecs_stacked[st:en].transpose(1,2,0)
+                
+                unpacked_vecs[(i,j)] = vals_i, vecs_i
+
+    else:
+        for i, j in itertools.product(range(nbra), range(nbra)):
+            st, en = pair_loc[(i,j)]
+            vals_i = vals_stacked[st:en]
+            vecs_i = vecs_stacked[st:en].transpose(1,2,0)
+
+            unpacked_vecs[(i,j)] = vals_i, vecs_i
+        
+    return unpacked_vecs
+    
 # Attribute function to vectorize low-rank vectors for EVCont solver classes
-def vectorize_lowrank(self):
+def vectorize_lowrank(self, hermitian=True):
     
     # Make sure a low-rank decomposition has been performed
     assert len(self.vecs_lowrank.items()) != 0
@@ -363,10 +483,21 @@ def vectorize_lowrank(self):
         vecs_lr[i,j,:nvec_i] = lr_i[1].transpose(2,0,1) 
         vals_lr[i,j,:nvec_i] = lr_i[0]
         
+    # Stack vectors for more efficient inference
+    # TODO: Clean up this function as there is a large overlap between
+    # the previous steps and stack_lowrank function
+    stacked = stack_lowrank(self.vecs_lowrank, hermitian=hermitian)
+    
     # Set this low-rank description
     self.lowrank_vectorized = {}
     self.lowrank_vectorized['vals'] = vals_lr
     self.lowrank_vectorized['vecs'] = vecs_lr
+    self.lowrank_vectorized['vecs_stacked'] = stacked['vecs']
+    self.lowrank_vectorized['pairloc'] = stacked['pairloc']
+    self.lowrank_vectorized['hermitian'] = hermitian
+    
+###############################################################################
+
         
 def rdm2_from_rdm1(rdm1, ovlp):
     """
