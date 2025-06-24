@@ -2,7 +2,8 @@ import numpy as np
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
-from evcont.low_rank_utils import reduce_2rdm
+from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
+
 from pygnme import wick, utils
 
 #from pyscf.mcscf.casci import CASCI
@@ -160,6 +161,9 @@ class CAS_EVCont_obj:
         self.mb_all = None
         self.occ_strings_all = []
 
+    def vectorize_lowrank(self):        
+        vectorize_lowrank(self)
+        
     def otf_hamiltonian_old(self, h1, h2):
         """ 
         OLD VERSION WITH INTERMEDIATE RDM COMPUTATION
