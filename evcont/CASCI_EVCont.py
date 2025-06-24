@@ -144,15 +144,18 @@ class CAS_EVCont_obj:
         self.use_rdm = None
         
         ### Initialize low-rank attributes
+        ### Initialize low-rank attributes
         self.lowrank = lowrank
         if lowrank:
             #self.truncation_style = kwargs['truncation_style']
             self.kwargs = kwargs
             
         # Diagonals of 2-cumulants ([nbra, nket, 3, norb, norb])
-        self.cum_diagonal = None 
+        self.diagonal_lr = None 
         # Low rank eigendecomposition of the rest of 2-cumulant
-        # dictionary[(nbra, nket)] = (vals_trunc, vecs_trunc)
+        # Old version: dictionary[(nbra, nket)] = (vals_trunc, vecs_trunc)
+        # New version: dictionary['vals': np.array([nbra, nket, nvec]),
+        #                         'vecs': np.array([nbra, nket, nvec, nao, nao])]
         self.vecs_lowrank = {}
 
         # Precomputation for OTF Hamiltonian
@@ -1267,18 +1270,29 @@ class CAS_EVCont_obj:
                 )
                 if one_rdm is not None:
                     one_rdm_new[:-1, :-1, :, :] = one_rdm
-                two_rdm_new = np.zeros(
-                    (
-                        n_cascis,
-                        n_cascis,
-                        mo_coeff_bra.shape[0],
-                        mo_coeff_bra.shape[0],
-                        mo_coeff_bra.shape[0],
-                        mo_coeff_bra.shape[0],
+                    
+                # Only define two_rdm if not lowrank
+                if not self.lowrank:
+                    two_rdm_new = np.zeros(
+                        (
+                            n_cascis,
+                            n_cascis,
+                            mo_coeff_bra.shape[0],
+                            mo_coeff_bra.shape[0],
+                            mo_coeff_bra.shape[0],
+                            mo_coeff_bra.shape[0],
+                        )
                     )
-                )
-                if two_rdm is not None:
-                    two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
+                    if two_rdm is not None:
+                        two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
+                        
+                else:
+                    diagonal_lr_new = np.ones(
+                        (n_cascis, n_cascis, 3, mo_coeff_bra.shape[0], mo_coeff_bra.shape[0])
+                    )
+                    if self.diagonal_lr is not None:
+                        diagonal_lr_new[:-1, :-1, :, :, :] = self.diagonal_lr
+                    
             else:
                 overlap_new = one_rdm_new = two_rdm_new = None
 
@@ -1413,11 +1427,38 @@ class CAS_EVCont_obj:
 
                     one_rdm_new[-1, i, :, :] = rdm1
                     one_rdm_new[i, -1, :, :] = rdm1.conj()
-                    two_rdm_new[-1, i, :, :, :, :] = rdm2
-                    two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                    
+                    if not self.lowrank:
+                        two_rdm_new[-1, i, :, :, :, :] = rdm2
+                        two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                        #two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                    
+                    # Low rank
+                    else:
+                        # Get low rank representation
+                        lowrank_vecs, diagonals = \
+                            reduce_2rdm(rdm1, rdm2, overlap_accumulate, 
+                                        mol=mol, train_en=cascis[i].e_tot,
+                                        **self.kwargs)
+                        
+                        #lowrank_vecs_conj, diagonals_conj = \
+                        #    reduce_2rdm(rdm1_conj, rdm2_conj, ovlp,        
+                        #                mol=mol, train_en=e,
+                        #                **self.kwargs)
+                        
+                        diagonal_lr_new[-1, i, :, :, :] = diagonals
+                        diagonal_lr_new[i, -1, :, :, :] = diagonals
+                            
+                        self.vecs_lowrank[(n_cascis-1, i)] = lowrank_vecs
+                        self.vecs_lowrank[(i, n_cascis-1)] = lowrank_vecs[0], lowrank_vecs[1].conj() 
+                        
+
             self.overlap = overlap_new
             self.one_rdm = one_rdm_new
-            self.two_rdm = two_rdm_new
+            if not self.lowrank:
+                self.two_rdm = two_rdm_new
+            else:
+                self.diagonal_lr = diagonal_lr_new
 
     def states_to_rdms(self):
         """
