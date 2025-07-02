@@ -14,7 +14,7 @@ import time
 from pyscf import gto, fci, scf, lib, ao2mo, mcscf
 
 from evcont.FCI_EVCont import FCI_EVCont_obj
-#from evcont.CASCI_EVCont import CAS_EVCont_obj
+from evcont.CASCI_EVCont import CAS_EVCont_obj
 
 from evcont.electron_integral_utils import get_basis, get_integrals, get_loewdin_trafo
 
@@ -39,38 +39,42 @@ cibasis = 'canonical'
 #cibasis = 'OAO'
 
 df_basis = 'weigend'
-df_basis = 'cc-pvdz-jkfit'
+#df_basis = 'cc-pvdz-jkfit'
 
-natom = 10
+natom = 8
 
-#cont_solver = 'CAS'
-cont_solver = 'FCI'
+cont_solver = 'CAS'
+#cont_solver = 'FCI'
 
 cassolver='SS-CASSCF'
 #cassolver='CASCI'
-ncas, neleca = 4,4
+ncas, neleca = 2,2
 figsave = True
 
 #plot_extensive = False
 fix_singlet = False
 #withMolcas = False
 
+# Whether to use FCI as a comparison if a CAS solver is used
+fci_done = False
+
 fix_sym = 'A1g'
-#fix_sym = None
+fix_sym = None
 
 if fix_sym == None:
     mol_sym = False
 else:
     mol_sym = True
     
-lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':4}
-#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-2}
+#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5}
+lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
-vectorize = True
+vectorize = False
 
-test_range = np.linspace(0.8, 3.0,40)
+#test_range = np.linspace(0.8, 3.0,40)
+test_range = np.linspace(0.8, 3.0,15)
 #test_range = np.linspace(0.4, 1.5,20)
 
 def get_mol(positions):
@@ -140,9 +144,13 @@ for i, dist in enumerate(trainig_dists):
     
     # Build molecule    
     mol = get_mol(positions)
-    continuation_object.append_to_rdms(mol)
+    if cont_solver == 'CAS':
+        continuation_object.append_to_rdms(mol,debug=False)
+    else:
+        continuation_object.append_to_rdms(mol)
+
     #continuation_object.append_to_rdms_new(mol)
-    continuation_object_full.append_to_rdms(mol)
+    continuation_object_full.append_to_rdms_nolowrank(mol)
 
 # If vectorize
 if vectorize:
@@ -202,8 +210,8 @@ for i, test_dist in enumerate(trainig_dists):
 fci_en = np.zeros([len(test_range),nroots_evcont])
 ref_en = np.zeros([len(test_range),nroots_evcont])
 hf_en = np.zeros([len(test_range)])
-cont_en = np.zeros([len(test_range),nroots_evcont])
-cont_lowrank_en = np.zeros([len(test_range),nroots_evcont])
+cont_en = np.zeros([len(test_range),nroots_evcont+1])
+cont_lowrank_en = np.zeros([len(test_range),nroots_evcont+1])
 for i, test_dist in enumerate(test_range):
     print(i)
     positions = [(x, 0.0, 0.0) for x in test_dist * np.arange(natom)]
@@ -211,7 +219,7 @@ for i, test_dist in enumerate(test_range):
     mol = get_mol(positions)
     h1, h2 = get_integrals(mol, get_basis(mol,'canonical'))
     
-    print('   low rank')
+    print('   low rank - start')
     # Continuation
     start = time.time()
     en_continuation_ms, vec = approximate_multistate_lowrank_OAO(
@@ -220,10 +228,12 @@ for i, test_dist in enumerate(test_range):
         vecs_lr,
         None, #continuation_object.diagonal_lr, 
         continuation_object.overlap,
-        nroots=nroots_evcont,
+        nroots=nroots_evcont+1,
         df_basis=df_basis
     )
     lr_tot += (time.time()-start); lr_n_eval += 1
+
+    print('   low rank - finish - %.1f sec'%(time.time()-start))
 
     #cont_lowrank_en += [en_continuation_ms]
     cont_lowrank_en[i,:] = en_continuation_ms
@@ -246,10 +256,12 @@ for i, test_dist in enumerate(test_range):
     #print(h1e_mo, df_eri, mol.nao, mol.nelec)
 
     # Only do FCI if number of orbitals is less than 16
-    if mol.nao < 16 or cont_solver == 'FCI':
+    if mol.nao < 16 and (cont_solver == 'FCI' or fci_done):
         e_fci, c_fci = myci.kernel(h1e_mo, df_eri, mol.nao, mol.nelec, nroots=nroots_evcont)
         e_fci += mol.energy_nuc()
         fci_en[i,:] = e_fci
+    else:
+        fci_done = False
 
     if cont_solver != 'FCI':
         # CAS reference
@@ -276,16 +288,11 @@ for i, test_dist in enumerate(test_range):
                 mc = mcscf.CASCI(mf2, ncas, neleca).state_specific_(istate)
                 mc.casci(mc_ss.mo_coeff)
                 #mc.fcisolver.nroots = nroots_evcont
-                e_cas.append(mc.kernel()[1])
-            ref_en[i,:] = np.array(e_cas) + mol.energy_nuc()
+                e_cas.append(mc.kernel()[0])
+            ref_en[i,:] = np.array(e_cas) #+ mol.energy_nuc()
 
     else:
         ref_en[i,:] = e_fci
-        
-    if cont_solver == 'CAS':
-        print(ehf, e_fci, e_cas + mol.energy_nuc(),en_continuation_ms, mol.energy_nuc())
-    else:
-        print(ehf, ref_en[i,:], en_continuation_ms)
         
     # Full continuation
     print('   full')
@@ -304,11 +311,19 @@ for i, test_dist in enumerate(test_range):
         continuation_object_full.one_rdm,
         continuation_object_full.two_rdm,
         continuation_object_full.overlap,
-        nroots=nroots_evcont
+        nroots=nroots_evcont+1
     )
     
     cont_en[i,:] = en_continuation_ms + mol.energy_nuc()
+    
+    if cont_solver == 'CAS':
+        if fci_done:
+            print(ehf, e_fci, ref_en[i], cont_en[i], cont_lowrank_en[i], mol.energy_nuc())
+        else:
+            print(ehf, ref_en[i], cont_en[i], cont_lowrank_en[i], mol.energy_nuc())
 
+    else:
+        print(ehf, ref_en[i,:], en_continuation_ms)
 
 print('Time per low-rank (s): %.2f'%(lr_tot/lr_n_eval))
 
@@ -318,13 +333,15 @@ fig, [ax1,ax2,ax3] = plt.subplots(nrows=3,sharex=True,figsize=[4,7],height_ratio
 
 ax1.plot(test_range, hf_en,'orange',label='HF')
 if nroots_evcont > 1:
-    ax1.plot(test_range,fci_en,'k',label=['FCI']+[None]*(nroots_evcont-1))
+    if (cont_solver == 'FCI' or fci_done):
+        ax1.plot(test_range,fci_en,'k',label=['FCI']+[None]*(nroots_evcont-1))
     if cont_solver != 'FCI':
         ax1.plot(test_range,ref_en,'green',label=[cont_solver]+[None]*(nroots_evcont-1))
-    ax1.plot(test_range,cont_en,'b',label=['full evcont']+[None]*(nroots_evcont-1))
-    ax1.plot(test_range,cont_lowrank_en,'--r',label=['low rank evcont']+[None]*(nroots_evcont-1))
+    ax1.plot(test_range,cont_en,'b',label=['full evcont']+[None]*(cont_en.shape[-1]-1))
+    ax1.plot(test_range,cont_lowrank_en,'--r',label=['low rank evcont']+[None]*(cont_lowrank_en.shape[-1]-1))
 else:
-    ax1.plot(test_range,fci_en,'k',label='FCI')
+    if (cont_solver == 'FCI' or fci_done):
+        ax1.plot(test_range,fci_en,'k',label='FCI')
     if cont_solver != 'FCI':
         ax1.plot(test_range,ref_en,'green',label=cont_solver)
     ax1.plot(test_range,cont_en,'b',label='full evcont')
@@ -335,12 +352,13 @@ ax1.plot(trainig_dists,train_en,'xb')
 ax1.plot(trainig_dists,train_lowrank_en,'xr')
 ax1.legend()
 
-ax2.plot(test_range,cont_en - fci_en,'b')
-ax2.plot(test_range,cont_lowrank_en - fci_en,'--r')
+if (cont_solver == 'FCI' or fci_done):
+    ax2.plot(test_range,cont_en[:,:nroots_evcont] - fci_en,'b')
+    ax2.plot(test_range,cont_lowrank_en[:,:nroots_evcont] - fci_en,'--r')
 
 if cont_solver != 'FCI':
-    ax3.plot(test_range,cont_en - ref_en,'b')
-    ax3.plot(test_range,cont_lowrank_en - ref_en,'--r')
+    ax3.plot(test_range,cont_en[:,:nroots_evcont] - ref_en,'b')
+    ax3.plot(test_range,cont_lowrank_en[:,:nroots_evcont] - ref_en,'--r')
     ax3.set_ylabel(r'$E_{cont}$ - $E_{%s}$ (Ha)'%cont_solver)
 else:
     
@@ -350,8 +368,9 @@ else:
 ax1.set_ylabel('Energy (Ha)')
 ax2.set_ylabel(r'$E_{cont}$ - $E_{FCI}$ (Ha)')
 ax3.set_xlabel('Atomic separation ($a_0$)')
+
 if figsave:
-    plt.savefig('H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png')
+    plt.savefig('H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png',bbox_inches='tight',dpi=500)
 else:
     plt.show()
 
@@ -370,6 +389,6 @@ ax.barh(*zip(*no_vec_dic.items()))
 ax.set_xlabel('Number of vectors (max %i)'%(continuation_object.one_rdm.shape[-1]**2))
 ax.set_ylabel('(bra, ket) index')
 if figsave:
-    plt.savefig('nvecs_H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png')
+    plt.savefig('nvecs_H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png',bbox_inches='tight',dpi=500)
 else:
     plt.show()

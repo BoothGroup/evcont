@@ -69,8 +69,16 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     mat_decomp = 4/3*mat_decomp + 2/3*np.einsum('ijkl->ilkj',mat_decomp)
     
     # Check that it is hermitian and diagonalize the matrix
-    assert(np.allclose(mat_decomp.reshape((norb_sq, norb_sq)), mat_decomp.reshape((norb_sq,norb_sq)).T))
-    evals, evecs = scipy.linalg.eigh(mat_decomp.reshape((norb_sq, norb_sq)))
+    #assert(np.allclose(mat_decomp.reshape((norb_sq, norb_sq)), mat_decomp.reshape((norb_sq,norb_sq)).T))
+    if np.allclose(mat_decomp.reshape((norb_sq, norb_sq)), mat_decomp.reshape((norb_sq,norb_sq)).T):
+        evals, evecs = scipy.linalg.eigh(mat_decomp.reshape((norb_sq, norb_sq)))
+        rightvecs = None
+        joint = True # Joint decomp
+    else:
+        print('Using SVD')
+        evecs, evals, rightvecs = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
+        joint = False
+
     
     ########################################################################
     #### Select low rank vectors
@@ -81,7 +89,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     # Fixed truncation based on 'nvecs' parameter
     # Or dynamic truncation based on the eigenvalue magnitude
     if truncation_style in ['eigval','nvec']:
-        lowrank_vecs = select_lowrank(evals, evecs, norb, truncation_style=truncation_style, 
+        lowrank_vecs = select_lowrank(evals, evecs, norb, rightvecs=rightvecs, truncation_style=truncation_style, 
                                       nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
         
     
@@ -100,6 +108,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         lowrank_vecs = select_lowrank_ham(evals, evecs, diagonals, norb,
                                rdm1, ovlp,
                                mol, train_en,
+                               rightvecs=rightvecs,
                                truncation_style=truncation_style,
                                ham_thr=ham_thr, min_nvec=min_nvecs)
         #print('Error in reduce_2rdm: Truncation based on subspace Hamiltonian elements has not been implemented yet.')
@@ -118,7 +127,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         #print('Error in reduce_2rdm: Saving diagonals not implemented yet.')
         #sys.exit()
         
-        remainder = rdm2 - reconstruct_rdm2_joint(lowrank_vecs)
+        remainder = rdm2 - reconstruct_rdm2_joint(lowrank_vecs,joint=joint)
         
         # Save diagonals of the remainder
         diagonals = np.zeros([3,norb,norb])
@@ -133,19 +142,20 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         #    diag_mask = build_diag_mask(norb)
         #mat_decomp -= diag_mask*mat_decomp
 
-    print(np.linalg.norm(reconstruct_rdm2_joint(lowrank_vecs, diagonals) - rdm2))
+    print(np.linalg.norm(reconstruct_rdm2_joint(lowrank_vecs, diagonals, joint=joint) - rdm2))
 
           
-    return lowrank_vecs, diagonals
+    return lowrank_vecs, diagonals, joint
 
-def reconstruct_rdm2_joint(lowrank_vecs, diagonals=None):
+def reconstruct_rdm2_joint(lowrank_vecs, diagonals=None, joint=True):
     """
     Reconstructing the 2RDM
     """
-    lr_vals, lr_vecs = lowrank_vecs
-    rdm2_i = np.einsum('ija,a,kla->ijkl',lr_vecs, lr_vals, lr_vecs,optimize='optimal')
+    lr_vals, lr_vecs, lr_rightvecs = lowrank_vecs
+    rdm2_i = np.einsum('ija,a,akl->ijkl',lr_vecs, lr_vals, lr_rightvecs.conj(),optimize='optimal')
     # Add exchange part as well
-    rdm2_i -= 0.5*np.einsum('kja,a,ila->ijkl',lr_vecs, lr_vals, lr_vecs,optimize='optimal')
+    if joint:
+        rdm2_i -= 0.5*np.einsum('kja,a,ail->ijkl',lr_vecs, lr_vals, lr_rightvecs.conj(),optimize='optimal')
     
     if diagonals is not None:
         norb = diagonals.shape[-1]
@@ -166,7 +176,8 @@ def reconstruct_subspace(lowrank_vecs, h2, ntrain=3):
 """            
 def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                         sao_basis=None, df_basis='weigend', 
-                        use_diag=False):
+                        use_diag=False, hermitian=True,
+                        debug=False):
     """
     Construct subspace Hamiltonian using the low-rank decomposition of 
     2-transition-cumulant
@@ -196,6 +207,17 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     h1_ao = mf.get_hcore()
     h1e_sao = np.einsum('ai,ab,bj->ij', sao_basis, h1_ao, sao_basis)
     
+    # Get ERIs in SAO basis (using density fitting) for debugging
+    if debug:
+        print('Debug mode')
+        # Run calculation to fill the MF object
+        mf.scf()
+
+        Lpq_sao = ao2mo._ao2mo.nr_e2(mf.with_df._cderi, sao_basis,
+            (0, sao_basis.shape[1], 0, sao_basis.shape[1]),aosym="s2",mosym="s2")
+        Lpq_sao = lib.unpack_tril(Lpq_sao)
+        df_eri_sao = lib.einsum('Pij,Pkl->ijkl', Lpq_sao, Lpq_sao)
+
     ### 1-body contributions
     subspace_h = np.einsum('...kl,kl->...', one_RDM, h1e_sao)
 
@@ -215,19 +237,46 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
         # lowrank vectors are of the form ([nbra, nket, nvec, nao, nao])
         # but for now let's do them separately in a loop for testing
         for bra in range(ntrain):
+            if hermitian:
+                ket_max = bra+1
+            else:
+                ket_max = ntrain
             for ket in range(ntrain):
                 
                 nvec = lowrank_vecs[(bra,ket)][0].shape[0]
-    
+                use_joint = lowrank_vecs[(bra, ket)][3]
+
                 # Transform the low-rank vecs into
                 lr_vecs_ao = ao2mo._ao2mo.nr_e2(lowrank_vecs[(bra, ket)][1].transpose((2,0,1)), sao_basis.T,
                 (0, norb, 0, norb), aosym='s1', mosym='s1')
                 lr_vecs_ao = lr_vecs_ao.reshape((nvec,norb,norb))
     
                 # JK build
-                vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
-                subspace_h[bra,ket] += 0.5*np.einsum('aij,aij,a->', vj_list - 0.5 * vk_list, lr_vecs_ao, lowrank_vecs[(bra, ket)][0])
-    
+                if use_joint:
+                    vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+                    subspace_h[bra,ket] += 0.5*np.einsum('aij,aij,a->', vj_list - 0.5 * vk_list, lr_vecs_ao.conj(), lowrank_vecs[(bra, ket)][0])
+        
+                # J build from SVD
+                else:
+                    lr_rightvecs_ao = ao2mo._ao2mo.nr_e2(lowrank_vecs[(bra, ket)][2], sao_basis,
+                    (0, norb, 0, norb), aosym='s1', mosym='s1')
+                    lr_rightvecs_ao = lr_rightvecs_ao.reshape((nvec,norb,norb))
+                    #lr_rightvecs_ao = np.einsum('ai,...ij,bj->...ab', sao_basis, lowrank_vecs[(bra, ket)][2], sao_basis)
+                    #lr_vecs_ao = np.einsum('ai,ij...,bj->...ab', sao_basis, lowrank_vecs[(bra, ket)][1], sao_basis)
+
+                    # For reference; direct contraction:
+                    #rdm2_i = np.einsum('ija,a,akl->ijkl',lr_vecs, lr_vals, lr_rightvecs.conj(),optimize='optimal')
+
+                    # For test purposes, explicitly reconstruct RDM and contract with ERIs
+                    if debug:
+                        lowrank_vecs_i = lowrank_vecs[(bra, ket)][0],lowrank_vecs[(bra, ket)][1],lowrank_vecs[(bra, ket)][2]
+                        rdm2_i = reconstruct_rdm2_joint(lowrank_vecs_i, None, joint=use_joint)
+                        subspace_h[bra,ket] += 0.5*np.einsum('ijkl,ijkl->', rdm2_i, df_eri_sao)
+
+                    else:
+                        vj_list, vk_list = mf.with_df.get_jk(dm=lr_rightvecs_ao, hermi=0, with_k=False)  # Specify hermiticity per case
+                        subspace_h[bra,ket] += 0.5*np.einsum('aij,aij,a->', vj_list, lr_vecs_ao, lowrank_vecs[(bra, ket)][0])
+
                 if use_diag:
                     print('Error in lowrank_hamiltonian: Diagonal contraction not implemented')
                     sys.exit()
@@ -272,14 +321,20 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
 
 ###############################################################################
 def select_lowrank(evals, evecs, norb, 
+                   rightvecs=None,
                    truncation_style='eigval',nvecs=10, eval_thr=0.1, min_nvec=0):
     """
     Function to select low-rank vectors from the eigendecomposition
     """
+    # Check if right eigenvectors are given
+    if rightvecs is None:
+        rightvecs = evecs.T
+
     # Sort the eigenstates by the square of their eigenvalue
     idx = (-np.power(evals, 2)).argsort()
     evals_sort = evals[idx]
     evecs_sort = evecs[:,idx]
+    rightvecs_sort = rightvecs[idx,:]
 
     # Truncate through either eigvals or a given number of vectors
     if truncation_style == 'eigval':
@@ -289,25 +344,33 @@ def select_lowrank(evals, evecs, norb,
     #norb = np.sqrt(evecs_sort.shape[0],dtype=int)
     vals_trunc = evals_sort[:nvecs]
     vecs_trunc = evecs_sort[:,:nvecs].reshape((norb, norb, nvecs))
+    rightvecs_trunc = rightvecs_sort[:nvecs,:].reshape((nvecs,norb, norb))
 
-    return vals_trunc, vecs_trunc
+    return vals_trunc, vecs_trunc, rightvecs_trunc
 
 def select_lowrank_ham(evals, evecs, diagonal, norb,
                        rdm1, ovlp,
                        mol, training_energy,
+                       rightvecs=None,
                        truncation_style='ham',
                        ham_thr=0.001, min_nvec=0
                        ):
     """
     Select a low rank decomposition of the RDM based on the error on
     subspace hamiltonian
+
+    TODO: Need to update this function for the joint decomp and SVD
     """
-    
+    # Check if right eigenvectors are given
+    if rightvecs is None:
+        rightvecs = evecs.transpose(1,0)
+
     # Sort the eigenstates by the square of their eigenvalue
     idx = (-np.power(evals, 2)).argsort()
     evals_sort = evals[idx]
     evecs_sort = evecs[:,idx]
-    
+    rightvecs_sort = rightvecs[idx,:]
+
     # Prepare rdms in a suitable format
     one_RDM = np.zeros([1,1,norb,norb])
     one_RDM[0,0,:,:] = rdm1

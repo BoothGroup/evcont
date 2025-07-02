@@ -867,7 +867,7 @@ class CAS_EVCont_obj:
 
             self.cascis.append(casci_bra)
 
-    def append_to_rdms_new(self, mol):
+    def append_to_rdms(self, mol, debug=False):
         """
         Append a new training geometry. See pygnme examples for more information about
         the evaluation of the t-RDMs.
@@ -914,7 +914,7 @@ class CAS_EVCont_obj:
             if not lowrank:
                 two_rdm = self.two_rdm
             else:
-                cum_diagonal = self.cum_diagonal
+                diagonal_lr = self.diagonal_lr
                 vecs_lowrank = self.vecs_lowrank
                 
             # CAS solver
@@ -997,12 +997,12 @@ class CAS_EVCont_obj:
                         two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
                         
                 else:
-                    cum_diagonal_new = np.ones(
+                    diagonal_lr_new = np.ones(
                         (n_cascis,
                          n_cascis, 3, mo_coeff_bra.shape[0], mo_coeff_bra.shape[0])
                     )
-                    if cum_diagonal is not None:
-                        cum_diagonal_new[:-1, :-1, :, :, :] = cum_diagonal
+                    if diagonal_lr is not None:
+                        diagonal_lr_new[:-1, :-1, :, :, :] = diagonal_lr
                     
             else:
                 overlap_new = one_rdm_new = two_rdm_new = None
@@ -1121,6 +1121,9 @@ class CAS_EVCont_obj:
                 MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, rdm2, op=MPI.SUM)
 
                 if rank == 0:
+                    #if np.abs(overlap_accumulate) < 1e-12:
+                    #    overlap_accumulate = np.zeros_like(overlap_accumulate)
+
                     overlap_new[-1, i] = overlap_accumulate
                     overlap_new[i, -1] = overlap_accumulate.conj()
                     rdm1 = np.einsum(
@@ -1136,35 +1139,51 @@ class CAS_EVCont_obj:
                         optimize="optimal",
                     )
 
+                    if debug:
+                        np.save('rdm2_%i_%i.npy'%(n_cascis-1, i),rdm2)
                     one_rdm_new[-1, i, :, :] = rdm1
-                    one_rdm_new[i, -1, :, :] = rdm1.conj()
+                    one_rdm_new[i, -1, :, :] = rdm1.conj().T
                     
                     if not lowrank:
                         two_rdm_new[-1, i, :, :, :, :] = rdm2
-                        two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                        two_rdm_new[i, -1, :, :, :, :] = np.einsum('ijkl->klij',rdm2.conj())
                         #two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
                     
                     # Low rank
                     else:
                         # Get low rank representation
-                        diagonals, lowrank_vecs = \
+                        print(n_cascis-1, i, overlap_accumulate)
+                        # Testing if setting problematic tRDMs to zero helps
+                        #if (((n_cascis-1)%2 and not i%2) or (not (n_cascis-1)%2 and i%2)):
+                        #    print('RDM set to zero.')
+                        #    rdm2 = np.zeros_like(rdm2)
+
+                        lowrank_vecs, diagonals, use_joint = \
                             reduce_2rdm(rdm1, rdm2, overlap_accumulate, 
                                         mol=mol, train_en=e,
                                         **self.kwargs)
-                        
-                        diagonals_conj, lowrank_vecs_conj = \
-                            reduce_2rdm(rdm1.conj(), rdm2.conj(), overlap_accumulate,        
-                                        mol=mol, train_en=e,
-                                        **self.kwargs)
+
+                        #lowrank_vecs_conj, diagonals_conj = \
+                        #    reduce_2rdm(rdm1.conj(), np.einsum('ijkl->klij',rdm2.conj()), overlap_accumulate,        
+                        #                mol=mol, train_en=e,
+                        #                **self.kwargs)
                         #    reduce_2rdm(rdm1_conj, rdm2_conj, ovlp,        
                         #                mol=mol, train_en=e,
                         #                **self.kwargs)
                         
-                        cum_diagonal_new[-1, i, :, :, :] = diagonals
-                        cum_diagonal_new[i, -1, :, :, :] = diagonals_conj
+                        diagonal_lr_new[-1, i, :, :, :] = diagonals
+                        try:
+                            # This gives an error if diagonals are not saved and set to None by reduce_2rdm
+                            diagonal_lr_new[i, -1, :, :, :] = diagonals.conj()
+                        except:
+                            diagonal_lr_new[i, -1, :, :, :] = diagonals
+
+                        #diagonal_lr_new[i, -1, :, :, :] = diagonals_conj
                         
-                        vecs_lowrank[(n_cascis-1, i)] = lowrank_vecs
-                        vecs_lowrank[(i,n_cascis-1)] = lowrank_vecs_conj
+                        # Data structure [(bra,ket)]; eval, leftvec, rightvec, use_joint
+                        vecs_lowrank[(n_cascis-1, i)] = lowrank_vecs[0], lowrank_vecs[1], lowrank_vecs[2], use_joint
+                        #vecs_lowrank[(i,n_cascis-1)] = lowrank_vecs_conj
+                        vecs_lowrank[(i,n_cascis-1)] = lowrank_vecs[0].conj(), lowrank_vecs[1].conj(), lowrank_vecs[2].conj(), use_joint
                         
 
             self.overlap = overlap_new
@@ -1172,10 +1191,10 @@ class CAS_EVCont_obj:
             if not lowrank:
                 self.two_rdm = two_rdm_new
             else:
-                self.cum_diagonal = cum_diagonal_new
+                self.diagonal_lr = diagonal_lr_new
                 self.vecs_lowrank = vecs_lowrank
 
-    def append_to_rdms(self, mol):
+    def append_to_rdms_nolowrank(self, mol):
         """
         Append a new training geometry. See pygnme examples for more information about
         the evaluation of the t-RDMs.
@@ -1270,29 +1289,18 @@ class CAS_EVCont_obj:
                 )
                 if one_rdm is not None:
                     one_rdm_new[:-1, :-1, :, :] = one_rdm
-                    
-                # Only define two_rdm if not lowrank
-                if not self.lowrank:
-                    two_rdm_new = np.zeros(
-                        (
-                            n_cascis,
-                            n_cascis,
-                            mo_coeff_bra.shape[0],
-                            mo_coeff_bra.shape[0],
-                            mo_coeff_bra.shape[0],
-                            mo_coeff_bra.shape[0],
-                        )
+                two_rdm_new = np.zeros(
+                    (
+                        n_cascis,
+                        n_cascis,
+                        mo_coeff_bra.shape[0],
+                        mo_coeff_bra.shape[0],
+                        mo_coeff_bra.shape[0],
+                        mo_coeff_bra.shape[0],
                     )
-                    if two_rdm is not None:
-                        two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
-                        
-                else:
-                    diagonal_lr_new = np.ones(
-                        (n_cascis, n_cascis, 3, mo_coeff_bra.shape[0], mo_coeff_bra.shape[0])
-                    )
-                    if self.diagonal_lr is not None:
-                        diagonal_lr_new[:-1, :-1, :, :, :] = self.diagonal_lr
-                    
+                )
+                if two_rdm is not None:
+                    two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
             else:
                 overlap_new = one_rdm_new = two_rdm_new = None
 
@@ -1427,38 +1435,11 @@ class CAS_EVCont_obj:
 
                     one_rdm_new[-1, i, :, :] = rdm1
                     one_rdm_new[i, -1, :, :] = rdm1.conj()
-                    
-                    if not self.lowrank:
-                        two_rdm_new[-1, i, :, :, :, :] = rdm2
-                        two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
-                        #two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
-                    
-                    # Low rank
-                    else:
-                        # Get low rank representation
-                        lowrank_vecs, diagonals = \
-                            reduce_2rdm(rdm1, rdm2, overlap_accumulate, 
-                                        mol=mol, train_en=cascis[i].e_tot,
-                                        **self.kwargs)
-                        
-                        #lowrank_vecs_conj, diagonals_conj = \
-                        #    reduce_2rdm(rdm1_conj, rdm2_conj, ovlp,        
-                        #                mol=mol, train_en=e,
-                        #                **self.kwargs)
-                        
-                        diagonal_lr_new[-1, i, :, :, :] = diagonals
-                        diagonal_lr_new[i, -1, :, :, :] = diagonals
-                            
-                        self.vecs_lowrank[(n_cascis-1, i)] = lowrank_vecs
-                        self.vecs_lowrank[(i, n_cascis-1)] = lowrank_vecs[0], lowrank_vecs[1].conj() 
-                        
-
+                    two_rdm_new[-1, i, :, :, :, :] = rdm2
+                    two_rdm_new[i, -1, :, :, :, :] = np.einsum('ijkl->klij',rdm2.conj())
             self.overlap = overlap_new
             self.one_rdm = one_rdm_new
-            if not self.lowrank:
-                self.two_rdm = two_rdm_new
-            else:
-                self.diagonal_lr = diagonal_lr_new
+            self.two_rdm = two_rdm_new
 
     def states_to_rdms(self):
         """
@@ -1658,7 +1639,7 @@ class CAS_EVCont_obj:
                     one_rdm_new[a, b, :, :] = rdm1
                     one_rdm_new[b, a, :, :] = rdm1.conj()
                     two_rdm_new[a, b, :, :, :, :] = rdm2
-                    two_rdm_new[b, a, :, :, :, :] = rdm2.conj()
+                    two_rdm_new[b, a, :, :, :, :] = np.einsum('ijkl->klij',rdm2.conj())
         self.overlap = overlap_new
         self.one_rdm = one_rdm_new
         self.two_rdm = two_rdm_new
