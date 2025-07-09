@@ -212,25 +212,33 @@ class FCI_EVCont_obj:
                     
                     # Low rank
                     else:
+                        print(new_ntrain-1, i, ovlp)
+
                         # Get low rank representation
-                        lowrank_vecs, diagonals = \
+                        lowrank_vecs, diagonals, use_joint = \
                             reduce_2rdm(rdm1, rdm2, ovlp, 
                                         mol=mol, train_en=e,
                                         **self.kwargs)
                         
-                        lowrank_vecs_conj, diagonals_conj = \
-                            reduce_2rdm(rdm1_conj, rdm2_conj, ovlp,        
-                                        mol=mol, train_en=e,
-                                        **self.kwargs)
+                        #lowrank_vecs_conj, diagonals_conj = \
+                        #    reduce_2rdm(rdm1_conj, rdm2_conj, ovlp,        
+                        #                mol=mol, train_en=e,
+                        #                **self.kwargs)
                         
                         diagonal_lr_new[-1, i, :, :, :] = diagonals
-                        diagonal_lr_new[i, -1, :, :, :] = diagonals_conj
+                        #diagonal_lr_new[i, -1, :, :, :] = diagonals_conj
+                        try:
+                            # This gives an error if diagonals are not saved and set to None by reduce_2rdm
+                            diagonal_lr_new[i, -1, :, :, :] = diagonals.conj()
+                        except:
+                            diagonal_lr_new[i, -1, :, :, :] = diagonals
+
+                        #self.vecs_lowrank[(new_ntrain-1, i)] = lowrank_vecs
+                        #self.vecs_lowrank[(i, new_ntrain-1)] = lowrank_vecs_conj
                         
-                        self.vecs_lowrank[(new_ntrain-1, i)] = lowrank_vecs
-                        self.vecs_lowrank[(i, new_ntrain-1)] = lowrank_vecs_conj
-                        
-                        self.vecs_lowrank[(new_ntrain-1, i)] = lowrank_vecs
-                        self.vecs_lowrank[(i, new_ntrain-1)] = lowrank_vecs_conj
+                        self.vecs_lowrank[(new_ntrain-1, i)] = lowrank_vecs[0], lowrank_vecs[1], lowrank_vecs[2], use_joint
+                        #vecs_lowrank[(i,n_cascis-1)] = lowrank_vecs_conj
+                        self.vecs_lowrank[(i,new_ntrain-1)] = lowrank_vecs[0].conj(), lowrank_vecs[1].conj(), lowrank_vecs[2].conj(), use_joint
                         
         
                 self.overlap = overlap_new
