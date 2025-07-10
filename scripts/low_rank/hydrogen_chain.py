@@ -14,7 +14,7 @@ import time
 from pyscf import gto, fci, scf, lib, ao2mo, mcscf
 
 from evcont.FCI_EVCont import FCI_EVCont_obj
-from evcont.CASCI_EVCont import CAS_EVCont_obj
+#from evcont.CASCI_EVCont import CAS_EVCont_obj
 
 from evcont.electron_integral_utils import get_basis, get_integrals, get_loewdin_trafo
 
@@ -41,10 +41,10 @@ cibasis = 'canonical'
 df_basis = 'weigend'
 #df_basis = 'cc-pvdz-jkfit'
 
-natom = 8
+natom = 6
 
 cont_solver = 'CAS'
-#cont_solver = 'FCI'
+cont_solver = 'FCI'
 
 cassolver='SS-CASSCF'
 #cassolver='CASCI'
@@ -67,11 +67,12 @@ else:
     mol_sym = True
     
 #lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5}
-lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
+#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
+lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
-vectorize = False
+vectorize = True
 
 #test_range = np.linspace(0.8, 3.0,40)
 test_range = np.linspace(0.8, 3.0,15)
@@ -150,7 +151,7 @@ for i, dist in enumerate(trainig_dists):
         continuation_object.append_to_rdms(mol)
 
     #continuation_object.append_to_rdms_new(mol)
-    continuation_object_full.append_to_rdms_nolowrank(mol)
+    continuation_object_full.append_to_rdms(mol)
 
 # If vectorize
 if vectorize:
@@ -374,20 +375,43 @@ if figsave:
 else:
     plt.show()
 
+from matplotlib.patches import Patch
+
 # Expansion limit
+key_clrs = ['tab:blue', 'tab:orange']
 no_vec_dic = {}
+clr_dic = {}
 for key, item in continuation_object.vecs_lowrank.items():
     #print(key, item[0].shape)
+    if item[-1]:
+        kclr = key_clrs[0]
+    else:
+        kclr = key_clrs[1]
     if key[1] >= key[0]:
         no_vec_dic[','.join([str(i) for i in key])] = item[0].shape[0]
+        clr_dic[','.join([str(i) for i in key])] = kclr
 
 fig, ax = plt.subplots(figsize=[4,7])
 ax.grid(alpha=0.5)
 
+# Extract keys, values, and corresponding colors
+labels, values = zip(*no_vec_dic.items())
+colors = [clr_dic[label] for label in labels]
+
+# Plot with specified colors
+ax.barh(labels, values, color=colors)
 #D = {u'Label1':26, u'Label2': 17, u'Label3':30}
-ax.barh(*zip(*no_vec_dic.items()))
+#ax.barh(*zip(*no_vec_dic.items()))
 ax.set_xlabel('Number of vectors (max %i)'%(continuation_object.one_rdm.shape[-1]**2))
 ax.set_ylabel('(bra, ket) index')
+
+# Add legend
+legend_elements = [
+    Patch(facecolor=key_clrs[0], label='Joint ED'),
+    Patch(facecolor=key_clrs[1], label='Coulomb SVD')
+]
+ax.legend(handles=legend_elements, loc='best')
+
 if figsave:
     plt.savefig('nvecs_H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png',bbox_inches='tight',dpi=500)
 else:

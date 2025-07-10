@@ -5,10 +5,20 @@ Created on Fri Jun  6 17:13:27 2025
 
 Low-rank decomposition of 2-body (transition) reduced density matrices
 
-NEW IMPLEMENTATION: Joint decomposition where each low-rank vector contribute
-to both Coulomb and exchange channels. 
+Mixed decomposition:
+    Joint ED: Joint eigenvalue decomposition where each low-rank vector 
+              contribute to both Coulomb and exchange channels. (Hermitian)
+    Coulomb SVD: SVD in the Coulomb grouping of the state indices (non-Hermitian)
 
-Other implementations will be developed 
+Function here include:
+    - Static and dynamic truncation of the decomposition based on 
+      eval magnitude/Hamiltonian error
+    - Subspace Hamiltonian construction from low-rank vectors
+    - Vectorizing of the low-rank vectors for fast inference
+    - Gradient inference from the low-rank representation (IN PROGRESS)
+    
+Note: Not compatible with complex RDMs as it stands; e.g. vectors from SVD are
+assumed to be real-valued. Can be changed in the future if necessary.
 
 @author: Kemal Atalar
 """
@@ -106,6 +116,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
                 lowrank_vecs = lowrank_vecs_joint
 
             else:
+                # TODO: Add considerations for norm error; not just compactness
                 # SVD as well
                 evecs2, evals2, rightvecs2 = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
                 
@@ -128,9 +139,6 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
                         print('**Using SVD')
                         lowrank_vecs = lowrank_vecs_svd
                         joint = False
-
-
-            
     
     elif truncation_style in ['ham','ham_en']:
         
@@ -160,7 +168,6 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     
     if not save_diag:
         diagonals = None
-
         
     else:
         #print('Error in reduce_2rdm: Saving diagonals not implemented yet.')
@@ -272,9 +279,8 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
         
     # Construct the subspace Hamiltonian
     if not vectorized:
-        # Ideally this should all be vectorized where 
-        # lowrank vectors are of the form ([nbra, nket, nvec, nao, nao])
-        # but for now let's do them separately in a loop for testing
+        
+        # Vectorized version is more efficient but keeping this here for testing purposes
         for bra in range(ntrain):
             if hermitian:
                 ket_max = bra+1
@@ -323,14 +329,8 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     else:
         nvec = lowrank_vecs['vals'].shape[2]
         
-        # If we have dynamic matrices, so each vector is stacked
-        # nvec1 + nvec2 + nvec3 + nvec4 + ...
-        # Is it easy to disentangle it into bra,ket pairs?
-        # e.g. first 8 belongs to (0,0), second 4 belongs to (0,1), third 5 belongs to (0,2)
-        # If we store these 'n's in a list; nvec_l = [0,8,12,17,...]
-        # Can we disentangle as (0,0) = vecs[nvec_l[0]:nvec_l[1]]
-        # Seems plausible, just need a dictionary mapping (bra,ket) to range [i,j]
-        
+        ### Joint ED inference
+        # Grouped JK builds 
         lr_vecs_grouped = lowrank_vecs['vecs_stacked']
         
         # Transform the low-rank vecs into
@@ -347,8 +347,33 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
         lr_vecs_ao = unpack_vec(lr_vecs_ao, lowrank_vecs['pairloc'],hermitian=hermitian)
         
         # Contruction for subspace Hamiltonian
-        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'],optimize='optimal')
+        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'][:,:,:vhf.shape[2]],optimize='optimal')
         
+        ### Coulomb SVD inference
+        if lowrank_vecs['has_svd']:
+            
+            # Grouped J Builds
+            svd_vecs_grouped = lowrank_vecs['vecs_svd_stacked']
+            svd_rightvecs_grouped = lowrank_vecs['rightvecs_stacked']
+    
+            # Transform the low-rank vecs into AO basis
+            svd_rightvecs_ao = ao2mo._ao2mo.nr_e2(svd_rightvecs_grouped, sao_basis.T,
+            (0, norb, 0, norb), aosym='s1', mosym='s1')
+            svd_rightvecs_ao = svd_rightvecs_ao.reshape((svd_rightvecs_grouped.shape[0],norb,norb))
+            
+            svd_vecs_ao = ao2mo._ao2mo.nr_e2(svd_vecs_grouped, sao_basis.T,
+            (0, norb, 0, norb), aosym='s1', mosym='s1')
+            svd_vecs_ao = svd_vecs_ao.reshape((svd_vecs_grouped.shape[0],norb,norb))
+            
+            # J build
+            vj_list, _ = mf.with_df.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)  # Specify hermiticity per case
+    
+            # Reindex to separate bra, ket, nvec indices
+            vj = unpack_vec(vj_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+            svd_vecs_ao = unpack_vec(svd_vecs_ao, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+            
+            subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vj, svd_vecs_ao, lowrank_vecs['vals'][:,:,:vj.shape[2]],optimize='optimal')
+            
     if hermitian:
         # Set the upper triangle
         subspace_h[np.triu_indices(ntrain)] = subspace_h.T[np.triu_indices(ntrain)].conj()
@@ -476,38 +501,76 @@ def stack_lowrank(vecs_lowrank, hermitian=True):
     vals_lr = []
     nvec_tot = 0
     
-    # Only iterarte through lower triangular indices
-    if hermitian:
-        for i in range(nbra):
-            for j in range(i+1):
-                lr_i = vecs_lowrank[(i,j)]
-                nvec_i = lr_i[0].shape[-1]
+    # Have a separate on for SVD vectors that only needs J builds
+    pair_svd_loc = {}
+    vecs_svd_lr = []
+    rightvecs_svd_lr = []
+    vals_svd_lr = []
+    nsvd_tot = 0
+    
+    for i in range(nbra):
+        
+        # Only iterarte through lower triangular indices
+        if hermitian:
+            jmax = i+1
+        else:
+            jmax = nbra
+            
+        for j in range(jmax):
+            lr_i = vecs_lowrank[(i,j)]
+
+            nvec_i = lr_i[0].shape[-1]
+            
+            # Joint ED
+            if lr_i[-1]:
                 vecs_lr.append(lr_i[1].transpose(2,0,1))
                 vals_lr.append(lr_i[0])
                 
                 pair_loc[(i,j)] = [nvec_tot, nvec_tot + nvec_i]
                 
-                nvec_tot += nvec_i         
-    else:
-        for i, j in itertools.product(range(nbra), range(nbra)):
-            lr_i = vecs_lowrank[(i,j)]
-            nvec_i = lr_i[0].shape[-1]
-            vecs_lr.append(lr_i[1].transpose(2,0,1))
-            vals_lr.append(lr_i[0])
+                nvec_tot += nvec_i     
             
-            pair_loc[(i,j)] = [nvec_tot, nvec_tot + nvec_i]
-            
-            nvec_tot += nvec_i
-        
+            # Coulomb SVD
+            else:
+                vecs_svd_lr.append(lr_i[1].transpose(2,0,1))
+                rightvecs_svd_lr.append(lr_i[2])
+                vals_svd_lr.append(lr_i[0])
+                
+                pair_svd_loc[(i,j)] = [nsvd_tot, nsvd_tot + nvec_i]
+                
+                nsvd_tot += nvec_i                  
+                
+    # Joint ED vectors
     vecs_stacked = np.concatenate(vecs_lr,axis=0)
     vals_stacked = np.concatenate(vals_lr)
     
+    # Check if any (t)RDM used SVD
+    has_svd = True
+    if len(vecs_svd_lr) == 0:
+        has_svd = False
+        
+        
+    # Set up the final dictionary
     stacked_lowrank = {}
     stacked_lowrank['vals'] = vals_stacked
     stacked_lowrank['vecs'] = vecs_stacked
     stacked_lowrank['pairloc'] = pair_loc
+    
     stacked_lowrank['hermitian'] = hermitian
-    return stacked_lowrank
+    
+    if has_svd:
+        
+        # Coulomb SVD vectors
+        vecs_svd_stacked = np.concatenate(vecs_svd_lr,axis=0)
+        rightvecs_svd_stacked = np.concatenate(rightvecs_svd_lr,axis=0)
+        vals_svd_stacked = np.concatenate(vals_svd_lr)    
+        
+        stacked_lowrank['vals_svd'] = vals_svd_stacked
+        stacked_lowrank['vecs_svd'] = vecs_svd_stacked
+        stacked_lowrank['rightvecs_svd'] = rightvecs_svd_stacked
+        stacked_lowrank['pairloc_svd'] = pair_svd_loc
+        
+    return stacked_lowrank, has_svd
 
 def unpack_vec(vecs,pair_loc,hermitian=True):
     """
@@ -520,15 +583,21 @@ def unpack_vec(vecs,pair_loc,hermitian=True):
     
     vecs_unpacked = np.zeros([nbra, nbra, nvec_max,norb,norb])
     
-    if hermitian:
-        for i in range(nbra):
-            for j in range(i+1):
+    
+    for i in range(nbra):
+        # Only iterarte through lower triangular indices
+        if hermitian:
+            jmax = i+1
+        else:
+            jmax = nbra
+            
+        for j in range(jmax):
+            
+            # Check key
+            if (i,j) in pair_loc:
                 st, en = pair_loc[(i,j)]
                 vecs_unpacked[i,j,:(en-st)] = vecs[st:en]
-    else:
-        for i, j in itertools.product(range(nbra), range(nbra)):
-            st, en = pair_loc[(i,j)]
-            vecs_unpacked[i,j,:(en-st)] = vecs[st:en]
+
 
     return vecs_unpacked
         
@@ -580,25 +649,35 @@ def vectorize_lowrank(self, hermitian=True):
         
     # Convert the dictionary of states into a np.array
     vecs_lr = np.zeros([nbra, nbra, nvec_max, norb, norb])
+    rightvecs_lr = np.zeros([nbra, nbra, nvec_max, norb, norb])
     vals_lr = np.zeros([nbra, nbra, nvec_max])
     for i, j in itertools.product(range(nbra), range(nbra)):
         lr_i = self.vecs_lowrank[(i,j)]
         nvec_i = lr_i[0].shape[-1]
         vecs_lr[i,j,:nvec_i] = lr_i[1].transpose(2,0,1) 
+        rightvecs_lr[i,j,:nvec_i] = lr_i[2]#.transpose(2,0,1) 
         vals_lr[i,j,:nvec_i] = lr_i[0]
         
     # Stack vectors for more efficient inference
     # TODO: Clean up this function as there is a large overlap between
     # the previous steps and stack_lowrank function
-    stacked = stack_lowrank(self.vecs_lowrank, hermitian=hermitian)
+    stacked, has_svd = stack_lowrank(self.vecs_lowrank, hermitian=hermitian)
     
     # Set this low-rank description
     self.lowrank_vectorized = {}
     self.lowrank_vectorized['vals'] = vals_lr
     self.lowrank_vectorized['vecs'] = vecs_lr
+    self.lowrank_vectorized['rightvecs'] = rightvecs_lr
     self.lowrank_vectorized['vecs_stacked'] = stacked['vecs']
     self.lowrank_vectorized['pairloc'] = stacked['pairloc']
+    
+    if has_svd:
+        self.lowrank_vectorized['rightvecs_stacked'] = stacked['rightvecs_svd']
+        self.lowrank_vectorized['vecs_svd_stacked'] = stacked['vecs_svd']
+        self.lowrank_vectorized['pairloc_svd'] = stacked['pairloc_svd']
+        
     self.lowrank_vectorized['hermitian'] = hermitian
+    self.lowrank_vectorized['has_svd'] = has_svd
     
 ###############################################################################
 
