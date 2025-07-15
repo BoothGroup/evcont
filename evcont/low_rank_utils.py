@@ -29,13 +29,15 @@ import scipy
 import itertools
 import pyscf
 from pyscf import scf, gto, ao2mo, fci, lib, df
+from pyscf.df.grad.rhf import get_jk as get_jk_grad
+from pyscf.df.grad.rhf import Gradients as mf_grad
 
 from evcont.electron_integral_utils import get_loewdin_trafo, get_integrals
 
 def reduce_2rdm(rdm1, rdm2, ovlp, 
                 truncation_style='eigval',nvecs=10, eval_thr=0.1, ham_thr=0.001,
                 diag_mask=None, save_diag=False,
-                use_svd=True,
+                use_svd=False,
                 mol=None,train_en=None):
     """
     Function to lower the rank of 2-transition-RDM between a pair of 
@@ -237,8 +239,6 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     
     norb = one_RDM.shape[-1]
     norb_sq = norb * norb
-
-    subspace_h = np.zeros((ntrain, ntrain))
     
     # Initiate the mean field object to use DF integrals (no need to use kernel)
     #mol.symmetry = False
@@ -247,7 +247,6 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     # AO to SAO basis transformation
     if sao_basis is None:
         sao_basis = get_loewdin_trafo(mol.intor("int1e_ovlp"))
-    
     
     # 1-electron integrals with DF
     h1_ao = mf.get_hcore()
@@ -384,6 +383,102 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     return subspace_h
 
 ###############################################################################
+def get_jk_builds(mol, lowrank_vecs,
+                  ao_mo_trafo=None,
+                  df_basis='weigend'):
+    """
+    Precompute the J(K) builds for the low-rank vectors for fast inference
+    """
+    # AO to SAO basis transformation
+    if ao_mo_trafo is None:
+        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    
+    # Initiate the mean field object to use DF integrals (no need to use kernel)
+    #mol.symmetry = False
+    mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
+    
+    ######################################################
+    # Check if low-rank vectors have been vectorized
+    if ('vals' in lowrank_vecs):
+        vectorized = True
+        # Whether to use training point symmetry
+        hermitian = lowrank_vecs['hermitian']
+        
+    else:
+        print('Error in get_jk_builds: Lowrank vectors are not in the vectorized format. Run "continuation_object.vectorize_lowrank()".')
+        sys.exit()
+        
+    ######################################################
+    norb = lowrank_vecs['vecs'].shape[-1]
+    nvec = lowrank_vecs['vals'].shape[2]
+
+    ######################################################
+    ######### COMPUTE PRELIMINARIES & FOCK BUILDS
+    ######################################################
+    
+    ### Joint ED inference
+    # Grouped JK builds 
+    lr_vecs_grouped = lowrank_vecs['vecs_stacked']
+    
+    # Transform the low-rank vecs into
+    lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, ao_mo_trafo.T,
+    (0, norb, 0, norb), aosym='s1', mosym='s1')
+    lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
+    
+    # JK build
+    vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+    vhf = vj_list - 0.5*vk_list
+    
+    # Grad JK builds
+    # TODO: Add auxbasis_response in the future, for now ignore it
+    grad_obj = mf_grad(mf)
+    grad_obj.auxbasis_response = False
+    vj_grad_list, vk_grad_list = get_jk_grad(grad_obj,dm=lr_vecs_ao, hermi=0) 
+    vj_grad_list_t, vk_grad_list_t = get_jk_grad(grad_obj,dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
+    vhf_grad = vj_grad_list - 0.5*vk_grad_list
+    vhf_grad_t = vj_grad_list_t - 0.5*vk_grad_list_t
+
+    # Reindex to separate bra, ket, nvec indices
+    vhf = unpack_vec(vhf, lowrank_vecs['pairloc'],hermitian=hermitian)
+    lr_vecs_ao = unpack_vec(lr_vecs_ao, lowrank_vecs['pairloc'],hermitian=hermitian)
+    lr_vecs = unpack_vec(lr_vecs_grouped, lowrank_vecs['pairloc'],hermitian=hermitian)
+    vhf_grad = unpack_grad_vec(vhf_grad, lowrank_vecs['pairloc'],hermitian=hermitian)
+    vhf_grad_t = unpack_grad_vec(vhf_grad_t, lowrank_vecs['pairloc'],hermitian=hermitian)
+    
+    ### Coulomb SVD inference
+    if lowrank_vecs['has_svd']:
+        
+        # Grouped J Builds
+        svd_vecs_grouped = lowrank_vecs['vecs_svd_stacked']
+        svd_rightvecs_grouped = lowrank_vecs['rightvecs_stacked']
+
+        # Transform the low-rank vecs into AO basis
+        svd_rightvecs_ao = ao2mo._ao2mo.nr_e2(svd_rightvecs_grouped, ao_mo_trafo.T,
+        (0, norb, 0, norb), aosym='s1', mosym='s1')
+        svd_rightvecs_ao = svd_rightvecs_ao.reshape((svd_rightvecs_grouped.shape[0],norb,norb))
+        
+        svd_vecs_ao = ao2mo._ao2mo.nr_e2(svd_vecs_grouped, ao_mo_trafo.T,
+        (0, norb, 0, norb), aosym='s1', mosym='s1')
+        svd_vecs_ao = svd_vecs_ao.reshape((svd_vecs_grouped.shape[0],norb,norb))
+        
+        # J builds
+        vj_r_list, _ = mf.with_df.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
+        vj_l_list, _ = mf.with_df.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
+
+        # Reindex to separate bra, ket, nvec indices
+        vj_right = unpack_vec(vj_r_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+        vj_left = unpack_vec(vj_l_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+        svd_vecs_ao = unpack_vec(svd_vecs_ao, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+        svd_rightvecs_ao = unpack_vec(svd_rightvecs_ao, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+        
+        # TODO: JK grads for SVD case
+        vj_left_grad, vj_right_grad = None, None
+        
+        return (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t), (svd_vecs_ao, svd_rightvecs_ao, vj_left, vj_right, vj_left_grad, vj_right_grad)
+    
+    else:
+        return (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t), None
+
 
 ###############################################################################
 def select_lowrank(evals, evecs, norb, 
@@ -582,6 +677,36 @@ def unpack_vec(vecs,pair_loc,hermitian=True):
     nvec_max = np.max([j-i for i,j in pair_loc.values()])
     
     vecs_unpacked = np.zeros([nbra, nbra, nvec_max,norb,norb])
+    
+    
+    for i in range(nbra):
+        # Only iterarte through lower triangular indices
+        if hermitian:
+            jmax = i+1
+        else:
+            jmax = nbra
+            
+        for j in range(jmax):
+            
+            # Check key
+            if (i,j) in pair_loc:
+                st, en = pair_loc[(i,j)]
+                vecs_unpacked[i,j,:(en-st)] = vecs[st:en]
+
+
+    return vecs_unpacked
+
+
+def unpack_grad_vec(vecs,pair_loc,hermitian=True):
+    """
+    Function to unpack vectors stacked using "stack_lowrank" function
+
+    """
+    nbra = list(pair_loc.keys())[-1][0]+1
+    norb = vecs.shape[2]
+    nvec_max = np.max([j-i for i,j in pair_loc.values()])
+    
+    vecs_unpacked = np.zeros([nbra, nbra, nvec_max, 3, norb, norb])
     
     
     for i in range(nbra):

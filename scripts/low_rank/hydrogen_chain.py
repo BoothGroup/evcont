@@ -11,7 +11,7 @@ Script to test low rank construction of eigenvector continuation
 import numpy as np
 import time
 
-from pyscf import gto, fci, scf, lib, ao2mo, mcscf
+from pyscf import gto, fci, scf, lib, ao2mo, mcscf, df
 
 from evcont.FCI_EVCont import FCI_EVCont_obj
 #from evcont.CASCI_EVCont import CAS_EVCont_obj
@@ -26,6 +26,12 @@ from evcont.ab_initio_eigenvector_continuation import (
     approximate_multistate
 )
 
+from evcont.ab_initio_gradients_loewdin import (
+    get_lowrank_en_with_grad_and_NAC    ,
+    get_multistate_energy_with_grad_and_NAC,
+    get_grad_elec_OAO_customERI
+)
+
 #from evcont.FCI_NAC import get_FCI_energy_with_grad_and_NAC_withsym
 #from pyscf.mcscf import CASCI
 #import pickle
@@ -34,12 +40,12 @@ import matplotlib.pylab as plt
 #import matplotlib as mpl
 plt.style.use('default')
 
-nroots_evcont = 3
+nroots_evcont = 1
 cibasis = 'canonical'
 #cibasis = 'OAO'
 
 df_basis = 'weigend'
-#df_basis = 'cc-pvdz-jkfit'
+df_basis = 'cc-pvdz-jkfit'
 
 natom = 6
 
@@ -67,8 +73,8 @@ else:
     mol_sym = True
     
 #lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5}
-#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
-lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1}
+lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-15}
+#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
@@ -113,7 +119,7 @@ equilibrium_dist = 1.78596
 
 equilibrium_pos = np.array([(x * equilibrium_dist, 0.0, 0.0) for x in range(10)])
 
-trainig_dists = [0.97, 1.76, 2.60]
+trainig_dists = [0.97, 1.76]#, 2.60]
 #trainig_dists = np.linspace(0.97,2.60,5)
 
 if cont_solver == 'FCI':
@@ -155,7 +161,7 @@ for i, dist in enumerate(trainig_dists):
 
 # If vectorize
 if vectorize:
-    continuation_object.vectorize_lowrank()
+    continuation_object.vectorize_lowrank(hermitian=True)
     vecs_lr = continuation_object.lowrank_vectorized
 else:
     vecs_lr = continuation_object.vecs_lowrank
@@ -232,8 +238,15 @@ for i, test_dist in enumerate(test_range):
         nroots=nroots_evcont+1,
         df_basis=df_basis
     )
+    
+    out = get_lowrank_en_with_grad_and_NAC(mol, continuation_object.one_rdm, 
+                                           continuation_object.overlap,
+                                           vecs_lr, None, 
+                                           nroots=nroots_evcont+1,
+                                           df_basis=df_basis)
+    
     lr_tot += (time.time()-start); lr_n_eval += 1
-
+    
     print('   low rank - finish - %.1f sec'%(time.time()-start))
 
     #cont_lowrank_en += [en_continuation_ms]
@@ -256,11 +269,54 @@ for i, test_dist in enumerate(test_range):
     h1e_mo = np.einsum('ai,ab,bj->ij', mf.mo_coeff, h1_ao, mf.mo_coeff)
     #print(h1e_mo, df_eri, mol.nao, mol.nelec)
 
+    # DF-ERI gradients
+    auxmol = df.addons.make_auxmol(mol, df_basis)
+    
+    # ints_3c is the 3-center integral tensor (ij|P), where i and j are the
+    # indices of AO basis and P is the auxiliary basis
+    ints_3c2e = df.incore.aux_e2(mol, auxmol, intor='int3c2e')
+    #ints_2c2e is the (P|Q) integrals
+    ints_2c2e = auxmol.intor('int2c2e')
+    vals, vecs = np.linalg.eigh(ints_2c2e)
+    assert(len(vals[vals < 1.e-15]) == 0) # PSD
+    metric = np.array(np.dot(vecs * (1 / np.sqrt(vals)) , vecs.conj().T))
+    cd_array = np.einsum('PQ,ijP->Qij', metric, ints_3c2e)
+    
+    # We can get the integrals ( d/dx i, j | P)
+    ints_3c2e_ip1 = df.incore.aux_e2(mol, auxmol, intor='int3c2e_ip1', comp=3)
+    # Use the same metric as before
+    deriv_cderi = np.einsum('PQ,xijP -> xijQ', metric, ints_3c2e_ip1)
+    # To reconstruct the full 4c derivative integrals, we need to contract with the previous cderi integrals
+    df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, cd_array)
+    
+    h2_ao_deriv = df_grad_4c_ints
+    h2_ao = lib.einsum('Pij,Pkl->ijkl', Lpq_ao, Lpq_ao)
+    
+    h2_ao_nondf = mol.intor("int2e")
+    h2_ao_deriv_nondf = mol.intor("int2e_ip1", comp=3)
+    
+    print("Max error in 4c ERI derivative:", np.max(np.abs(h2_ao_deriv - h2_ao_deriv_nondf)))
+    
+    grad_nuc = df.grad.RHF(mf).grad_nuc()    
+    #grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
+
+
     # Only do FCI if number of orbitals is less than 16
     if mol.nao < 16 and (cont_solver == 'FCI' or fci_done):
         e_fci, c_fci = myci.kernel(h1e_mo, df_eri, mol.nao, mol.nelec, nroots=nroots_evcont)
         e_fci += mol.energy_nuc()
         fci_en[i,:] = e_fci
+        
+        # Gradients
+        mc = mcscf.CASCI(mf, ncas=mf.mo_coeff.shape[0], nelecas=mf.mo_coeff.shape[0])
+        out_mc = mc.kernel()
+        e_fci = out_mc[0]
+        
+        assert mc.converged
+        
+        grad_method = mc.Gradients()
+        grad_ref = grad_method.kernel(state=0) #- grad_method.grad_nuc()
+        
     else:
         fci_done = False
 
@@ -315,6 +371,26 @@ for i, test_dist in enumerate(test_range):
         nroots=nroots_evcont+1
     )
     
+    # Get grad
+    grad_cont = []
+    for i_state in range(nroots_evcont+1):
+        vec_i = vec[i_state,:]
+        vec_j = vec_i
+        
+        one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), continuation_object_full.one_rdm, axes=2)
+        two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), continuation_object_full.two_rdm, axes=2)
+            
+        grad_i = get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, 
+                                    one_rdm_predicted,
+                                    two_rdm_predicted)
+        grad_cont.append(grad_i + grad_nuc)
+    
+    out_full = get_multistate_energy_with_grad_and_NAC(mol,
+                                                       continuation_object_full.one_rdm,
+                                                       continuation_object_full.two_rdm,
+                                                       continuation_object_full.overlap,
+                                                       nroots=nroots_evcont+1)
+    
     cont_en[i,:] = en_continuation_ms + mol.energy_nuc()
     
     if cont_solver == 'CAS':
@@ -324,7 +400,9 @@ for i, test_dist in enumerate(test_range):
             print(ehf, ref_en[i], cont_en[i], cont_lowrank_en[i], mol.energy_nuc())
 
     else:
-        print(ehf, ref_en[i,:], en_continuation_ms)
+        print(ehf, ref_en[i,:], cont_en[i], cont_lowrank_en[i])
+        print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]))
+        #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
 
 print('Time per low-rank (s): %.2f'%(lr_tot/lr_n_eval))
 

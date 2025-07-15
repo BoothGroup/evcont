@@ -4,13 +4,20 @@ from pyscf import scf, ao2mo, grad
 
 from evcont.ab_initio_eigenvector_continuation import (
     approximate_ground_state,
-    approximate_multistate
+    approximate_multistate,
+    solve_subspace
 )
 
 from evcont.electron_integral_utils import (
     get_loewdin_trafo,
     restore_electron_exchange_symmetry,
 )
+
+from evcont.low_rank_utils import (
+    get_jk_builds,    
+)
+
+import sys
 
 
 def get_overlap_grad(mol):
@@ -314,6 +321,57 @@ def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=
 
     return grad_elec
 
+def get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=None):
+    """
+    Calculates the gradient of the electronic energy based on one- and two-rdms
+    in the OAO.
+
+    Args:
+        mol (object): Molecule object.
+        one_rdm (ndarray): One-electron reduced density matrix.
+        two_rdm (ndarray): Two-electron reduced density matrix.
+        ao_mo_trafo (ndarray, optional):
+            AO to MO transformation matrix. Is computed if not provided.
+        ao_mo_trafo_grad (ndarray, optional):
+            Gradient of AO to MO transformation matrix. Is computed if not provided.
+
+    Returns:
+        ndarray: Electronic gradient.
+    """
+
+    if ao_mo_trafo is None:
+        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+
+    if ao_mo_trafo_grad is None:
+        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+
+    h1_jac = get_one_el_grad(
+        mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
+    )
+
+    #h2_ao = mol.intor("int2e")
+    #h2_ao_deriv = mol.intor("int2e_ip1", comp=3)
+
+    two_el_gradient = two_el_grad(
+        h2_ao,
+        two_rdm,
+        ao_mo_trafo,
+        ao_mo_trafo_grad,
+        h2_ao_deriv,
+        tuple(
+            [
+                (mol.aoslice_by_atom()[i][2], mol.aoslice_by_atom()[i][3])
+                for i in range(mol.natm)
+            ]
+        ),
+    )
+    
+    grad_elec = (
+        np.einsum("ij,ijkl->kl", one_rdm, h1_jac, optimize="optimal")
+        + 0.5 * two_el_gradient
+    )
+
+    return grad_elec
 
 def get_energy_with_grad(
     mol, one_RDM, two_RDM, S, hermitian=True, return_density_matrices=False
@@ -898,6 +956,221 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
                     one_rdm_predicted, two_rdm_predicted, h1_jac, h2_jac
                 )
             
+            
+            # Energy gradients
+            if i_state == j_state:
+                grad_elec_all.append(grad_elec)
+                
+            # Nonadiabatic couplings
+            else:
+                # Hellman-Feynman contribution to NAC
+                nac_hf = grad_elec/(en[j_state]-en[i_state])
+
+                # Orbital contribution to NAC
+                nac_orb = np.einsum("ij,ijkl->kl",one_rdm_predicted, orb_deriv, optimize="optimal")
+
+                # Total NAC
+                nac_ij = nac_hf + nac_orb
+                
+                # Save to dictionaries
+                nac_all[str(i_state)+str(j_state)] = nac_ij
+                nac_all_hfonly[str(i_state)+str(j_state)] = nac_hf
+
+    # Add the nuclear contribution to gradient
+    grad_all = np.array(grad_elec_all) + grad_nuc
+
+    return (
+        vec,
+        en.real + mol.energy_nuc(),
+        grad_all,
+        nac_all,
+        nac_all_hfonly
+    )
+
+
+##############################################################################
+def two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds, vec_i, vec_j,
+                        ao_mo_trafo=None, ao_mo_trafo_grad=None):
+    
+    # AO to SAO basis transformation
+    if ao_mo_trafo is None:
+        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    
+    if ao_mo_trafo_grad is None:
+        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+        
+    # Unpack the preliminaries
+    lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t = ED_builds
+    ntrain = vec_i.shape[0]
+    norb = lr_vecs.shape[-1]
+    
+    if lowrank_vecs['has_svd']:
+        svd_vecs_ao, svd_rightvecs_ao, \
+            vj_left, vj_right, \
+            vj_left_grad, vj_right_grad = SVD_builds
+            
+        print('Error in two_el_grad_lowrank: SVD not implemented yet')
+        sys.exit()
+        
+            
+    # Basis functions indices for each atom
+    atm_slices = tuple(
+        [
+            (mol.aoslice_by_atom()[i][2], mol.aoslice_by_atom()[i][3])
+            for i in range(mol.natm)
+        ]
+    )
+    
+    # Pulay terms
+    """
+    pulay_term = 4*np.einsum('xj,ABawx,ABaij,ABa,A,B->wi', ao_mo_trafo, 
+                             vhf, lr_vecs, lowrank_vecs['vals'][:,:,:vhf.shape[2]],
+                             vec_i, vec_j, optimize='optimal')
+    
+    grad_i = np.einsum('wimn,wi->mn',ao_mo_trafo_grad,pulay_term,optimize='optimal')
+    """
+    pulay_term = 2*np.einsum('xj,ABawx,ABaij,ABa->ABwi', ao_mo_trafo, 
+                             vhf, lr_vecs, lowrank_vecs['vals'][:,:,:vhf.shape[2]],
+                             optimize='optimal')
+    
+    pulay_term += 2*np.einsum('wi,ABawx,ABaij,ABa->ABxj', ao_mo_trafo, 
+                             vhf, lr_vecs, lowrank_vecs['vals'][:,:,:vhf.shape[2]],
+                             optimize='optimal')
+    
+    if lowrank_vecs['hermitian']:
+        # Set the upper triangle
+        pulay_term[np.triu_indices(ntrain)] = pulay_term.transpose(1,0,2,3)[np.triu_indices(ntrain)].conj()
+    
+    grad_i = np.einsum('wimn,ABwi,A,B->mn',ao_mo_trafo_grad,pulay_term,vec_i, vec_j,optimize='optimal')
+    
+
+    #grad_i = np.zeros_like(grad_i) # Setting the previous part to zero for testing
+    
+    # JK Grad terms   
+    grad_el_traced = 2*np.einsum('ABanij,ABaij,ABa->ABni',
+                                 vhf_grad_t, lr_vecs_ao,lowrank_vecs['vals'][:,:,:vhf.shape[2]],
+                                 optimize='optimal')
+    
+    grad_el_traced += 2*np.einsum('ABanij,ABaji,ABa->ABni',
+                                 vhf_grad, lr_vecs_ao,lowrank_vecs['vals'][:,:,:vhf.shape[2]],
+                                 optimize='optimal')
+    
+    if lowrank_vecs['hermitian']:
+        # Set the upper triangle
+        grad_el_traced[np.triu_indices(ntrain)] = grad_el_traced.transpose(1,0,2,3)[np.triu_indices(ntrain)].conj()
+        
+    grad_el_traced = np.einsum('ABni,A,B->ni',grad_el_traced, vec_i, vec_j, optimize='optimal')
+    
+    # Sum contributions from each orbital on atom site, i
+    for i, slice in enumerate(atm_slices):
+        grad_i[i,:] += grad_el_traced[:,slice[0] : slice[1]].sum(axis=1) 
+        
+    return grad_i
+
+def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=None,
+                                     nroots=1, df_basis='weigend',
+                                     ao_mo_trafo=None, ao_mo_trafo_grad=None,
+                                     hermitian=True,):
+    """
+    Construct subspace Hamiltonian using the low-rank decomposition of 
+    2-transition-cumulant
+    
+    Input:
+        mol (Mole object): pySCF mole object at the test geometry
+        
+    """
+    ### Preliminaries
+    ntrain = S.shape[0]
+    
+    norb = one_RDM.shape[-1]
+    norb_sq = norb * norb
+    
+    # Initiate the mean field object to use DF integrals (no need to use kernel)
+    #mol.symmetry = False
+    mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
+    
+    # AO to SAO basis transformation
+    if ao_mo_trafo is None:
+        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    
+    if ao_mo_trafo_grad is None:
+        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+        
+    # 1-electron integrals with DF
+    h1_ao = mf.get_hcore()
+    h1e_sao = np.einsum('ai,ab,bj->ij', ao_mo_trafo, h1_ao, ao_mo_trafo)
+    
+    ######################################################
+    # Get preliminaries
+    ED_builds, SVD_builds = get_jk_builds(mol, lowrank_vecs,
+                                          ao_mo_trafo=ao_mo_trafo,
+                                          df_basis=df_basis)
+
+    lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t = ED_builds
+    if lowrank_vecs['has_svd']:
+        svd_vecs_ao, svd_rightvecs_ao, \
+            vj_left, vj_right, \
+            vj_left_grad, vj_right_grad = SVD_builds
+    
+    ######################################################
+    ######### CONSTRUCT SUBSPACE HAMILTONIAN AND GRADS
+    ######################################################
+    ### 1-body contributions
+    subspace_h = np.einsum('...kl,kl->...', one_RDM, h1e_sao)
+
+    # Contruction for subspace Hamiltonian
+    subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'][:,:,:vhf.shape[2]],optimize='optimal')
+    
+    if lowrank_vecs['has_svd']:
+        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vj_right, svd_vecs_ao, lowrank_vecs['vals'][:,:,:vj_right.shape[2]],optimize='optimal')
+        
+    if hermitian:
+        # Set the upper triangle
+        subspace_h[np.triu_indices(ntrain)] = subspace_h.T[np.triu_indices(ntrain)].conj()
+    
+    # Diagonalize
+    en, vec = solve_subspace(subspace_h, S, hermitian=hermitian, nroots=nroots)
+    fix_gauge(vec)
+
+    ######################################################
+    ######### GET GRADIENTS
+    ######################################################
+    
+    # Get the orbital derivative coupling for NACs
+    orb_deriv = get_orbital_derivative_coupling(mol,ao_mo_trafo=ao_mo_trafo)
+    
+    # Nuclear part of the gradient
+    grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
+        
+    # 1-el grad 
+    h1_jac = get_one_el_grad(
+        mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
+    )
+            
+    grad_elec_all = []
+    nac_all = {}
+    nac_all_hfonly = {}
+    # Iterate over pairs of eigenstates
+    for i_state in range(nroots):
+        vec_i = vec[i_state,:]
+
+        for j_state in range(nroots):
+            vec_j = vec[j_state,:]
+            
+            # Contracting to subspace eigenstate in hand
+            #one_rdm_predicted = np.einsum("i,ijkl,j->kl", vec_i, one_RDM, vec_j, optimize="optimal")
+            #two_rdm_predicted = np.einsum(
+            #    "i,ijklmn,j->klmn", vec_i, two_RDM, vec_j, optimize="optimal"
+            #)
+            one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), one_RDM, axes=2)
+
+            # 1-electron contributions to gradient
+            grad_elec_h1 = np.einsum("ij,ijkl->kl", one_rdm_predicted, h1_jac, optimize="optimal")
+            
+            grad_elec_h2 = two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds, vec_i, vec_j,
+                                    ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad)
+
+            grad_elec = grad_elec_h1 + 0.5*grad_elec_h2
             
             # Energy gradients
             if i_state == j_state:

@@ -93,6 +93,33 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
 
     return en_approx, gs_approx
 
+def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-5):
+    """
+    Diagonalize the subspace Hamiltonian
+    """
+    if hermitian is True:
+        # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
+        #vals, vecs = eigh(H, S)
+        vals, vecs, _ = safe_eigh(H, S, lindep=lindep)
+        
+    else:
+        # Solve the generalized eigenvalue problem for non-Hermitian Hamiltonian
+        vals, vecs = eig(H, S)
+
+    # Filter out imaginary eigenvalues
+    valid_vals = abs(vals.imag) < 1.0e-5
+    
+    # Make sure nroots isn't higher than available eigenstates
+    assert vals[valid_vals].shape[0] >= nroots
+
+    # Find the index of the minimum GS eigenvalue
+    argroots = np.argsort(vals[valid_vals].real)[:nroots]
+
+    # Get the energy approximation and ground state approximation
+    en_approx = vals[valid_vals][argroots].real
+    evec_approx = vecs[:, valid_vals][:, argroots].real.T
+
+    return en_approx, evec_approx
 
 def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
                                    nroots=1, hermitian=True, df_basis='weigend'):
@@ -126,27 +153,7 @@ def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S,
     #print('  Overlap')
     #print(S.tolist())
     
-    if hermitian is True:
-        # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
-        #vals, vecs = eigh(H, S)
-        vals, vecs, _ = safe_eigh(H, S, lindep=1e-2)
-        
-    else:
-        # Solve the generalized eigenvalue problem for non-Hermitian Hamiltonian
-        vals, vecs = eig(H, S)
-
-    # Filter out imaginary eigenvalues
-    valid_vals = abs(vals.imag) < 1.0e-5
-    
-    # Make sure nroots isn't higher than available eigenstates
-    assert vals[valid_vals].shape[0] >= nroots
-
-    # Find the index of the minimum GS eigenvalue
-    argroots = np.argsort(vals[valid_vals].real)[:nroots]
-
-    # Get the energy approximation and ground state approximation
-    en_approx = vals[valid_vals][argroots].real
-    evec_approx = vecs[:, valid_vals][:, argroots].real.T
+    en_approx, evec_approx = solve_subspace(H, S, nroots=nroots, hermitian=hermitian)
 
     return en_approx, evec_approx
 

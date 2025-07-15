@@ -92,8 +92,8 @@ class FCI_EVCont_obj:
         
         self.vecs_lowrank = {}
     
-    def vectorize_lowrank(self):        
-        vectorize_lowrank(self)
+    def vectorize_lowrank(self,hermitian=True):        
+        vectorize_lowrank(self,hermitian=hermitian)
 
             
         
