@@ -329,25 +329,26 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
         nvec = lowrank_vecs['vals'].shape[2]
         
         ### Joint ED inference
-        # Grouped JK builds 
-        lr_vecs_grouped = lowrank_vecs['vecs_stacked']
-        
-        # Transform the low-rank vecs into
-        lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, sao_basis.T,
-        (0, norb, 0, norb), aosym='s1', mosym='s1')
-        lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
-        
-        # JK build
-        vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
-        vhf = vj_list - 0.5*vk_list
-        
-        # Reindex to separate bra, ket, nvec indices
-        vhf = unpack_vec(vhf, lowrank_vecs['pairloc'],hermitian=hermitian)
-        lr_vecs_ao = unpack_vec(lr_vecs_ao, lowrank_vecs['pairloc'],hermitian=hermitian)
-        
-        # Contruction for subspace Hamiltonian
-        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'][:,:,:vhf.shape[2]],optimize='optimal')
-        
+        if lowrank_vecs['has_ed']:
+            # Grouped JK builds 
+            lr_vecs_grouped = lowrank_vecs['vecs_stacked']
+            
+            # Transform the low-rank vecs into
+            lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, sao_basis.T,
+            (0, norb, 0, norb), aosym='s1', mosym='s1')
+            lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
+            
+            # JK build
+            vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+            vhf = vj_list - 0.5*vk_list
+            
+            # Reindex to separate bra, ket, nvec indices
+            vhf = unpack_vec(vhf, lowrank_vecs['pairloc'],hermitian=hermitian)
+            lr_vecs_ao = unpack_vec(lr_vecs_ao, lowrank_vecs['pairloc'],hermitian=hermitian)
+            
+            # Contruction for subspace Hamiltonian
+            subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'][:,:,:vhf.shape[2]],optimize='optimal')
+            
         ### Coulomb SVD inference
         if lowrank_vecs['has_svd']:
             
@@ -417,34 +418,35 @@ def get_jk_builds(mol, lowrank_vecs,
     ######################################################
     
     ### Joint ED inference
-    # Grouped JK builds 
-    lr_vecs_grouped = lowrank_vecs['vecs_stacked']
+    if lowrank_vecs['has_ed']:
+        # Grouped JK builds 
+        lr_vecs_grouped = lowrank_vecs['vecs_stacked']
+        
+        # Transform the low-rank vecs into
+        lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, ao_mo_trafo.T,
+        (0, norb, 0, norb), aosym='s1', mosym='s1')
+        lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
+        
+        # JK build
+        vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+        vhf = vj_list - 0.5*vk_list
+        
+        # Grad JK builds
+        # TODO: Add auxbasis_response in the future, for now ignore it
+        grad_obj = mf_grad(mf)
+        grad_obj.auxbasis_response = False
+        vj_grad_list, vk_grad_list = get_jk_grad(grad_obj,dm=lr_vecs_ao, hermi=0) 
+        vj_grad_list_t, vk_grad_list_t = get_jk_grad(grad_obj,dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
+        vhf_grad = vj_grad_list - 0.5*vk_grad_list
+        vhf_grad_t = vj_grad_list_t - 0.5*vk_grad_list_t
     
-    # Transform the low-rank vecs into
-    lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, ao_mo_trafo.T,
-    (0, norb, 0, norb), aosym='s1', mosym='s1')
-    lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
-    
-    # JK build
-    vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
-    vhf = vj_list - 0.5*vk_list
-    
-    # Grad JK builds
-    # TODO: Add auxbasis_response in the future, for now ignore it
-    grad_obj = mf_grad(mf)
-    grad_obj.auxbasis_response = False
-    vj_grad_list, vk_grad_list = get_jk_grad(grad_obj,dm=lr_vecs_ao, hermi=0) 
-    vj_grad_list_t, vk_grad_list_t = get_jk_grad(grad_obj,dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
-    vhf_grad = vj_grad_list - 0.5*vk_grad_list
-    vhf_grad_t = vj_grad_list_t - 0.5*vk_grad_list_t
-
-    # Reindex to separate bra, ket, nvec indices
-    vhf = unpack_vec(vhf, lowrank_vecs['pairloc'],hermitian=hermitian)
-    lr_vecs_ao = unpack_vec(lr_vecs_ao, lowrank_vecs['pairloc'],hermitian=hermitian)
-    lr_vecs = unpack_vec(lr_vecs_grouped, lowrank_vecs['pairloc'],hermitian=hermitian)
-    vhf_grad = unpack_grad_vec(vhf_grad, lowrank_vecs['pairloc'],hermitian=hermitian)
-    vhf_grad_t = unpack_grad_vec(vhf_grad_t, lowrank_vecs['pairloc'],hermitian=hermitian)
-    
+        # Reindex to separate bra, ket, nvec indices
+        vhf = unpack_vec(vhf, lowrank_vecs['pairloc'],hermitian=hermitian)
+        lr_vecs_ao = unpack_vec(lr_vecs_ao, lowrank_vecs['pairloc'],hermitian=hermitian)
+        lr_vecs = unpack_vec(lr_vecs_grouped, lowrank_vecs['pairloc'],hermitian=hermitian)
+        vhf_grad = unpack_grad_vec(vhf_grad, lowrank_vecs['pairloc'],hermitian=hermitian)
+        vhf_grad_t = unpack_grad_vec(vhf_grad_t, lowrank_vecs['pairloc'],hermitian=hermitian)
+        
     ### Coulomb SVD inference
     if lowrank_vecs['has_svd']:
         
@@ -465,19 +467,35 @@ def get_jk_builds(mol, lowrank_vecs,
         vj_r_list, _ = mf.with_df.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
         vj_l_list, _ = mf.with_df.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
 
+        # Grad JK builds
+        # TODO: Add auxbasis_response in the future, for now ignore it
+        grad_obj = mf_grad(mf)
+        grad_obj.auxbasis_response = False
+        vj_lgrad_list, _ = get_jk_grad(grad_obj,dm=svd_vecs_ao, hermi=0, with_k=False) 
+        vj_rgrad_list, _ = get_jk_grad(grad_obj,dm=svd_rightvecs_ao, hermi=0, with_k=False) 
+    
         # Reindex to separate bra, ket, nvec indices
         vj_right = unpack_vec(vj_r_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
         vj_left = unpack_vec(vj_l_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
-        svd_vecs_ao = unpack_vec(svd_vecs_ao, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
-        svd_rightvecs_ao = unpack_vec(svd_rightvecs_ao, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+        svd_lvecs_ao = unpack_vec(svd_vecs_ao, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+        svd_rvecs_ao = unpack_vec(svd_rightvecs_ao, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+        svd_lvecs = unpack_vec(svd_vecs_grouped, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+        svd_rvecs = unpack_vec(svd_rightvecs_grouped, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
         
-        # TODO: JK grads for SVD case
-        vj_left_grad, vj_right_grad = None, None
-        
-        return (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t), (svd_vecs_ao, svd_rightvecs_ao, vj_left, vj_right, vj_left_grad, vj_right_grad)
+        vj_l_grad = unpack_grad_vec(vj_lgrad_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+        vj_r_grad = unpack_grad_vec(vj_rgrad_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
+                
+    if lowrank_vecs['has_svd'] and lowrank_vecs['has_ed']:
+        return (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t), \
+            (svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, vj_left, vj_right, vj_l_grad, vj_r_grad)
     
+    elif lowrank_vecs['has_svd']:
+        return None, \
+            (svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, vj_left, vj_right, vj_l_grad, vj_r_grad)
+
     else:
-        return (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t), None
+        return (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t), \
+            None
 
 
 ###############################################################################
@@ -635,26 +653,30 @@ def stack_lowrank(vecs_lowrank, hermitian=True):
                 
                 nsvd_tot += nvec_i                  
                 
-    # Joint ED vectors
-    vecs_stacked = np.concatenate(vecs_lr,axis=0)
-    vals_stacked = np.concatenate(vals_lr)
-    
+    # Check if any (t)RDM used ED
+    has_ed = True
+    if len(vecs_lr) == 0:
+        has_ed = False
+      
     # Check if any (t)RDM used SVD
     has_svd = True
     if len(vecs_svd_lr) == 0:
         has_svd = False
         
-        
     # Set up the final dictionary
     stacked_lowrank = {}
-    stacked_lowrank['vals'] = vals_stacked
-    stacked_lowrank['vecs'] = vecs_stacked
-    stacked_lowrank['pairloc'] = pair_loc
-    
     stacked_lowrank['hermitian'] = hermitian
-    
-    if has_svd:
+
+    if has_ed:
+        # Joint ED vectors
+        vecs_stacked = np.concatenate(vecs_lr,axis=0)
+        vals_stacked = np.concatenate(vals_lr)
         
+        stacked_lowrank['vals'] = vals_stacked
+        stacked_lowrank['vecs'] = vecs_stacked
+        stacked_lowrank['pairloc'] = pair_loc
+                
+    if has_svd:
         # Coulomb SVD vectors
         vecs_svd_stacked = np.concatenate(vecs_svd_lr,axis=0)
         rightvecs_svd_stacked = np.concatenate(rightvecs_svd_lr,axis=0)
@@ -665,7 +687,7 @@ def stack_lowrank(vecs_lowrank, hermitian=True):
         stacked_lowrank['rightvecs_svd'] = rightvecs_svd_stacked
         stacked_lowrank['pairloc_svd'] = pair_svd_loc
         
-    return stacked_lowrank, has_svd
+    return stacked_lowrank, has_svd, has_ed
 
 def unpack_vec(vecs,pair_loc,hermitian=True):
     """
@@ -786,15 +808,17 @@ def vectorize_lowrank(self, hermitian=True):
     # Stack vectors for more efficient inference
     # TODO: Clean up this function as there is a large overlap between
     # the previous steps and stack_lowrank function
-    stacked, has_svd = stack_lowrank(self.vecs_lowrank, hermitian=hermitian)
+    stacked, has_svd, has_ed = stack_lowrank(self.vecs_lowrank, hermitian=hermitian)
     
     # Set this low-rank description
     self.lowrank_vectorized = {}
     self.lowrank_vectorized['vals'] = vals_lr
     self.lowrank_vectorized['vecs'] = vecs_lr
-    self.lowrank_vectorized['rightvecs'] = rightvecs_lr
-    self.lowrank_vectorized['vecs_stacked'] = stacked['vecs']
-    self.lowrank_vectorized['pairloc'] = stacked['pairloc']
+    
+    if has_ed:
+        self.lowrank_vectorized['rightvecs'] = rightvecs_lr
+        self.lowrank_vectorized['vecs_stacked'] = stacked['vecs']
+        self.lowrank_vectorized['pairloc'] = stacked['pairloc']
     
     if has_svd:
         self.lowrank_vectorized['rightvecs_stacked'] = stacked['rightvecs_svd']
@@ -802,6 +826,7 @@ def vectorize_lowrank(self, hermitian=True):
         self.lowrank_vectorized['pairloc_svd'] = stacked['pairloc_svd']
         
     self.lowrank_vectorized['hermitian'] = hermitian
+    self.lowrank_vectorized['has_ed'] = has_ed
     self.lowrank_vectorized['has_svd'] = has_svd
     
 ###############################################################################

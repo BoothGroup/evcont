@@ -321,6 +321,7 @@ def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=
 
     return grad_elec
 
+
 def get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=None):
     """
     Calculates the gradient of the electronic energy based on one- and two-rdms
@@ -372,6 +373,7 @@ def get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, one_rdm, two_rdm, ao_mo
     )
 
     return grad_elec
+
 
 def get_energy_with_grad(
     mol, one_RDM, two_RDM, S, hermitian=True, return_density_matrices=False
@@ -849,7 +851,7 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
         )
 
 def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
-                                            savemem=False, hermitian=True):
+                                            savemem=True, hermitian=True):
     """
     Calculates the potential energiesm its gradient w.r.t. nuclear positions of a
     molecule and nonadiabatic couplings from eigenvector continuation for both
@@ -966,6 +968,9 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
                 # Hellman-Feynman contribution to NAC
                 nac_hf = grad_elec/(en[j_state]-en[i_state])
 
+                #if i_state == 0 and j_state == 1: 
+                #    print(i_state, j_state, grad_elec)
+                    
                 # Orbital contribution to NAC
                 nac_orb = np.einsum("ij,ijkl->kl",one_rdm_predicted, orb_deriv, optimize="optimal")
 
@@ -999,18 +1004,21 @@ def two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds, vec_i, vec_j,
     if ao_mo_trafo_grad is None:
         ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
         
-    # Unpack the preliminaries
-    lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t = ED_builds
+    # Preliminaries
     ntrain = vec_i.shape[0]
-    norb = lr_vecs.shape[-1]
+    norb = ao_mo_trafo.shape[-1]
     
+    # Unpack the preliminaries
+    if lowrank_vecs['has_ed']:
+        lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t = ED_builds
+
     if lowrank_vecs['has_svd']:
-        svd_vecs_ao, svd_rightvecs_ao, \
+        svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, \
             vj_left, vj_right, \
-            vj_left_grad, vj_right_grad = SVD_builds
+            vj_l_grad, vj_r_grad = SVD_builds
             
-        print('Error in two_el_grad_lowrank: SVD not implemented yet')
-        sys.exit()
+        #print('Error in two_el_grad_lowrank: SVD not implemented yet')
+        #sys.exit()
         
             
     # Basis functions indices for each atom
@@ -1029,13 +1037,33 @@ def two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds, vec_i, vec_j,
     
     grad_i = np.einsum('wimn,wi->mn',ao_mo_trafo_grad,pulay_term,optimize='optimal')
     """
-    pulay_term = 2*np.einsum('xj,ABawx,ABaij,ABa->ABwi', ao_mo_trafo, 
-                             vhf, lr_vecs, lowrank_vecs['vals'][:,:,:vhf.shape[2]],
-                             optimize='optimal')
-    
-    pulay_term += 2*np.einsum('wi,ABawx,ABaij,ABa->ABxj', ao_mo_trafo, 
-                             vhf, lr_vecs, lowrank_vecs['vals'][:,:,:vhf.shape[2]],
-                             optimize='optimal')
+    pulay_term = np.zeros([ntrain,ntrain,norb,norb])
+    if lowrank_vecs['has_ed']: 
+        pulay_term += 2*np.einsum('xj,ABawx,ABaij,ABa->ABwi', ao_mo_trafo, 
+                                 vhf, lr_vecs, lowrank_vecs['vals'][:,:,:vhf.shape[2]],
+                                 optimize='optimal')
+        
+        pulay_term += 2*np.einsum('wi,ABawx,ABaij,ABa->ABxj', ao_mo_trafo, 
+                                 vhf, lr_vecs, lowrank_vecs['vals'][:,:,:vhf.shape[2]],
+                                 optimize='optimal')
+        
+    if lowrank_vecs['has_svd']: 
+
+        pulay_term += np.einsum('xj,ABawx,ABaij,ABa->ABwi', ao_mo_trafo, 
+                                 vj_left, svd_rvecs, lowrank_vecs['vals'][:,:,:vj_left.shape[2]],
+                                 optimize='optimal')
+        
+        pulay_term += np.einsum('wi,ABawx,ABaij,ABa->ABxj', ao_mo_trafo, 
+                                 vj_left, svd_rvecs, lowrank_vecs['vals'][:,:,:vj_left.shape[2]],
+                                 optimize='optimal')
+        
+        pulay_term += np.einsum('xj,ABawx,ABaij,ABa->ABwi', ao_mo_trafo, 
+                                 vj_right, svd_lvecs, lowrank_vecs['vals'][:,:,:vj_left.shape[2]],
+                                 optimize='optimal')
+        
+        pulay_term += np.einsum('wi,ABawx,ABaij,ABa->ABxj', ao_mo_trafo, 
+                                 vj_right, svd_lvecs, lowrank_vecs['vals'][:,:,:vj_left.shape[2]],
+                                 optimize='optimal')
     
     if lowrank_vecs['hermitian']:
         # Set the upper triangle
@@ -1047,19 +1075,33 @@ def two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds, vec_i, vec_j,
     #grad_i = np.zeros_like(grad_i) # Setting the previous part to zero for testing
     
     # JK Grad terms   
-    grad_el_traced = 2*np.einsum('ABanij,ABaij,ABa->ABni',
-                                 vhf_grad_t, lr_vecs_ao,lowrank_vecs['vals'][:,:,:vhf.shape[2]],
-                                 optimize='optimal')
+    grad_h2 = np.zeros([ntrain, ntrain, 3, norb])
+    if lowrank_vecs['has_ed']: 
+
+        grad_h2 += 2*np.einsum('ABanij,ABaij,ABa->ABni',
+                                vhf_grad_t, lr_vecs_ao,lowrank_vecs['vals'][:,:,:vhf.shape[2]],
+                                optimize='optimal')
+        
+        grad_h2 += 2*np.einsum('ABanij,ABaji,ABa->ABni',
+                                vhf_grad, lr_vecs_ao,lowrank_vecs['vals'][:,:,:vhf.shape[2]],
+                                optimize='optimal')
     
-    grad_el_traced += 2*np.einsum('ABanij,ABaji,ABa->ABni',
-                                 vhf_grad, lr_vecs_ao,lowrank_vecs['vals'][:,:,:vhf.shape[2]],
-                                 optimize='optimal')
-    
+    if lowrank_vecs['has_svd']: 
+                    
+        #print(vj_l_grad.shape,svd_rvecs_ao.shape )
+        grad_h2 += np.einsum('ABanij,ABaij,ABa->ABni',
+                                vj_l_grad, svd_rvecs_ao+svd_rvecs_ao.transpose(0,1,2,4,3),lowrank_vecs['vals'][:,:,:vj_left.shape[2]],
+                                optimize='optimal')
+        
+        grad_h2 += np.einsum('ABanij,ABaij,ABa->ABni',
+                                vj_r_grad, svd_lvecs_ao+svd_lvecs_ao.transpose(0,1,2,4,3),lowrank_vecs['vals'][:,:,:vj_left.shape[2]],
+                                optimize='optimal')
+        
     if lowrank_vecs['hermitian']:
         # Set the upper triangle
-        grad_el_traced[np.triu_indices(ntrain)] = grad_el_traced.transpose(1,0,2,3)[np.triu_indices(ntrain)].conj()
+        grad_h2[np.triu_indices(ntrain)] = grad_h2.transpose(1,0,2,3)[np.triu_indices(ntrain)].conj()
         
-    grad_el_traced = np.einsum('ABni,A,B->ni',grad_el_traced, vec_i, vec_j, optimize='optimal')
+    grad_el_traced = np.einsum('ABni,A,B->ni',grad_h2, vec_i, vec_j, optimize='optimal')
     
     # Sum contributions from each orbital on atom site, i
     for i, slice in enumerate(atm_slices):
@@ -1106,11 +1148,13 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=No
                                           ao_mo_trafo=ao_mo_trafo,
                                           df_basis=df_basis)
 
-    lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t = ED_builds
+    if lowrank_vecs['has_ed']:
+        lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t = ED_builds
+        
     if lowrank_vecs['has_svd']:
-        svd_vecs_ao, svd_rightvecs_ao, \
+        svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, \
             vj_left, vj_right, \
-            vj_left_grad, vj_right_grad = SVD_builds
+            vj_l_grad, vj_r_grad = SVD_builds
     
     ######################################################
     ######### CONSTRUCT SUBSPACE HAMILTONIAN AND GRADS
@@ -1119,12 +1163,13 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=No
     subspace_h = np.einsum('...kl,kl->...', one_RDM, h1e_sao)
 
     # Contruction for subspace Hamiltonian
-    subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'][:,:,:vhf.shape[2]],optimize='optimal')
+    if lowrank_vecs['has_ed']:
+        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vhf, lr_vecs_ao, lowrank_vecs['vals'][:,:,:vhf.shape[2]],optimize='optimal')
     
     if lowrank_vecs['has_svd']:
-        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vj_right, svd_vecs_ao, lowrank_vecs['vals'][:,:,:vj_right.shape[2]],optimize='optimal')
+        subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vj_right, svd_lvecs_ao, lowrank_vecs['vals'][:,:,:vj_right.shape[2]],optimize='optimal')
         
-    if hermitian:
+    if lowrank_vecs['hermitian']:
         # Set the upper triangle
         subspace_h[np.triu_indices(ntrain)] = subspace_h.T[np.triu_indices(ntrain)].conj()
     
@@ -1171,6 +1216,7 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=No
                                     ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad)
 
             grad_elec = grad_elec_h1 + 0.5*grad_elec_h2
+            #grad_elec = 0.5*grad_elec_h2 # For testing 2-el part only
             
             # Energy gradients
             if i_state == j_state:
@@ -1181,6 +1227,9 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=No
                 # Hellman-Feynman contribution to NAC
                 nac_hf = grad_elec/(en[j_state]-en[i_state])
 
+                #if i_state == 0 and j_state == 1: 
+                #    print(i_state, j_state, grad_elec)
+                
                 # Orbital contribution to NAC
                 nac_orb = np.einsum("ij,ijkl->kl",one_rdm_predicted, orb_deriv, optimize="optimal")
 

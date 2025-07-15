@@ -40,7 +40,7 @@ import matplotlib.pylab as plt
 #import matplotlib as mpl
 plt.style.use('default')
 
-nroots_evcont = 1
+nroots_evcont = 2
 cibasis = 'canonical'
 #cibasis = 'OAO'
 
@@ -72,8 +72,8 @@ if fix_sym == None:
 else:
     mol_sym = True
     
-#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5}
-lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-15}
+lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5}
+#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
 #lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
@@ -81,7 +81,7 @@ lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-15}
 vectorize = True
 
 #test_range = np.linspace(0.8, 3.0,40)
-test_range = np.linspace(0.8, 3.0,15)
+test_range = np.linspace(0.8, 3.0, 15)
 #test_range = np.linspace(0.4, 1.5,20)
 
 def get_mol(positions):
@@ -119,7 +119,7 @@ equilibrium_dist = 1.78596
 
 equilibrium_pos = np.array([(x * equilibrium_dist, 0.0, 0.0) for x in range(10)])
 
-trainig_dists = [0.97, 1.76]#, 2.60]
+trainig_dists = [0.97, 1.76, 2.60]
 #trainig_dists = np.linspace(0.97,2.60,5)
 
 if cont_solver == 'FCI':
@@ -389,7 +389,7 @@ for i, test_dist in enumerate(test_range):
                                                        continuation_object_full.one_rdm,
                                                        continuation_object_full.two_rdm,
                                                        continuation_object_full.overlap,
-                                                       nroots=nroots_evcont+1)
+                                                       nroots=nroots_evcont+1, savemem=True)
     
     cont_en[i,:] = en_continuation_ms + mol.energy_nuc()
     
@@ -402,7 +402,9 @@ for i, test_dist in enumerate(test_range):
     else:
         print(ehf, ref_en[i,:], cont_en[i], cont_lowrank_en[i])
         print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]))
+        #print('nac','\n', out[4],'\n', out_full[4])
         #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
+        #1/0
 
 print('Time per low-rank (s): %.2f'%(lr_tot/lr_n_eval))
 
