@@ -17,6 +17,8 @@ from evcont.low_rank_utils import (
     get_jk_builds,    
 )
 
+from evcont.logging_utils import logger, log_time, timeit
+
 import sys
 
 
@@ -850,6 +852,7 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
             grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
         )
 
+@timeit
 def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
                                             savemem=True, hermitian=True):
     """
@@ -1112,6 +1115,7 @@ def two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds, vec_i, vec_j,
 
     return grad_i
 
+@timeit
 def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
                                        ao_mo_trafo=None, ao_mo_trafo_grad=None):
     """
@@ -1224,6 +1228,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
             
     return intermediate_h2 + intermediate_pulay
 
+@timeit
 def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                                      nroots=1, df_basis='weigend',
                                      ao_mo_trafo=None, ao_mo_trafo_grad=None,

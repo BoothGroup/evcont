@@ -33,7 +33,9 @@ from pyscf.df.grad.rhf import get_jk as get_jk_grad
 from pyscf.df.grad.rhf import Gradients as mf_grad
 
 from evcont.electron_integral_utils import get_loewdin_trafo, get_integrals
+from evcont.logging_utils import logger, log_time, timeit
 
+@timeit
 def reduce_2rdm(rdm1, rdm2, ovlp, 
                 truncation_style='eigval',nvecs=10, eval_thr=0.1, ham_thr=0.001,
                 diag_mask=None, save_diag=False,
@@ -221,7 +223,8 @@ def reconstruct_subspace(lowrank_vecs, h2, ntrain=3):
     for vecs in lowrank_vecs.values():
         rdm2_i = reconstruct_rdm2_joint(vecs)
         subspace_h += 
-"""            
+"""   
+@timeit         
 def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                         sao_basis=None, df_basis='weigend', 
                         use_diag=False, hermitian=True,
@@ -384,6 +387,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     return subspace_h
 
 ###############################################################################
+@timeit
 def get_jk_builds(mol, lowrank_vecs,
                   ao_mo_trafo=None,
                   df_basis='weigend'):
@@ -416,27 +420,32 @@ def get_jk_builds(mol, lowrank_vecs,
     ######################################################
     ######### COMPUTE PRELIMINARIES & FOCK BUILDS
     ######################################################
+    # Initiate grad object
+    grad_obj = mf_grad(mf)
+    # TODO: Add auxbasis_response in the future, for now ignore it
+    grad_obj.auxbasis_response = False
     
     ### Joint ED inference
     if lowrank_vecs['has_ed']:
         # Grouped JK builds 
         lr_vecs_grouped = lowrank_vecs['vecs_stacked']
         
-        # Transform the low-rank vecs into
-        lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, ao_mo_trafo.T,
-        (0, norb, 0, norb), aosym='s1', mosym='s1')
-        lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
-        
+        with log_time("AO transform (1)"):
+            # Transform the low-rank vecs into
+            lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, ao_mo_trafo.T,
+            (0, norb, 0, norb), aosym='s1', mosym='s1')
+            lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
+            
         # JK build
-        vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+        with log_time("JK Builds (1)"):
+            vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
         vhf = vj_list - 0.5*vk_list
         
         # Grad JK builds
         # TODO: Add auxbasis_response in the future, for now ignore it
-        grad_obj = mf_grad(mf)
-        grad_obj.auxbasis_response = False
-        vj_grad_list, vk_grad_list = get_jk_grad(grad_obj,dm=lr_vecs_ao, hermi=0) 
-        vj_grad_list_t, vk_grad_list_t = get_jk_grad(grad_obj,dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
+        with log_time("JK Grad Builds (2)"):
+            vj_grad_list, vk_grad_list = get_jk_grad(grad_obj,dm=lr_vecs_ao, hermi=0) 
+            vj_grad_list_t, vk_grad_list_t = get_jk_grad(grad_obj,dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
         vhf_grad = vj_grad_list - 0.5*vk_grad_list
         vhf_grad_t = vj_grad_list_t - 0.5*vk_grad_list_t
     
@@ -454,26 +463,27 @@ def get_jk_builds(mol, lowrank_vecs,
         svd_vecs_grouped = lowrank_vecs['vecs_svd_stacked']
         svd_rightvecs_grouped = lowrank_vecs['rightvecs_stacked']
 
-        # Transform the low-rank vecs into AO basis
-        svd_rightvecs_ao = ao2mo._ao2mo.nr_e2(svd_rightvecs_grouped, ao_mo_trafo.T,
-        (0, norb, 0, norb), aosym='s1', mosym='s1')
-        svd_rightvecs_ao = svd_rightvecs_ao.reshape((svd_rightvecs_grouped.shape[0],norb,norb))
-        
-        svd_vecs_ao = ao2mo._ao2mo.nr_e2(svd_vecs_grouped, ao_mo_trafo.T,
-        (0, norb, 0, norb), aosym='s1', mosym='s1')
-        svd_vecs_ao = svd_vecs_ao.reshape((svd_vecs_grouped.shape[0],norb,norb))
-        
+        with log_time("AO transform (2)"):
+            # Transform the low-rank vecs into AO basis
+            svd_rightvecs_ao = ao2mo._ao2mo.nr_e2(svd_rightvecs_grouped, ao_mo_trafo.T,
+            (0, norb, 0, norb), aosym='s1', mosym='s1')
+            svd_rightvecs_ao = svd_rightvecs_ao.reshape((svd_rightvecs_grouped.shape[0],norb,norb))
+            
+            svd_vecs_ao = ao2mo._ao2mo.nr_e2(svd_vecs_grouped, ao_mo_trafo.T,
+            (0, norb, 0, norb), aosym='s1', mosym='s1')
+            svd_vecs_ao = svd_vecs_ao.reshape((svd_vecs_grouped.shape[0],norb,norb))
+            
         # J builds
-        vj_r_list, _ = mf.with_df.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
-        vj_l_list, _ = mf.with_df.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
+        with log_time("J Builds (2)"):
+            vj_r_list, _ = mf.with_df.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
+            vj_l_list, _ = mf.with_df.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
 
         # Grad JK builds
         # TODO: Add auxbasis_response in the future, for now ignore it
-        grad_obj = mf_grad(mf)
-        grad_obj.auxbasis_response = False
-        vj_lgrad_list, _ = get_jk_grad(grad_obj,dm=svd_vecs_ao, hermi=0, with_k=False) 
-        vj_rgrad_list, _ = get_jk_grad(grad_obj,dm=svd_rightvecs_ao, hermi=0, with_k=False) 
-    
+        with log_time("J Grad Builds (2)"):
+            vj_lgrad_list, _ = get_jk_grad(grad_obj,dm=svd_vecs_ao, hermi=0, with_k=False) 
+            vj_rgrad_list, _ = get_jk_grad(grad_obj,dm=svd_rightvecs_ao, hermi=0, with_k=False) 
+        
         # Reindex to separate bra, ket, nvec indices
         vj_right = unpack_vec(vj_r_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
         vj_left = unpack_vec(vj_l_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
