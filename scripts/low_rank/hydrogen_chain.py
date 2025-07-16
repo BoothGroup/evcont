@@ -40,7 +40,7 @@ import matplotlib.pylab as plt
 #import matplotlib as mpl
 plt.style.use('default')
 
-nroots_evcont = 2
+nroots_evcont = 4
 cibasis = 'canonical'
 #cibasis = 'OAO'
 
@@ -72,8 +72,8 @@ if fix_sym == None:
 else:
     mol_sym = True
     
-lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5}
-#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
+#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5}
+lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
 #lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
