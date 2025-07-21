@@ -49,7 +49,7 @@ def get_overlap_grad(mol):
     # Transpose the return value to match the desired ordering of indices
     return np.transpose(deriv, (2, 3, 1, 0))
 
-
+@timeit
 def loewdin_trafo_grad(overlap_mat):
     """
     Calculate the gradient of the Loewdin transformation. This also takes care of
@@ -124,7 +124,7 @@ def loewdin_trafo_grad(overlap_mat):
     # Transpose the return value to match the desired ordering of indices
     return np.transpose(dS, (2, 3, 0, 1))
 
-
+@timeit
 def get_derivative_ao_mo_trafo(mol):
     """
     Calculates the derivatives of the atomic orbital to molecular orbital
@@ -759,7 +759,7 @@ def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None,
     ipovlp = mol.intor("int1e_ipovlp", comp=3)  # shape (3, nao, nao)
     
     for i, (start, stop) in enumerate(atm_slices):
-        tmp = lib.einsum("pi,xpj,qj->pqx", 
+        tmp = lib.einsum("ij,xik,kl->jlx", 
             ao_mo_trafo[start:stop], 
             ipovlp[:, start:stop, :], 
             ao_mo_trafo,
