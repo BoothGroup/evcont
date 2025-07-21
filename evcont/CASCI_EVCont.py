@@ -164,8 +164,8 @@ class CAS_EVCont_obj:
         self.mb_all = None
         self.occ_strings_all = []
 
-    def vectorize_lowrank(self):        
-        vectorize_lowrank(self)
+    def vectorize_lowrank(self,hermitian=True):        
+        vectorize_lowrank(self,hermitian=hermitian)
         
     def otf_hamiltonian_old(self, h1, h2):
         """ 
@@ -890,6 +890,10 @@ class CAS_EVCont_obj:
         # Run mean field calculations for the orbitals
         #mf = mol.copy().RHF()
         mf = scf.RHF(mol.copy())
+        mf.linear_dep_threshold = 1e-6
+        mf.level_shift = 0.5
+        mf.damp = 0.2
+        mf.diis_space = 12
         mf.kernel()
 
         assert mf.converged

@@ -390,7 +390,8 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
 @timeit
 def get_jk_builds(mol, lowrank_vecs,
                   ao_mo_trafo=None,
-                  df_basis='weigend'):
+                  df_basis='weigend',
+                  df_response=False):
     """
     Precompute the J(K) builds for the low-rank vectors for fast inference
     """
@@ -423,7 +424,7 @@ def get_jk_builds(mol, lowrank_vecs,
     # Initiate grad object
     grad_obj = mf_grad(mf)
     # TODO: Add auxbasis_response in the future, for now ignore it
-    grad_obj.auxbasis_response = False
+    grad_obj.auxbasis_response = df_response
     
     ### Joint ED inference
     if lowrank_vecs['has_ed']:
@@ -446,9 +447,15 @@ def get_jk_builds(mol, lowrank_vecs,
         with log_time("JK Grad Builds (2)"):
             vj_grad_list, vk_grad_list = get_jk_grad(grad_obj,dm=lr_vecs_ao, hermi=0) 
             vj_grad_list_t, vk_grad_list_t = get_jk_grad(grad_obj,dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
+
+
         vhf_grad = vj_grad_list - 0.5*vk_grad_list
         vhf_grad_t = vj_grad_list_t - 0.5*vk_grad_list_t
     
+        #vhf_aux = np.einsum('aamn,a->mn',vj_list.aux - vk_list.aux*.5,lr_vals[ii],optimize='optimal')
+        #vhf_aux = (vj_list.aux - vk_list.aux*.5).sum((0,1))#,lr_vals[ii])
+        #grad_i += vhf_aux
+        print('Starting unpacking')
         # Reindex to separate bra, ket, nvec indices
         vhf = unpack_vec(vhf, lowrank_vecs['pairloc'],hermitian=hermitian)
         lr_vecs_ao = unpack_vec(lr_vecs_ao, lowrank_vecs['pairloc'],hermitian=hermitian)
@@ -456,6 +463,19 @@ def get_jk_builds(mol, lowrank_vecs,
         vhf_grad = unpack_grad_vec(vhf_grad, lowrank_vecs['pairloc'],hermitian=hermitian)
         vhf_grad_t = unpack_grad_vec(vhf_grad_t, lowrank_vecs['pairloc'],hermitian=hermitian)
         
+        if df_response:
+            vhf_aux = unpack_grad_aux(vj_grad_list.aux - 0.5*vk_grad_list.aux,
+                                        lowrank_vecs['pairloc'],
+                                        lowrank_vecs['vals'],hermitian=hermitian)
+            
+            vhf_aux_t = unpack_grad_aux(vj_grad_list_t.aux - 0.5*vk_grad_list_t.aux,
+                                        lowrank_vecs['pairloc'],
+                                        lowrank_vecs['vals'],hermitian=hermitian)
+
+            vhf_grad = lib.tag_array(vhf_grad, aux=np.array(vhf_aux))
+            vhf_grad_t = lib.tag_array(vhf_grad_t, aux=np.array(vhf_aux_t))
+
+
     ### Coulomb SVD inference
     if lowrank_vecs['has_svd']:
         
@@ -495,6 +515,18 @@ def get_jk_builds(mol, lowrank_vecs,
         vj_l_grad = unpack_grad_vec(vj_lgrad_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
         vj_r_grad = unpack_grad_vec(vj_rgrad_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
                 
+        if df_response:
+            vj_l_aux = unpack_grad_aux(vj_l_grad.aux,
+                                        lowrank_vecs['pairloc_svd'],
+                                        lowrank_vecs['vals'],hermitian=hermitian)
+            
+            vj_r_aux = unpack_grad_aux(vj_r_grad.aux,
+                                        lowrank_vecs['pairloc_svd'],
+                                        lowrank_vecs['vals'],hermitian=hermitian)
+
+            vj_l_grad = lib.tag_array(vj_l_grad, aux=np.array(vj_l_aux))
+            vj_r_grad = lib.tag_array(vhf_grad_t, aux=np.array(vj_r_aux))
+
     if lowrank_vecs['has_svd'] and lowrank_vecs['has_ed']:
         return (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t), \
             (svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, vj_left, vj_right, vj_l_grad, vj_r_grad)
@@ -710,7 +742,7 @@ def unpack_vec(vecs,pair_loc,hermitian=True):
     
     vecs_unpacked = np.zeros([nbra, nbra, nvec_max,norb,norb])
     
-    
+    """
     for i in range(nbra):
         # Only iterarte through lower triangular indices
         if hermitian:
@@ -724,6 +756,11 @@ def unpack_vec(vecs,pair_loc,hermitian=True):
             if (i,j) in pair_loc:
                 st, en = pair_loc[(i,j)]
                 vecs_unpacked[i,j,:(en-st)] = vecs[st:en]
+    """
+    # Precompute index arrays for batch assignment
+    for (i, j), (start, end) in pair_loc.items():
+        nv = end - start
+        vecs_unpacked[i, j, :nv] = vecs[start:end]
 
 
     return vecs_unpacked
@@ -740,7 +777,7 @@ def unpack_grad_vec(vecs,pair_loc,hermitian=True):
     
     vecs_unpacked = np.zeros([nbra, nbra, nvec_max, 3, norb, norb])
     
-    
+    """
     for i in range(nbra):
         # Only iterarte through lower triangular indices
         if hermitian:
@@ -754,10 +791,55 @@ def unpack_grad_vec(vecs,pair_loc,hermitian=True):
             if (i,j) in pair_loc:
                 st, en = pair_loc[(i,j)]
                 vecs_unpacked[i,j,:(en-st)] = vecs[st:en]
+    """
+    
+    # Precompute index arrays for batch assignment
+    for (i, j), (start, end) in pair_loc.items():
+        nv = end - start
+        vecs_unpacked[i, j, :nv] = vecs[start:end]
 
+    """
+    # Check if auxbasis response is computed
+    #try:
+    print('auxbasis unpacking')
+    auxvec = vecs.aux
+    nat = auxvec.shape[-2]
+    
+    aux_unpacked = np.zeros([nbra, nbra, nbra, nbra, nvec_max, nat, 3])
 
+    # Precompute index arrays for batch assignment
+    for (i, j), (start, end) in pair_loc.items():
+        nv = end - start
+        aux_unpacked[i,i,j, j, :nv] = auxvec[start:end,start:end]
+
+    vecs_unpacked = lib.tag_array(vecs_unpacked, aux=np.array(aux_unpacked))
+
+    #except:
+    #    print('No auxbasis')
+    #    None
+    """
     return vecs_unpacked
-        
+
+
+def unpack_grad_aux(vecs,pair_loc,vals,hermitian=True):
+    """
+    Function to unpack vectors stacked using "stack_lowrank" function
+
+    """
+    nbra = list(pair_loc.keys())[-1][0]+1
+
+    auxvec = vecs
+    nat = auxvec.shape[-2]
+    
+    aux_unpacked = np.zeros([nbra, nbra, nat, 3])
+
+    # Precompute index arrays for batch assignment
+    for (i, j), (start, end) in pair_loc.items():
+        nv = end - start
+        aux_unpacked[i,j] = np.einsum('aamn,a->mn',auxvec[start:end,start:end],vals[i,j,:nv],optimize='optimal')
+
+    return aux_unpacked
+
 def unpack_lowrank(stacked_lowrank,hermitian=True):
     """
     For testing; function to unpack both eigenvectors and eigenvectors
