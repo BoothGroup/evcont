@@ -25,8 +25,11 @@ assumed to be real-valued. Can be changed in the future if necessary.
 
 import numpy as np
 import sys
-import scipy
 import itertools
+
+import scipy
+from scipy.sparse.linalg import eigsh, svds
+
 import pyscf
 from pyscf import scf, gto, ao2mo, fci, lib, df
 from pyscf.df.grad.rhf import get_jk as get_jk_grad
@@ -40,6 +43,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
                 truncation_style='eigval',nvecs=10, eval_thr=0.1, ham_thr=0.001,
                 diag_mask=None, save_diag=False,
                 use_svd=False,
+                iterative=False, nit=None,
                 mol=None,train_en=None):
     """
     Function to lower the rank of 2-transition-RDM between a pair of 
@@ -83,15 +87,28 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     # Coulomb grouping
     mat_decomp = 4/3*mat_decomp + 2/3*np.einsum('ijkl->ilkj',mat_decomp)
     
+    # Check the nit is given is iterative is True
+    if iterative and nit is None:
+        print('Error in reduce_rdm: nit is not given for iterative diagonalization')
+        sys.exit()
+        
     # Check that it is hermitian and diagonalize the matrix
     #assert(np.allclose(mat_decomp.reshape((norb_sq, norb_sq)), mat_decomp.reshape((norb_sq,norb_sq)).T))
     if np.allclose(mat_decomp.reshape((norb_sq, norb_sq)), mat_decomp.reshape((norb_sq,norb_sq)).T):
-        evals, evecs = scipy.linalg.eigh(mat_decomp.reshape((norb_sq, norb_sq)))
+        if not iterative:
+            evals, evecs = scipy.linalg.eigh(mat_decomp.reshape((norb_sq, norb_sq)))
+        else:
+            evals, evecs = eigsh(mat_decomp.reshape((norb_sq, norb_sq)),k=nit, which='LM')
+
         rightvecs = None
         joint = True # Joint decomp
     else:
         print('**Using SVD')
-        evecs, evals, rightvecs = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
+        if not iterative:
+            evecs, evals, rightvecs = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
+        else:
+            evecs, evals, rightvecs = svds(rdm2.reshape((norb_sq, norb_sq)), k=nit, which='LM')
+
         joint = False
 
     
@@ -122,7 +139,11 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
             else:
                 # TODO: Add considerations for norm error; not just compactness
                 # SVD as well
-                evecs2, evals2, rightvecs2 = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
+                if not iterative:
+                    evecs2, evals2, rightvecs2 = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
+                else:
+                    evecs2, evals2, rightvecs2 = svds(rdm2.reshape((norb_sq, norb_sq)), k=nit, which='LM')
+
                 
                 lowrank_vecs_svd = select_lowrank(evals2, evecs2, norb, rightvecs=rightvecs2, truncation_style=truncation_style, 
                                               nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)

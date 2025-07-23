@@ -72,8 +72,13 @@ if fix_sym == None:
 else:
     mol_sym = True
     
-#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5}
-lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
+lowrank_kwargs = {
+    'truncation_style':'nvec', 
+    'nvecs':10,
+    'iterative':True,
+    'nit':12
+    }
+#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
 #lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
@@ -119,7 +124,7 @@ equilibrium_dist = 1.78596
 
 equilibrium_pos = np.array([(x * equilibrium_dist, 0.0, 0.0) for x in range(10)])
 
-trainig_dists = [0.97, 1.76, 2.60]
+trainig_dists = [0.97, 1.76]#, 2.60]
 #trainig_dists = np.linspace(0.97,2.60,5)
 
 if cont_solver == 'FCI':
