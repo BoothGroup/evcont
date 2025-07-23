@@ -93,7 +93,7 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
 
     return en_approx, gs_approx
 
-def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-5):
+def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-8):
     """
     Diagonalize the subspace Hamiltonian
     """

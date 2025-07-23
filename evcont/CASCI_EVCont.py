@@ -867,7 +867,7 @@ class CAS_EVCont_obj:
 
             self.cascis.append(casci_bra)
 
-    def append_to_rdms(self, mol, debug=False):
+    def append_to_rdms(self, mol, state=None, debug=False):
         """
         Append a new training geometry. See pygnme examples for more information about
         the evaluation of the t-RDMs.
@@ -884,16 +884,15 @@ class CAS_EVCont_obj:
         elif not self.use_rdm:
             print('Error in append_to_rdms: already using add_state')
             sys.exit()
-            
+
         lowrank = self.lowrank
 
         # Run mean field calculations for the orbitals
         #mf = mol.copy().RHF()
         mf = scf.RHF(mol.copy())
-        mf.linear_dep_threshold = 1e-6
-        mf.level_shift = 0.5
-        mf.damp = 0.2
-        mf.diis_space = 12
+        #mf.level_shift = 0.5
+        #mf.damp = 0.2
+        #mf.diis_space = 12
         mf.kernel()
 
         assert mf.converged
@@ -904,13 +903,18 @@ class CAS_EVCont_obj:
         #casci_bra_all = self.casci_solver(mf, self.ncas, self.neleca)
         #casci_bra_all.fcisolver.nroots = self.nroots
 
-        if self.solver == 'SA-CASSCF':
+        if self.solver == 'SA-CASSCF' and state is None:
             mc = mcscf.CASSCF(mf, self.ncas, self.neleca).state_average_([1/self.nroots]*self.nroots)
             mc.kernel()
             mo_sacasscf = mc.mo_coeff
 
         # Iterate over different states
-        for istate in range(self.nroots):
+        if state is None:
+            nroots = self.nroots
+        else:
+            nroots = len(state)
+
+        for istate in range(nroots):
 
             # Read the DM representation from existing training states
             overlap = self.overlap
@@ -920,18 +924,20 @@ class CAS_EVCont_obj:
             else:
                 diagonal_lr = self.diagonal_lr
                 vecs_lowrank = self.vecs_lowrank
-                
-            # CAS solver
-            if self.solver == 'CASCI':
-                casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
-            elif self.solver == 'SS-CASSCF':
-                cas_ss = mcscf.CASSCF(mf, self.ncas, self.neleca).state_specific_(istate)
-                cas_ss.kernel()
-                casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
-                casci_bra.casci(cas_ss.mo_coeff)
+
+            if state is None:
+                if self.solver == 'CASCI':
+                    casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+                elif self.solver == 'SS-CASSCF':
+                    cas_ss = mcscf.CASSCF(mf, self.ncas, self.neleca).state_specific_(istate)
+                    cas_ss.kernel()
+                    casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+                    casci_bra.casci(cas_ss.mo_coeff)
+                else:
+                    casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+                    casci_bra.casci(mo_sacasscf)
             else:
-                casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
-                casci_bra.casci(mo_sacasscf)
+                casci_bra = state[istate]
 
             self.cascis.append(casci_bra)
 
@@ -1460,6 +1466,28 @@ class CAS_EVCont_obj:
         states = self.cascis
 
         n_cascis = len(states)
+        
+        if rank == 0:
+            overlap_new = np.zeros((n_cascis, n_cascis))
+            one_rdm_new = np.zeros((n_cascis, n_cascis, states[0].mo_coeff.shape[0], states[0].mo_coeff.shape[0]))
+            if not self.lowrank:
+                two_rdm_new = np.zeros((n_cascis, n_cascis,
+                                         states[0].mo_coeff.shape[0],
+                                         states[0].mo_coeff.shape[0],
+                                         states[0].mo_coeff.shape[0],
+                                         states[0].mo_coeff.shape[0]))
+            else:
+                diagonal_lr_new = np.ones((n_cascis, n_cascis, 3,
+                                           states[0].mo_coeff.shape[0],
+                                           states[0].mo_coeff.shape[0]))
+                vecs_lowrank = {}
+        else:
+            overlap_new = one_rdm_new = two_rdm_new = None
+            if self.lowrank:
+                diagonal_lr_new = None
+                vecs_lowrank = None
+                    
+                
         # Iterate over bra states
         for a, casci_bra in enumerate(states):
 
@@ -1488,27 +1516,6 @@ class CAS_EVCont_obj:
             bra_occ_strings = utils.fci_bitset_list(
                 mol_bra.nelec[0] - casci_bra.ncore, casci_bra.ncas
             )
-
-            if rank == 0:
-                overlap_new = np.zeros((n_cascis, n_cascis))
-
-                one_rdm_new = np.zeros(
-                    (n_cascis, n_cascis, mo_coeff_bra.shape[0], mo_coeff_bra.shape[0])
-                )
-
-                two_rdm_new = np.zeros(
-                    (
-                        n_cascis,
-                        n_cascis,
-                        mo_coeff_bra.shape[0],
-                        mo_coeff_bra.shape[0],
-                        mo_coeff_bra.shape[0],
-                        mo_coeff_bra.shape[0],
-                    )
-                )
- 
-            else:
-                overlap_new = one_rdm_new = two_rdm_new = None
 
             # Iterate over ket states
             #for b, casci_ket in enumerate(states):
@@ -1639,14 +1646,49 @@ class CAS_EVCont_obj:
                         trafo_ket,
                         optimize="optimal",
                     )
-
+                
                     one_rdm_new[a, b, :, :] = rdm1
                     one_rdm_new[b, a, :, :] = rdm1.conj()
-                    two_rdm_new[a, b, :, :, :, :] = rdm2
-                    two_rdm_new[b, a, :, :, :, :] = np.einsum('ijkl->klij',rdm2.conj())
+                
+                    if not self.lowrank:
+                        two_rdm_new[a, b, :, :, :, :] = rdm2
+                        two_rdm_new[b, a, :, :, :, :] = np.einsum('ijkl->klij', rdm2.conj())
+                    else:
+                        lowrank_vecs, diagonals, use_joint = reduce_2rdm(
+                            rdm1,
+                            rdm2,
+                            overlap_accumulate,
+                            mol=mol_bra,
+                            train_en=casci_bra.e_tot,
+                            **self.kwargs,
+                        )
+                
+                        diagonal_lr_new[a, b, :, :, :] = diagonals
+                        try:
+                            diagonal_lr_new[b, a, :, :, :] = diagonals.conj()
+                        except:
+                            diagonal_lr_new[b, a, :, :, :] = diagonals
+                
+                        vecs_lowrank[(a, b)] = (
+                            lowrank_vecs[0],
+                            lowrank_vecs[1],
+                            lowrank_vecs[2],
+                            use_joint,
+                        )
+                        vecs_lowrank[(b, a)] = (
+                            lowrank_vecs[0].conj(),
+                            lowrank_vecs[1].conj(),
+                            lowrank_vecs[2].conj(),
+                            use_joint,
+                        )
+
         self.overlap = overlap_new
         self.one_rdm = one_rdm_new
-        self.two_rdm = two_rdm_new
+        if not self.lowrank:
+            self.two_rdm = two_rdm_new
+        else:
+            self.diagonal_lr = diagonal_lr_new
+            self.vecs_lowrank = vecs_lowrank
 
     def prune_datapoints(self, keep_ids):
         """
