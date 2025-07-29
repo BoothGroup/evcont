@@ -23,11 +23,17 @@ assumed to be real-valued. Can be changed in the future if necessary.
 @author: Kemal Atalar
 """
 
+import multiprocessing as mp
+mp.set_start_method("fork", force=True)
+
 import numpy as np
 import sys
 import itertools
+import time
+from multiprocessing import Process, Pipe
 
 import scipy
+from scipy.linalg import eigh, svd
 from scipy.sparse.linalg import eigsh, svds
 
 import pyscf
@@ -38,12 +44,51 @@ from pyscf.df.grad.rhf import Gradients as mf_grad
 from evcont.electron_integral_utils import get_loewdin_trafo, get_integrals
 from evcont.logging_utils import logger, log_time, timeit
 
+def _eigsh_worker(mat, k, conn, which='LM',use_svd=False):
+    try:
+        if not use_svd:
+            conn.send(eigsh(mat, k=k, which=which))
+        else:
+            conn.send(svds(mat, k=k, which=which))
+    except Exception as e:
+        conn.send(("error", str(e)))
+    finally:
+        conn.close()
+
+def try_iterative_diag(mat, k, which='LM', use_svd=False, max_time=100000):
+    parent_conn, child_conn = Pipe()
+    p = Process(target=_eigsh_worker, args=(mat, k, child_conn, which, use_svd))
+    p.start()
+    p.join(timeout=max_time)
+
+    if p.is_alive():
+        p.terminate()
+        p.join()
+        print("[timeout] Falling back to full diagonalization...")
+
+    if parent_conn.poll():
+        result = parent_conn.recv()
+
+        if isinstance(result, tuple) and isinstance(result[0], str) and result[0] == "error":
+            print(f"[error] {result[1]}")
+        else:
+            print("[iterative] Success")
+            return result
+
+    # Full fallback
+    print("[full] Running full eigh/svds...")
+    if not use_svd:
+        return eigh(mat)
+    else:
+        return svd(mat)
+
+
 @timeit
 def reduce_2rdm(rdm1, rdm2, ovlp, 
                 truncation_style='eigval',nvecs=10, eval_thr=0.1, ham_thr=0.001,
                 diag_mask=None, save_diag=False,
                 use_svd=False,
-                iterative=False, nit=None,
+                iterative=False, nit=None, max_iter_time=10000,
                 mol=None,train_en=None):
     """
     Function to lower the rank of 2-transition-RDM between a pair of 
@@ -98,7 +143,10 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         if not iterative:
             evals, evecs = scipy.linalg.eigh(mat_decomp.reshape((norb_sq, norb_sq)))
         else:
-            evals, evecs = eigsh(mat_decomp.reshape((norb_sq, norb_sq)),k=nit, which='LM')
+            evals, evecs = try_iterative_diag(mat_decomp.reshape((norb_sq, norb_sq)),
+                                              k=nit, 
+                                              which='LM', 
+                                              max_time=max_iter_time)
 
         rightvecs = None
         joint = True # Joint decomp
@@ -107,7 +155,11 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         if not iterative:
             evecs, evals, rightvecs = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
         else:
-            evecs, evals, rightvecs = svds(rdm2.reshape((norb_sq, norb_sq)), k=nit, which='LM')
+            evecs, evals, rightvecs = try_iterative_diag(rdm2.reshape((norb_sq, norb_sq)),
+                                              k=nit, 
+                                              which='LM', 
+                                              use_svd=True,
+                                              max_time=max_iter_time)
 
         joint = False
 
