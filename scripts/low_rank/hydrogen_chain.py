@@ -10,6 +10,7 @@ Script to test low rank construction of eigenvector continuation
 
 import numpy as np
 import time
+import pickle
 
 from pyscf import gto, fci, scf, lib, ao2mo, mcscf, df
 
@@ -40,16 +41,20 @@ import matplotlib.pylab as plt
 #import matplotlib as mpl
 plt.style.use('default')
 
-nroots_evcont = 4
+nroots_evcont = 2
 cibasis = 'canonical'
 #cibasis = 'OAO'
 
-df_basis = 'weigend'
-df_basis = 'cc-pvdz-jkfit'
+density_fit = True
 
-natom = 6
+#df_basis = 'weigend'
+#df_basis = 'cc-pvdz-jkfit'
+#df_basis = 'cc-pvdz-ri'
+df_basis = None
 
-cont_solver = 'CAS'
+natom = 2
+
+#cont_solver = 'CAS'
 cont_solver = 'FCI'
 
 cassolver='SS-CASSCF'
@@ -76,10 +81,12 @@ lowrank_kwargs = {
     'truncation_style':'nvec', 
     'nvecs':10,
     'iterative':True,
-    'nit':12
+    'nit':12,
+    'max_iter_time':10,
     }
-#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-8}
-#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
+
+#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-12}
+lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
@@ -95,14 +102,23 @@ def get_mol(positions):
     mol.build(
         atom=[("H", pos) for pos in positions],
         #basis="sto-3g",
-        basis="sto-6g",
+        #basis="sto-6g",
         #basis="6-31g",
+        basis='cc-pvdz',
         symmetry=mol_sym,
         unit="Bohr",
         verbose=0
     )
 
     return mol
+
+def load_pickle(filename):
+    with open(filename, 'rb') as f:
+       	return pickle.load(f)
+
+def save_pickle(filename, data_dict):
+    with open(filename, 'wb') as f:
+       	pickle.dump(data_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 mol_dummy = get_mol([(x, 0.0, 0.0) for x in test_range[0] * np.arange(natom)])
 
@@ -178,6 +194,7 @@ np.save("one_rdm_{}.npy".format(i), continuation_object.one_rdm)
 
 np.save("diagonal_lr_{}.npy".format(i), continuation_object.diagonal_lr)
 np.save("lowrank_vecs_{}.npy".format(i), continuation_object.vecs_lowrank)
+save_pickle('vecs_lr.pkl', vecs_lr)
 
 np.save('trn_geometries_{}.npy'.format(i), trn_geometries)
 
@@ -248,6 +265,7 @@ for i, test_dist in enumerate(test_range):
                                            continuation_object.overlap,
                                            vecs_lr, None, 
                                            nroots=nroots_evcont+1,
+                                           density_fit=density_fit,
                                            df_basis=df_basis)
     
     lr_tot += (time.time()-start); lr_n_eval += 1
@@ -313,7 +331,7 @@ for i, test_dist in enumerate(test_range):
         fci_en[i,:] = e_fci
         
         # Gradients
-        mc = mcscf.CASCI(mf, ncas=mf.mo_coeff.shape[0], nelecas=mf.mo_coeff.shape[0])
+        mc = mcscf.CASCI(mf, ncas=mf.mo_coeff.shape[0], nelecas=natom)
         out_mc = mc.kernel()
         e_fci = out_mc[0]
         
@@ -390,6 +408,7 @@ for i, test_dist in enumerate(test_range):
                                     two_rdm_predicted)
         grad_cont.append(grad_i + grad_nuc)
     
+    
     out_full = get_multistate_energy_with_grad_and_NAC(mol,
                                                        continuation_object_full.one_rdm,
                                                        continuation_object_full.two_rdm,
@@ -406,7 +425,7 @@ for i, test_dist in enumerate(test_range):
 
     else:
         print(ehf, ref_en[i,:], cont_en[i], cont_lowrank_en[i])
-        print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]))
+        print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]), np.linalg.norm(out_full[2][0]-out[2][0]))
         #print('nac','\n', out[4],'\n', out_full[4])
         #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
         #1/0

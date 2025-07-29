@@ -229,7 +229,7 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
     if hermitian is True:
         # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
         #vals, vecs = eigh(H, S)
-        vals, vecs, _ = safe_eigh(H, S, lindep=1e-8)
+        vals, vecs, _ = safe_eigh(H, S, lindep=1e-3)
         
     else:
         # Solve the generalized eigenvalue problem for non-Hermitian Hamiltonian

@@ -15,7 +15,8 @@ Function here include:
       eval magnitude/Hamiltonian error
     - Subspace Hamiltonian construction from low-rank vectors
     - Vectorizing of the low-rank vectors for fast inference
-    - Gradient inference from the low-rank representation (IN PROGRESS)
+    - Computation of JK and JK grad builds from low-rank vectors
+    - Gradient inference from the low-rank representation
     
 Note: Not compatible with complex RDMs as it stands; e.g. vectors from SVD are
 assumed to be real-valued. Can be changed in the future if necessary.
@@ -26,11 +27,12 @@ assumed to be real-valued. Can be changed in the future if necessary.
 import multiprocessing as mp
 mp.set_start_method("fork", force=True)
 
+from multiprocessing import Process, Pipe
+
 import numpy as np
 import sys
 import itertools
 import time
-from multiprocessing import Process, Pipe
 
 import scipy
 from scipy.linalg import eigh, svd
@@ -38,12 +40,17 @@ from scipy.sparse.linalg import eigsh, svds
 
 import pyscf
 from pyscf import scf, gto, ao2mo, fci, lib, df
-from pyscf.df.grad.rhf import get_jk as get_jk_grad
-from pyscf.df.grad.rhf import Gradients as mf_grad
+
+from pyscf.df.grad.rhf import get_jk as get_jk_grad_df
+from pyscf.df.grad.rhf import Gradients as mf_grad_df
+
+from pyscf.grad.rhf import get_jk as get_jk_grad_nodf
+from pyscf.grad.rhf import Gradients as mf_grad_nodf
 
 from evcont.electron_integral_utils import get_loewdin_trafo, get_integrals
 from evcont.logging_utils import logger, log_time, timeit
 
+########################################################################
 def _eigsh_worker(mat, k, conn, which='LM',use_svd=False):
     try:
         if not use_svd:
@@ -81,8 +88,8 @@ def try_iterative_diag(mat, k, which='LM', use_svd=False, max_time=100000):
         return eigh(mat)
     else:
         return svd(mat)
-
-
+    
+########################################################################
 @timeit
 def reduce_2rdm(rdm1, rdm2, ovlp, 
                 truncation_style='eigval',nvecs=10, eval_thr=0.1, ham_thr=0.001,
@@ -297,9 +304,11 @@ def reconstruct_subspace(lowrank_vecs, h2, ntrain=3):
         rdm2_i = reconstruct_rdm2_joint(vecs)
         subspace_h += 
 """   
+
+########################################################################
 @timeit         
 def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
-                        sao_basis=None, df_basis='weigend', 
+                        sao_basis=None, df_basis=None, 
                         use_diag=False, hermitian=True,
                         debug=False):
     """
@@ -463,7 +472,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
 @timeit
 def get_jk_builds(mol, lowrank_vecs,
                   ao_mo_trafo=None,
-                  df_basis='weigend',
+                  density_fit=False, df_basis=None,
                   df_response=False):
     """
     Precompute the J(K) builds for the low-rank vectors for fast inference
@@ -474,8 +483,19 @@ def get_jk_builds(mol, lowrank_vecs,
     
     # Initiate the mean field object to use DF integrals (no need to use kernel)
     #mol.symmetry = False
-    mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
-    
+    if density_fit:
+        mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
+        mf_grad = mf_grad_df
+        get_jk = mf.with_df.get_jk
+        #get_jk_grad = get_jk_grad_df
+        
+    else:
+        mf = scf.RHF(mol)
+        mf_grad = mf_grad_nodf
+        get_jk = mf.get_jk
+        #get_jk_grad = get_jk_grad_nodf
+
+
     ######################################################
     # Check if low-rank vectors have been vectorized
     if ('vals' in lowrank_vecs):
@@ -512,14 +532,14 @@ def get_jk_builds(mol, lowrank_vecs,
             
         # JK build
         with log_time("JK Builds (1)"):
-            vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+            vj_list, vk_list = get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
         vhf = vj_list - 0.5*vk_list
         
         # Grad JK builds
         # TODO: Add auxbasis_response in the future, for now ignore it
         with log_time("JK Grad Builds (2)"):
-            vj_grad_list, vk_grad_list = get_jk_grad(grad_obj,dm=lr_vecs_ao, hermi=0) 
-            vj_grad_list_t, vk_grad_list_t = get_jk_grad(grad_obj,dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
+            vj_grad_list, vk_grad_list = grad_obj.get_jk(dm=lr_vecs_ao, hermi=0) 
+            vj_grad_list_t, vk_grad_list_t = grad_obj.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
 
 
         vhf_grad = vj_grad_list - 0.5*vk_grad_list
@@ -568,14 +588,14 @@ def get_jk_builds(mol, lowrank_vecs,
             
         # J builds
         with log_time("J Builds (2)"):
-            vj_r_list, _ = mf.with_df.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
-            vj_l_list, _ = mf.with_df.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
+            vj_r_list, _ = get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
+            vj_l_list, _ = get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
 
         # Grad JK builds
         # TODO: Add auxbasis_response in the future, for now ignore it
         with log_time("J Grad Builds (2)"):
-            vj_lgrad_list, _ = get_jk_grad(grad_obj,dm=svd_vecs_ao, hermi=0, with_k=False) 
-            vj_rgrad_list, _ = get_jk_grad(grad_obj,dm=svd_rightvecs_ao, hermi=0, with_k=False) 
+            vj_lgrad_list, _ = grad_obj.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False) 
+            vj_rgrad_list, _ = grad_obj.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False) 
         
         # Reindex to separate bra, ket, nvec indices
         vj_right = unpack_vec(vj_r_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
