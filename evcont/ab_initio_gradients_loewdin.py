@@ -1245,7 +1245,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
         #grad_i[i,:] += grad_el_traced[:,slice[0] : slice[1]].sum(axis=1) 
         intermediate_h2[:,:,i,:] += grad_h2[:,:,:,slice[0] : slice[1]].sum(axis=3) 
             
-    # Response of the auxillary basis
+    # Response of the auxillary basis (Currently not working)
     if df_response:
         intermediate_df = np.zeros([ntrain, ntrain, mol.natm, 3])
         if lowrank_vecs['has_ed']: 
@@ -1269,7 +1269,8 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
 
 @timeit
 def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=None,
-                                     nroots=1, df_basis='weigend',
+                                     nroots=1, 
+                                     density_fit=False, df_basis=None,
                                      ao_mo_trafo=None, ao_mo_trafo_grad=None,
                                      df_response=False,
                                      hermitian=True,):
@@ -1313,6 +1314,7 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=No
     # Get preliminaries
     ED_builds, SVD_builds = get_jk_builds(mol, lowrank_vecs,
                                           ao_mo_trafo=ao_mo_trafo,
+                                          density_fit=density_fit, 
                                           df_basis=df_basis,
                                           df_response=df_response)
 
