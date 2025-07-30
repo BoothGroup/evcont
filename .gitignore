@@ -3,6 +3,12 @@ __pycache__/
 evcont/__pycache__/
 *.py[cod]
 
+# Run examples
+*.png
+*.npy
+*.out
+*.sh
+
 # C extensions
 *.so
 
