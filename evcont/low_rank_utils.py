@@ -309,7 +309,7 @@ def reconstruct_subspace(lowrank_vecs, h2, ntrain=3):
 @timeit         
 def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                         sao_basis=None, df_basis=None, 
-                        use_diag=False, hermitian=True,
+                        hermitian=True,
                         debug=False):
     """
     Construct subspace Hamiltonian using the low-rank decomposition of 
@@ -325,6 +325,11 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     norb = one_RDM.shape[-1]
     norb_sq = norb * norb
     
+    if diagonals is not None:
+        use_diag = True
+    else:
+        use_diag = False
+        
     # Initiate the mean field object to use DF integrals (no need to use kernel)
     #mol.symmetry = False
     mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
@@ -407,8 +412,18 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                         subspace_h[bra,ket] += 0.5*np.einsum('aij,aij,a->', vj_list, lr_vecs_ao, lowrank_vecs[(bra, ket)][0])
 
                 if use_diag:
-                    print('Error in lowrank_hamiltonian: Diagonal contraction not implemented')
-                    sys.exit()
+                    # Avoid transforming DF array, and do everything via Coulomb and exchange builds
+                    diag_ao_1 = np.einsum('ij,wi,xi->jwx',diagonals[bra, ket, 0, :, :], sao_basis, sao_basis)
+                    vj = mf.with_df.get_jk(dm = diag_ao_1, hermi=0, with_k=False)[0]
+                    subspace_h[bra, ket] += 0.5 * np.einsum('yj,zj,jyz->', sao_basis, sao_basis, vj)
+
+                    diag_ao_23 = np.einsum('ij,wi,yi->jwy',diagonals[bra, ket, 1, :, :] + diagonals[bra, ket, 2, :, :], sao_basis, sao_basis)
+                    vk = mf.with_df.get_jk(dm = diag_ao_2, hermi=0, with_j=False)[1]
+                    subspace_h[bra, ket] += 0.5 * np.einsum('xj,zj,jxz->', sao_basis, sao_basis, vk)
+
+                    #diag_ao_3 = np.einsum('ij,wi,yi->jwy', diagonals[bra, ket, 2, :, :], sao_basis, sao_basis)
+                    #vk = mf.with_df.get_jk(dm = diag_ao_3, hermi=0, with_j=False)[1]
+                    #subspace_h[bra, ket] += 0.5 * np.einsum('xj,zj,jxz->', sao_basis, sao_basis, vk)
                     
     else:
         nvec = lowrank_vecs['vals'].shape[2]
@@ -459,6 +474,10 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
             
             subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vj, svd_vecs_ao, lowrank_vecs['vals'][:,:,:vj.shape[2]],optimize='optimal')
             
+        if use_diag:
+            print('Error in lowrank_hamiltonian: Diagonal contraction not implemented')
+            sys.exit()
+        
     if hermitian:
         # Set the upper triangle
         subspace_h[np.triu_indices(ntrain)] = subspace_h.T[np.triu_indices(ntrain)].conj()

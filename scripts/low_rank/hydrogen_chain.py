@@ -52,7 +52,7 @@ density_fit = True
 #df_basis = 'cc-pvdz-ri'
 df_basis = None
 
-natom = 2
+natom = 4
 
 #cont_solver = 'CAS'
 cont_solver = 'FCI'
@@ -90,7 +90,11 @@ lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
-vectorize = True
+lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1, 'save_diag':True}
+lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':3, 'save_diag':True}
+
+vectorize = False
+use_diag = True
 
 #test_range = np.linspace(0.8, 3.0,40)
 test_range = np.linspace(0.8, 3.0, 15)
@@ -103,8 +107,8 @@ def get_mol(positions):
         atom=[("H", pos) for pos in positions],
         #basis="sto-3g",
         #basis="sto-6g",
-        #basis="6-31g",
-        basis='cc-pvdz',
+        basis="6-31g",
+        #basis='cc-pvdz',
         symmetry=mol_sym,
         unit="Bohr",
         verbose=0
@@ -198,6 +202,11 @@ save_pickle('vecs_lr.pkl', vecs_lr)
 
 np.save('trn_geometries_{}.npy'.format(i), trn_geometries)
 
+if use_diag:
+    diags = continuation_object.diagonal_lr
+else:
+    diags = None
+
 lr_tot = 0.; lr_n_eval = 0
 train_lowrank_en = []
 train_en = []
@@ -215,7 +224,7 @@ for i, test_dist in enumerate(trainig_dists):
         mol, 
         continuation_object.one_rdm,  
         vecs_lr,
-        None, #continuation_object.diagonal_lr, 
+        diags, 
         continuation_object.overlap,
         nroots=nroots_evcont
     )
@@ -255,19 +264,20 @@ for i, test_dist in enumerate(test_range):
         mol, 
         continuation_object.one_rdm, 
         vecs_lr,
-        None, #continuation_object.diagonal_lr, 
+        diags, 
         continuation_object.overlap,
         nroots=nroots_evcont+1,
         df_basis=df_basis
     )
     
+    """
     out = get_lowrank_en_with_grad_and_NAC(mol, continuation_object.one_rdm, 
                                            continuation_object.overlap,
                                            vecs_lr, None, 
                                            nroots=nroots_evcont+1,
                                            density_fit=density_fit,
                                            df_basis=df_basis)
-    
+    """
     lr_tot += (time.time()-start); lr_n_eval += 1
     
     print('   low rank - finish - %.1f sec'%(time.time()-start))
@@ -425,7 +435,7 @@ for i, test_dist in enumerate(test_range):
 
     else:
         print(ehf, ref_en[i,:], cont_en[i], cont_lowrank_en[i])
-        print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]), np.linalg.norm(out_full[2][0]-out[2][0]))
+        #print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]), np.linalg.norm(out_full[2][0]-out[2][0]))
         #print('nac','\n', out[4],'\n', out_full[4])
         #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
         #1/0
