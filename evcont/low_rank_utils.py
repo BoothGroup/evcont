@@ -33,6 +33,7 @@ import numpy as np
 import sys
 import itertools
 import time
+import math
 
 import scipy
 from scipy.linalg import eigh, svd
@@ -308,7 +309,7 @@ def reconstruct_subspace(lowrank_vecs, h2, ntrain=3):
 ########################################################################
 @timeit         
 def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
-                        sao_basis=None, df_basis=None, 
+                        sao_basis=None, df_basis=None, coul_diag_only=True,
                         hermitian=True,
                         debug=False):
     """
@@ -412,19 +413,27 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                         subspace_h[bra,ket] += 0.5*np.einsum('aij,aij,a->', vj_list, lr_vecs_ao, lowrank_vecs[(bra, ket)][0])
 
                 if use_diag:
+                    
                     # Avoid transforming DF array, and do everything via Coulomb and exchange builds
                     diag_ao_1 = np.einsum('ij,wi,xi->jwx',diagonals[bra, ket, 0, :, :], sao_basis, sao_basis)
                     vj = mf.with_df.get_jk(dm = diag_ao_1, hermi=0, with_k=False)[0]
                     subspace_h[bra, ket] += 0.5 * np.einsum('yj,zj,jyz->', sao_basis, sao_basis, vj)
-
-                    diag_ao_23 = np.einsum('ij,wi,yi->jwy',diagonals[bra, ket, 1, :, :] + diagonals[bra, ket, 2, :, :], sao_basis, sao_basis)
-                    vk = mf.with_df.get_jk(dm = diag_ao_2, hermi=0, with_j=False)[1]
-                    subspace_h[bra, ket] += 0.5 * np.einsum('xj,zj,jxz->', sao_basis, sao_basis, vk)
-
+            
+                    if not coul_diag_only:
+                        diag_ao_23 = np.einsum('ij,wi,yi->jwy',diagonals[bra, ket, 1, :, :] + diagonals[bra, ket, 2, :, :], sao_basis, sao_basis)
+                        vk = mf.with_df.get_jk(dm = diag_ao_23, hermi=0, with_j=False)[1]
+                        subspace_h[bra, ket] += 0.5 * np.einsum('xj,zj,jxz->', sao_basis, sao_basis, vk)
+            
                     #diag_ao_3 = np.einsum('ij,wi,yi->jwy', diagonals[bra, ket, 2, :, :], sao_basis, sao_basis)
                     #vk = mf.with_df.get_jk(dm = diag_ao_3, hermi=0, with_j=False)[1]
                     #subspace_h[bra, ket] += 0.5 * np.einsum('xj,zj,jxz->', sao_basis, sao_basis, vk)
                     
+                    """
+                    subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pii,Pjj->',diagonals[bra, ket, 0, :, :], Lpq_sao, Lpq_sao)
+                    subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pij,Pij->',diagonals[bra, ket, 1, :, :], Lpq_sao, Lpq_sao)
+                    subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pij,Pji->',diagonals[bra, ket, 2, :, :], Lpq_sao, Lpq_sao)
+                    """
+        
     else:
         nvec = lowrank_vecs['vals'].shape[2]
         
@@ -474,9 +483,46 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
             
             subspace_h += 0.5*np.einsum('xyaij,xyaij,xya->xy', vj, svd_vecs_ao, lowrank_vecs['vals'][:,:,:vj.shape[2]],optimize='optimal')
             
+        #if use_diag:
+        #    print('Error in lowrank_hamiltonian: Diagonal contraction not implemented')
+        #    sys.exit()
+
         if use_diag:
-            print('Error in lowrank_hamiltonian: Diagonal contraction not implemented')
-            sys.exit()
+            
+            # Transform the low-rank vecs into
+            diagJ_ao = np.einsum('Nij,wi,xi->Njwx',diagonals[0], sao_basis, sao_basis)
+
+            # Flatten
+            orig_shape = diagJ_ao.shape[:2]
+            flat_diagJ_ao = diagJ_ao.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
+            
+            # JK Builds
+            vj_list = mf.with_df.get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
+
+            # Unflatten
+            vj_unflat = vj_list.reshape(*orig_shape, *flat_diagJ_ao.shape[1:])  # (3, 4, 5, 6)
+            vj = unstack_tril(vj_unflat,hermitian=hermitian)
+
+            subspace_h += 0.5 * np.einsum('yj,zj,XYjyz->XY', sao_basis, sao_basis, vj)
+
+        
+            if not coul_diag_only:
+                # Transform the low-rank vecs into
+                diagK_ao = np.einsum('Nij,wi,yi->Njwy',diagonals[1], sao_basis, sao_basis)
+
+                # Flatten
+                orig_shape = diagK_ao.shape[:2]
+                flat_diagK_ao = diagK_ao.reshape(orig_shape[0] * orig_shape[1], *diagK_ao.shape[2:])
+                
+                # JK Builds
+                vk_list = mf.with_df.get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
+
+                # Unflatten
+                vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
+                vk = unstack_tril(vk_unflat,hermitian=hermitian)
+
+                subspace_h += 0.5 * np.einsum('xj,zj,XYjxz->XY', sao_basis, sao_basis, vk)
+
         
     if hermitian:
         # Set the upper triangle
@@ -490,6 +536,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
 ###############################################################################
 @timeit
 def get_jk_builds(mol, lowrank_vecs,
+                  diagonals=None, coul_diag_only=True,
                   ao_mo_trafo=None,
                   density_fit=False, df_basis=None,
                   df_response=False):
@@ -514,7 +561,12 @@ def get_jk_builds(mol, lowrank_vecs,
         get_jk = mf.get_jk
         #get_jk_grad = get_jk_grad_nodf
 
-
+    # Check if diagonals are given
+    if diagonals is None:
+        use_diag = False
+    else:
+        use_diag = True
+        
     ######################################################
     # Check if low-rank vectors have been vectorized
     if ('vals' in lowrank_vecs):
@@ -567,7 +619,6 @@ def get_jk_builds(mol, lowrank_vecs,
         #vhf_aux = np.einsum('aamn,a->mn',vj_list.aux - vk_list.aux*.5,lr_vals[ii],optimize='optimal')
         #vhf_aux = (vj_list.aux - vk_list.aux*.5).sum((0,1))#,lr_vals[ii])
         #grad_i += vhf_aux
-        print('Starting unpacking')
         # Reindex to separate bra, ket, nvec indices
         vhf = unpack_vec(vhf, lowrank_vecs['pairloc'],hermitian=hermitian)
         lr_vecs_ao = unpack_vec(lr_vecs_ao, lowrank_vecs['pairloc'],hermitian=hermitian)
@@ -639,17 +690,93 @@ def get_jk_builds(mol, lowrank_vecs,
             vj_l_grad = lib.tag_array(vj_l_grad, aux=np.array(vj_l_aux))
             vj_r_grad = lib.tag_array(vhf_grad_t, aux=np.array(vj_r_aux))
 
-    if lowrank_vecs['has_svd'] and lowrank_vecs['has_ed']:
-        return (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t), \
-            (svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, vj_left, vj_right, vj_l_grad, vj_r_grad)
-    
-    elif lowrank_vecs['has_svd']:
-        return None, \
-            (svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, vj_left, vj_right, vj_l_grad, vj_r_grad)
+    # Diagonal JK builds
+    if use_diag:
+        
+        ### First the Coulomb build
+        
+        # Expand out the 'i' indices for J builds
+        diagJ_ao = np.einsum('Nij,wj,xj->Niwx',diagonals[0], ao_mo_trafo, ao_mo_trafo)
+        diagJ_ao_T = np.einsum('Nji,wj,xj->Niwx',diagonals[0], ao_mo_trafo, ao_mo_trafo)
 
-    else:
-        return (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t), \
-            None
+        # Flatten
+        orig_shape = diagJ_ao.shape[:2]
+        flat_diagJ_ao = diagJ_ao.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
+        flat_diagJ_ao_T = diagJ_ao_T.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
+        
+        # JK Builds
+        with log_time("Diag J Builds (1)"):
+            vj_list = mf.with_df.get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
+
+        # JK grad builds
+        with log_time("Diag Grad J Builds (1)"):
+            vj_grad_list = grad_obj.get_jk(dm=flat_diagJ_ao.transpose(0,2,1), hermi=0, with_k=False) [0]
+            vj_grad_t_list = grad_obj.get_jk(dm=flat_diagJ_ao_T.transpose(0,2,1), hermi=0, with_k=False) [0]
+
+        # Unflatten
+        vj_unflat = vj_list.reshape(*orig_shape, *vj_list.shape[1:])
+        vj = unstack_tril(vj_unflat,hermitian=hermitian)
+        
+        vj_grad_unflat = vj_grad_list.reshape(*orig_shape, *vj_grad_list.shape[1:])  
+        vj_grad = unstack_tril(vj_grad_unflat,hermitian=hermitian)
+        
+        vj_grad_t_unflat = vj_grad_t_list.reshape(*orig_shape, *vj_grad_t_list.shape[1:])  
+        vj_grad_t = unstack_tril(vj_grad_t_unflat,hermitian=hermitian)
+
+        """
+        print(diagJ_ao.shape, orig_shape)
+        print(flat_diagJ_ao.shape)
+        
+        print(vj_grad_list.shape, vj_grad_unflat.shape, vj_grad.shape)
+        print(vj_grad_t_list.shape, vj_grad_t_unflat.shape, vj_grad_t.shape)
+
+        print(np.linalg.norm(vj_grad - vj_grad_t.transpose(0,1,2,3,5,4)))
+
+        1/0
+        """
+        #subspace_h += 0.5 * np.einsum('yj,zj,XYjyz->XY', ao_mo_trafo, ao_mo_trafo, vj)
+
+    
+        if not coul_diag_only:
+            # Transform the low-rank vecs into
+            diagK_ao = np.einsum('Nij,wi,yi->Njwy',diagonals[1], ao_mo_trafo, ao_mo_trafo)
+
+            # Flatten
+            orig_shape = diagK_ao.shape[:2]
+            flat_diagK_ao = diagK_ao.reshape(orig_shape[0] * orig_shape[1], *diagK_ao.shape[2:])
+            
+            # JK Builds
+            with log_time("Diag K Builds (1)"):
+                vk_list = mf.with_df.get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
+    
+            # JK grad builds
+            with log_time("Diag Grad J Builds (1)"):
+                vk_grad_list = grad_obj.get_jk(dm=flat_diagK_ao, hermi=0, with_j=False) [1]
+
+            # Unflatten
+            vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
+            vk = unstack_tril(vk_unflat,hermitian=hermitian)
+            
+            vk_grad_unflat = vk_grad_list.reshape(*orig_shape, *vk_grad_list.shape[1:])  
+            vk_grad = unstack_tril(vk_grad_unflat,hermitian=hermitian)
+
+            #subspace_h += 0.5 * np.einsum('xj,zj,XYjxz->XY', ao_mo_trafo, ao_mo_trafo, vk)
+        else:
+            vk, vk_grad = None, None
+    
+    # Function OUTPUT
+    ed_return, svd_return, diag_return = None, None, None
+    
+    if lowrank_vecs['has_ed']:
+        ed_return = (lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t)
+        
+    if lowrank_vecs['has_svd']:
+        svd_return = (svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, vj_left, vj_right, vj_l_grad, vj_r_grad)
+
+    if use_diag:
+        diag_return = (vj, vj_grad, vj_grad_t, vk, vk_grad)
+
+    return ed_return, svd_return, diag_return
 
 
 ###############################################################################
@@ -843,6 +970,96 @@ def stack_lowrank(vecs_lowrank, hermitian=True):
         
     return stacked_lowrank, has_svd, has_ed
 
+
+def stack_tril(arr, hermitian=True):
+    """
+    Stack selected blocks from a (n, n, x, x) array into a compact (m, x, x) array.
+    
+    If hermitian=True, stacks only the lower triangle (i >= j),
+    assuming the array is Hermitian in its (n, n) block structure.
+    
+    If hermitian=False, stacks the full (i, j) grid in row-major order.
+    
+    Parameters:
+        arr : np.ndarray
+            Input array of shape (n, n, x, x)
+        hermitian : bool
+            Whether to restrict to lower-triangular blocks only
+
+    Returns:
+        stacked : np.ndarray
+            Stacked array of shape (m, x, x) where m = n*(n+1)//2 if Hermitian,
+            or m = n*n if not.
+    """
+    n, _, x, _ = arr.shape
+    packed = []
+    for i in range(n):
+        jmax = i + 1 if hermitian else n
+        for j in range(jmax):
+            packed.append(arr[i, j])
+    return np.array(packed)
+
+
+def unstack_tril(packed, hermitian=True):
+    """
+    Unpacks a stacked array of shape (m, ...) into shape (n, n, ...), where the first
+    axis was previously packed using only the lower triangle (if hermitian=True) or the full (n,n) grid.
+
+    Parameters:
+        packed : np.ndarray
+            Input array with shape (m, ...) where m = n*(n+1)//2 (hermitian) or n*n (full)
+        hermitian : bool
+            Whether the packed data was from the lower triangle only
+
+    Returns:
+        arr : np.ndarray
+            Output array of shape (n, n, ...)
+    """
+    m = packed.shape[0]
+    rest_shape = packed.shape[1:]
+
+    if hermitian:
+        # Solve m = n(n+1)//2 ⇒ n = (-1 + sqrt(1 + 8m)) // 2
+        n = int((-1 + math.isqrt(1 + 8 * m)) // 2)
+        if n * (n + 1) // 2 != m:
+            raise ValueError("Invalid packed shape for Hermitian lower triangle: m = n(n+1)//2")
+
+        arr = np.zeros((n, n) + rest_shape, dtype=packed.dtype)
+        idx = 0
+        for i in range(n):
+            for j in range(i + 1):  # j <= i
+                arr[i, j] = packed[idx]
+                idx += 1
+
+    else:
+        # Solve m = n*n ⇒ n = sqrt(m)
+        n = int(math.isqrt(m))
+        if n * n != m:
+            raise ValueError("Invalid packed shape for full matrix: m = n*n")
+
+        arr = np.zeros((n, n) + rest_shape, dtype=packed.dtype)
+        idx = 0
+        for i in range(n):
+            for j in range(n):
+                arr[i, j] = packed[idx]
+                idx += 1
+
+    return arr
+
+
+def stack_diagonal(diagonals, hermitian=True):
+    """
+    Stack 2(t)RDM diagonals for a vectorized inference
+    """
+    
+    diag_J = diagonals[:,:,0]
+    diag_K = diagonals[:,:,1] + diagonals[:,:,2]
+    
+    stacked_diagJ = stack_tril(diag_J, hermitian=hermitian)
+    stacked_diagK = stack_tril(diag_K, hermitian=hermitian)
+                
+    return (stacked_diagJ, stacked_diagK)
+
 def unpack_vec(vecs,pair_loc,hermitian=True):
     """
     Function to unpack vectors stacked using "stack_lowrank" function
@@ -1014,6 +1231,12 @@ def vectorize_lowrank(self, hermitian=True):
     # the previous steps and stack_lowrank function
     stacked, has_svd, has_ed = stack_lowrank(self.vecs_lowrank, hermitian=hermitian)
     
+    # Vectorize diagonal corrections
+    diagJ, diagK = stack_diagonal(self.diagonal_lr, hermitian=hermitian)
+    
+    self.diagonal_vectorized = np.stack((diagJ, diagK))
+    #self.diagonal_K = diagK
+
     # Set this low-rank description
     self.lowrank_vectorized = {}
     self.lowrank_vectorized['vals'] = vals_lr
@@ -1028,7 +1251,7 @@ def vectorize_lowrank(self, hermitian=True):
         self.lowrank_vectorized['rightvecs_stacked'] = stacked['rightvecs_svd']
         self.lowrank_vectorized['vecs_svd_stacked'] = stacked['vecs_svd']
         self.lowrank_vectorized['pairloc_svd'] = stacked['pairloc_svd']
-        
+
     self.lowrank_vectorized['hermitian'] = hermitian
     self.lowrank_vectorized['has_ed'] = has_ed
     self.lowrank_vectorized['has_svd'] = has_svd

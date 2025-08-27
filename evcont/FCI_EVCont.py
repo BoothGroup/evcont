@@ -95,6 +95,7 @@ class FCI_EVCont_obj:
     def vectorize_lowrank(self,hermitian=True):        
         vectorize_lowrank(self,hermitian=hermitian)
 
+    
             
         
     def append_to_rdms(self, mol):

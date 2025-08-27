@@ -270,7 +270,7 @@ def two_el_grad(h2_ao, two_rdm, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_
         ].sum(axis=1)
 
     # Return the two-electron integral gradient
-    return two_el_contraction + h2_grad_ao_sum
+    return h2_grad_ao_sum + two_el_contraction
 
 
 def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=None):
@@ -377,6 +377,7 @@ def get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, one_rdm, two_rdm, ao_mo
     )
 
     return grad_elec
+    #return 0.5 * two_el_gradient
 
 
 def get_energy_with_grad(
@@ -1135,6 +1136,7 @@ def two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds, vec_i, vec_j,
 
 @timeit
 def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
+                                       diag_builds=None,
                                        ao_mo_trafo=None, ao_mo_trafo_grad=None,
                                        df_response=False):
     """
@@ -1166,6 +1168,14 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
         svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, \
             vj_left, vj_right, \
             vj_l_grad, vj_r_grad = SVD_builds
+
+    # Unpack diagonal builds
+    use_diag, coul_diag_only = False, True
+    if diag_builds is not None:
+        use_diag = True
+        (vj, vj_grad, vj_grad_t, vk, vk_grad) = diag_builds
+        if vk is not None:
+            coul_diag_only = False
 
     # Basis functions indices for each atom
     atm_slices = tuple(
@@ -1204,16 +1214,31 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
                                  vj_right, svd_lvecs, lowrank_vecs['vals'][:,:,:vj_left.shape[2]],
                                  optimize='optimal')
     
+    if use_diag:
+
+        pulay_term += 2*lib.einsum('xi,ABiwx->ABwi', 
+                                   ao_mo_trafo, vj + vj.transpose(0,1,2,4,3),
+                                   optimize='optimal')
+        
+        # Not needed! Same as above, so just times the above by 2
+        #pulay_term += lib.einsum('zj,ABjyz->AByj', 
+        #                           ao_mo_trafo, vj + vj.transpose(0,1,2,4,3),
+        #                           optimize='optimal')
+        
+        if not coul_diag_only:
+            # TODO: diag_K contributions
+            print('Error: diag_K contributions to gradients not implemented yet')
+            sys.exit()
+        
     if lowrank_vecs['hermitian']:
         # Set the upper triangle
         pulay_term[np.triu_indices(ntrain)] = pulay_term.transpose(1,0,2,3)[np.triu_indices(ntrain)].conj()
     
     intermediate_pulay = lib.einsum('wimn,ABwi->ABmn',ao_mo_trafo_grad,pulay_term, optimize='optimal')
-    
-    #grad_i = np.zeros_like(grad_i) # Setting the previous part to zero for testing
-    
+        
     # JK Grad terms   
     grad_h2 = np.zeros([ntrain, ntrain, 3, norb])
+    #"""
     if lowrank_vecs['has_ed']: 
 
         grad_h2 += 2*lib.einsum('ABanij,ABaij,ABa->ABni',
@@ -1234,7 +1259,24 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
         grad_h2 += lib.einsum('ABanij,ABaij,ABa->ABni',
                                 vj_r_grad, svd_lvecs_ao+svd_lvecs_ao.transpose(0,1,2,4,3),lowrank_vecs['vals'][:,:,:vj_left.shape[2]],
                                 optimize='optimal')
+    #"""
+    if use_diag:
+
+        ## AO Build not working! So implementing SAO
+        """
+        grad_h2 += 2*lib.einsum('ABinyz,yi,zi->ABni',
+                                vj_grad, ao_mo_trafo, ao_mo_trafo,
+                                optimize='optimal')
         
+        grad_h2 += 2*lib.einsum('ABinyz,yi,zi->ABni',
+                                vj_grad_t, ao_mo_trafo, ao_mo_trafo,
+                                optimize='optimal')
+        """
+        if not coul_diag_only:
+            # TODO: diag_K contributions
+            print('Error: diag_K contributions to gradients not implemented yet')
+            sys.exit()
+                
     if lowrank_vecs['hermitian']:
         # Set the upper triangle
         grad_h2[np.triu_indices(ntrain)] = grad_h2.transpose(1,0,2,3)[np.triu_indices(ntrain)].conj()
@@ -1245,7 +1287,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
         #grad_i[i,:] += grad_el_traced[:,slice[0] : slice[1]].sum(axis=1) 
         intermediate_h2[:,:,i,:] += grad_h2[:,:,:,slice[0] : slice[1]].sum(axis=3) 
             
-    # Response of the auxillary basis (Currently not working)
+    # Response of the auxillary basis (Currently NOT WORKING)
     if df_response:
         intermediate_df = np.zeros([ntrain, ntrain, mol.natm, 3])
         if lowrank_vecs['has_ed']: 
@@ -1268,7 +1310,8 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
         return intermediate_h2 + intermediate_pulay
 
 @timeit
-def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=None,
+def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, 
+                                     diagonals=None, coul_diag_only=True,
                                      nroots=1, 
                                      density_fit=False, df_basis=None,
                                      ao_mo_trafo=None, ao_mo_trafo_grad=None,
@@ -1312,11 +1355,15 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=No
         
     ######################################################
     # Get preliminaries
-    ED_builds, SVD_builds = get_jk_builds(mol, lowrank_vecs,
-                                          ao_mo_trafo=ao_mo_trafo,
-                                          density_fit=density_fit, 
-                                          df_basis=df_basis,
-                                          df_response=df_response)
+    ED_builds, SVD_builds, diag_builds = get_jk_builds(
+        mol, lowrank_vecs,
+        diagonals=diagonals, 
+        coul_diag_only=coul_diag_only,
+        ao_mo_trafo=ao_mo_trafo,
+        density_fit=density_fit, 
+        df_basis=df_basis,
+        df_response=df_response
+        )
 
     if lowrank_vecs['has_ed']:
         lr_vecs, lr_vecs_ao, vhf, vhf_grad, vhf_grad_t = ED_builds
@@ -1325,6 +1372,11 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=No
         svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, \
             vj_left, vj_right, \
             vj_l_grad, vj_r_grad = SVD_builds
+            
+    use_diag = False
+    if diag_builds is not None:
+        use_diag = True
+        (vj, vj_grad, vj_grad_t, vk, vk_grad) = diag_builds     
     
     ######################################################
     ######### CONSTRUCT SUBSPACE HAMILTONIAN AND GRADS
@@ -1340,10 +1392,15 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=No
         if lowrank_vecs['has_svd']:
             subspace_h += 0.5*lib.einsum('xyaij,xyaij,xya->xy', vj_right, svd_lvecs_ao, lowrank_vecs['vals'][:,:,:vj_right.shape[2]],optimize='optimal')
             
+        if use_diag:
+            subspace_h += 0.5 * np.einsum('yj,zj,XYjyz->XY', ao_mo_trafo, ao_mo_trafo, vj)
+            if not coul_diag_only:
+                subspace_h += 0.5 * np.einsum('xj,zj,XYjxz->XY', ao_mo_trafo, ao_mo_trafo, vk)
+
         if lowrank_vecs['hermitian']:
             # Set the upper triangle
             subspace_h[np.triu_indices(ntrain)] = subspace_h.T[np.triu_indices(ntrain)].conj()
-        
+
         # Diagonalize
         en, vec = solve_subspace(subspace_h, S, hermitian=hermitian, nroots=nroots)
         fix_gauge(vec)
@@ -1351,29 +1408,29 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, diagonals=No
     ######################################################
     ######### GET GRADIENTS
     ######################################################
-    with log_time('Grad one-body'):
-        # Get the orbital derivative coupling for NACs
-        orb_deriv = get_orbital_derivative_coupling(mol,
-                                                    ao_mo_trafo=ao_mo_trafo,
-                                                    ao_mo_trafo_grad=ao_mo_trafo_grad,
-                                                    ovlp=ovlp_ao)
-    
-        # 1-el grad 
-        h1_jac = get_one_el_grad(
-            mol, 
-            h1_ao=h1_ao, 
-            ao_mo_trafo=ao_mo_trafo, 
-            ao_mo_trafo_grad=ao_mo_trafo_grad
-        )
+    #with log_time('Grad one-body'):
+    # Get the orbital derivative coupling for NACs
+    orb_deriv = get_orbital_derivative_coupling(mol,
+                                                ao_mo_trafo=ao_mo_trafo,
+                                                ao_mo_trafo_grad=ao_mo_trafo_grad,
+                                                ovlp=ovlp_ao)
+
+    # 1-el grad 
+    h1_jac = get_one_el_grad(
+        mol, 
+        h1_ao=h1_ao, 
+        ao_mo_trafo=ao_mo_trafo, 
+        ao_mo_trafo_grad=ao_mo_trafo_grad
+    )
         
-    with log_time('Grad_nuc'):
-        # Nuclear part of the gradient
-        grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
+    #with log_time('Grad_nuc'):
+    # Nuclear part of the gradient
+    grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
 
         
     # 2-el grad
     grad_elec_h2_state = state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, 
-                                                            ED_builds, SVD_builds,
+                                                            ED_builds, SVD_builds, diag_builds,
                                                             ao_mo_trafo=ao_mo_trafo, 
                                                             ao_mo_trafo_grad=ao_mo_trafo_grad,
                                                             df_response=df_response)

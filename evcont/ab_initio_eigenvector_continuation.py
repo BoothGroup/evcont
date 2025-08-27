@@ -251,8 +251,8 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
     return en_approx, evec_approx
 
 
-import matplotlib.pylab as plt
-import seaborn as sb 
+#import matplotlib.pylab as plt
+#import seaborn as sb 
 
 def approximate_multistate_otf(h1, h2, one_RDM=None, two_RDM=None, S=None, otf_hamiltonian=None, nroots=1, hermitian=True, mol=None):
     """

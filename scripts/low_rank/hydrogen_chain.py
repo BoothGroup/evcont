@@ -90,11 +90,15 @@ lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
 #lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
-lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1, 'save_diag':True}
-lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':3, 'save_diag':True}
+#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1, 'save_diag':True}
+lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5, 'save_diag':True}
 
-vectorize = False
+vectorize = True
 use_diag = True
+
+# For testing, use reconstructed 2tRDM instead of full evcont
+# - to see if fast inference is working as intended
+compare_to_reconstruct = True
 
 #test_range = np.linspace(0.8, 3.0,40)
 test_range = np.linspace(0.8, 3.0, 15)
@@ -186,24 +190,51 @@ for i, dist in enumerate(trainig_dists):
 
 # If vectorize
 if vectorize:
-    continuation_object.vectorize_lowrank(hermitian=True)
+    continuation_object.vectorize_lowrank(hermitian=False)
     vecs_lr = continuation_object.lowrank_vectorized
+    diag_lr = continuation_object.diagonal_vectorized
 else:
     vecs_lr = continuation_object.vecs_lowrank
+    diag_lr = continuation_object.diagonal_lr
+
+# Reconstruct the two_rdm for testing
+two_rdm_rec = np.zeros_like(continuation_object_full.two_rdm)
+
+# Only use the J coul
+diagonals_rec = np.zeros_like(continuation_object.diagonal_lr)
+if use_diag:
+    diagonals_rec[:,:,0] = continuation_object.diagonal_lr[:,:,0]
+
+from evcont.low_rank_utils import reconstruct_rdm2_joint
+
+norb = two_rdm_rec.shape[-1]
+for (i,j), vi in continuation_object.vecs_lowrank.items():
     
+    rdm2_i = reconstruct_rdm2_joint(vi[:3], diagonals=diagonals_rec[i,j],joint=vi[-1])
+    # Diagonal only - for testing
+    #rdm2_i = reconstruct_rdm2_joint([np.zeros([2]),np.zeros([norb,norb,2]),np.zeros([2,norb,norb])], diagonals=diagonals_rec[i,j],joint=vi[-1])
+
+    two_rdm_rec[i,j] = rdm2_i
+    two_rdm_rec[j,i] = np.einsum('ijkl->jilk',rdm2_i.conj())
+    
+if compare_to_reconstruct:
+    two_rdm_to_comp = two_rdm_rec
+else:
+    two_rdm_to_comp = continuation_object_full.two_rdm
+
 # Save
 i = 'final'
 np.save("overlap_{}.npy".format(i), continuation_object.overlap)
 np.save("one_rdm_{}.npy".format(i), continuation_object.one_rdm)
 
-np.save("diagonal_lr_{}.npy".format(i), continuation_object.diagonal_lr)
+np.save("diagonal_lr_{}.npy".format(i), diag_lr)
 np.save("lowrank_vecs_{}.npy".format(i), continuation_object.vecs_lowrank)
 save_pickle('vecs_lr.pkl', vecs_lr)
 
 np.save('trn_geometries_{}.npy'.format(i), trn_geometries)
 
 if use_diag:
-    diags = continuation_object.diagonal_lr
+    diags = diag_lr
 else:
     diags = None
 
@@ -250,6 +281,11 @@ ref_en = np.zeros([len(test_range),nroots_evcont])
 hf_en = np.zeros([len(test_range)])
 cont_en = np.zeros([len(test_range),nroots_evcont+1])
 cont_lowrank_en = np.zeros([len(test_range),nroots_evcont+1])
+
+ref_grad = np.zeros([len(test_range),nroots_evcont, mol.natm, 3])
+cont_grad = np.zeros([len(test_range),nroots_evcont+1, mol.natm, 3])
+cont_lr_grad = np.zeros([len(test_range),nroots_evcont+1, mol.natm, 3])
+
 for i, test_dist in enumerate(test_range):
     print(i)
     positions = [(x, 0.0, 0.0) for x in test_dist * np.arange(natom)]
@@ -270,23 +306,22 @@ for i, test_dist in enumerate(test_range):
         df_basis=df_basis
     )
     
-    """
+    #"""
     out = get_lowrank_en_with_grad_and_NAC(mol, continuation_object.one_rdm, 
                                            continuation_object.overlap,
-                                           vecs_lr, None, 
+                                           vecs_lr, diags, 
                                            nroots=nroots_evcont+1,
                                            density_fit=density_fit,
                                            df_basis=df_basis)
-    """
+    #"""
     lr_tot += (time.time()-start); lr_n_eval += 1
     
     print('   low rank - finish - %.1f sec'%(time.time()-start))
 
     #cont_lowrank_en += [en_continuation_ms]
-    cont_lowrank_en[i,:] = en_continuation_ms
+    cont_lowrank_en[i,:] = out[1] #en_continuation_ms
     
     ## HF and FCI
-
     mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
     # Note that in performant code, we don't actually need to run HF at the training points,
     # just have access to the get_jk function.
@@ -333,6 +368,8 @@ for i, test_dist in enumerate(test_range):
     grad_nuc = df.grad.RHF(mf).grad_nuc()    
     #grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
 
+    #cont_lr_grad[i] = out[2]
+    cont_lr_grad[i] = out[2] #- grad_nuc
 
     # Only do FCI if number of orbitals is less than 16
     if mol.nao < 16 and (cont_solver == 'FCI' or fci_done):
@@ -348,6 +385,13 @@ for i, test_dist in enumerate(test_range):
         assert mc.converged
         
         grad_method = mc.Gradients()
+        
+        grad_ref_l = []
+        for refi in range(nroots_evcont):
+            grad_ref_l.append(grad_method.kernel(state=refi))# - grad_method.grad_nuc())
+            
+        ref_grad[i] = np.array(grad_ref_l)
+        
         grad_ref = grad_method.kernel(state=0) #- grad_method.grad_nuc()
         
     else:
@@ -399,7 +443,7 @@ for i, test_dist in enumerate(test_range):
         h1e_sao,
         df_eri_sao,
         continuation_object_full.one_rdm,
-        continuation_object_full.two_rdm,
+        two_rdm_to_comp,#continuation_object_full.two_rdm, 
         continuation_object_full.overlap,
         nroots=nroots_evcont+1
     )
@@ -411,17 +455,20 @@ for i, test_dist in enumerate(test_range):
         vec_j = vec_i
         
         one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), continuation_object_full.one_rdm, axes=2)
-        two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), continuation_object_full.two_rdm, axes=2)
+        two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), 
+                                         two_rdm_to_comp,#continuation_object_full.two_rdm, 
+                                         axes=2)
             
         grad_i = get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, 
                                     one_rdm_predicted,
                                     two_rdm_predicted)
         grad_cont.append(grad_i + grad_nuc)
     
-    
+    cont_grad[i] = np.array(grad_cont) #- grad_nuc
+
     out_full = get_multistate_energy_with_grad_and_NAC(mol,
                                                        continuation_object_full.one_rdm,
-                                                       continuation_object_full.two_rdm,
+                                                       two_rdm_to_comp, #continuation_object_full.two_rdm,
                                                        continuation_object_full.overlap,
                                                        nroots=nroots_evcont+1, savemem=True)
     
@@ -435,10 +482,11 @@ for i, test_dist in enumerate(test_range):
 
     else:
         print(ehf, ref_en[i,:], cont_en[i], cont_lowrank_en[i])
-        #print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]), np.linalg.norm(out_full[2][0]-out[2][0]))
+        print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]), np.linalg.norm(out_full[2][0]-out[2][0]))
         #print('nac','\n', out[4],'\n', out_full[4])
         #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
         #1/0
+
 
 print('Time per low-rank (s): %.2f'%(lr_tot/lr_n_eval))
 
@@ -489,6 +537,71 @@ if figsave:
 else:
     plt.show()
 
+
+# PLOT - with grads
+fig, axes = plt.subplots(nrows=3, ncols=2, sharex=True,figsize=[8,7],height_ratios=[3,1.5,1.5],
+                                 gridspec_kw={'hspace':0.,'wspace':0.2})
+
+[ax1,ax2,ax3] = axes[:,0]
+[ax4,ax5,ax6] = axes[:,1]
+
+ax1.plot(test_range, hf_en,'orange',label='HF')
+if nroots_evcont > 1:
+    if (cont_solver == 'FCI' or fci_done):
+        ax1.plot(test_range,fci_en,'k',label=['FCI']+[None]*(nroots_evcont-1))
+        ax4.plot(test_range,np.linalg.norm(ref_grad,axis=(2,3)),'k',label=['FCI']+[None]*(nroots_evcont-1))
+    if cont_solver != 'FCI':
+        ax1.plot(test_range,ref_en,'green',label=[cont_solver]+[None]*(nroots_evcont-1))
+    ax1.plot(test_range,cont_en,'b',label=['full evcont']+[None]*(cont_en.shape[-1]-1))
+    ax1.plot(test_range,cont_lowrank_en,'--r',label=['low rank evcont']+[None]*(cont_lowrank_en.shape[-1]-1))
+    ax4.plot(test_range,np.linalg.norm(cont_grad,axis=(2,3)),'b',label=['full evcont']+[None]*(cont_en.shape[-1]-1))
+    ax4.plot(test_range,np.linalg.norm(cont_lr_grad,axis=(2,3)),'--r',label=['low rank evcont']+[None]*(cont_lowrank_en.shape[-1]-1))
+else:
+    if (cont_solver == 'FCI' or fci_done):
+        ax1.plot(test_range,fci_en,'k',label='FCI')
+    if cont_solver != 'FCI':
+        ax1.plot(test_range,ref_en,'green',label=cont_solver)
+    ax1.plot(test_range,cont_en,'b',label='full evcont')
+    ax1.plot(test_range,cont_lowrank_en,'--r',label='low rank evcont')
+   
+
+ax1.plot(trainig_dists,train_en,'xb')
+ax1.plot(trainig_dists,train_lowrank_en,'xr')
+ax1.legend()
+
+if (cont_solver == 'FCI' or fci_done):
+    ax2.plot(test_range,cont_en[:,:nroots_evcont] - fci_en,'b')
+    ax2.plot(test_range,cont_lowrank_en[:,:nroots_evcont] - fci_en,'--r')
+
+    ax5.plot(test_range,np.linalg.norm(cont_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'b')
+    ax5.plot(test_range,np.linalg.norm(cont_lr_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'--r')
+
+if cont_solver != 'FCI':
+    ax3.plot(test_range,cont_en[:,:nroots_evcont] - ref_en,'b')
+    ax3.plot(test_range,cont_lowrank_en[:,:nroots_evcont] - ref_en,'--r')
+    ax3.set_ylabel(r'$E_{cont}$ - $E_{%s}$ (Ha)'%cont_solver)
+    
+else:
+    
+    ax3.plot(test_range,cont_lowrank_en - cont_en,'--r')
+    ax3.set_ylabel(r'$E_{cont}$ - $E_{lowrank}$ (Ha)')
+    
+    ax6.plot(test_range,np.linalg.norm(cont_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'--r')
+
+    
+ax1.set_title('Energy')
+ax4.set_title('Gradient')
+
+ax1.set_ylabel('Energy (Ha)')
+ax2.set_ylabel(r'$E_{cont}$ - $E_{FCI}$ (Ha)')
+ax3.set_xlabel('Atomic separation ($a_0$)')
+
+if figsave:
+    plt.savefig('H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png',bbox_inches='tight',dpi=500)
+else:
+    plt.show()
+
+    
 from matplotlib.patches import Patch
 
 # Expansion limit
