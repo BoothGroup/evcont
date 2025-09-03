@@ -1,6 +1,6 @@
 import numpy as np
 
-from pyscf import scf, lo, ao2mo
+from pyscf import scf, lo, ao2mo, df
 
 
 def get_loewdin_trafo(overlap_mat):
@@ -136,3 +136,47 @@ def get_integrals(mol, basis):
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, basis), basis.shape[1])
 
     return h1, h2
+
+
+def get_df_integrals(mol, auxbasis=None, grad=False):
+    """
+    Compute the density-fitted ERIs and ERI gradients to be used
+    in low-rank inference
+    """
+    
+    # Set auxillary basis
+    auxmol = df.addons.make_auxmol(mol, auxbasis=auxbasis)
+    naux = auxmol.nao
+
+    # ints_3c is the 3-center integral tensor (ij|P), where i and j are the
+    # indices of AO basis and P is the auxiliary basis
+    ints_3c2e = df.incore.aux_e2(mol, auxmol, intor='int3c2e')
+    # ints_2c2e is the (P|Q) integrals
+    ints_2c2e = auxmol.intor('int2c2e')
+    vals, vecs = np.linalg.eigh(ints_2c2e)
+    assert(len(vals[vals < 1.e-15]) == 0) # PSD
+    
+    metric = np.array(np.dot(vecs * (1 / np.sqrt(vals)) , vecs.conj().T))
+    cd_array = np.einsum('PQ,ijP->Qij', metric, ints_3c2e)
+    
+    # Full 4c integrals can be reconstructed as:
+    #explicit_df_eri = np.einsum('Pij,Pkl->ijkl', cd_array, cd_array)
+
+    if grad:
+        # Now consider gradient integrals. The 4c integrals we want to approximate are: 
+        # (d/dx i j | k l)
+        # grad_4c_ints = mol.intor("int2e_ip1", comp=3)
+        
+        # We can get the integrals ( d/dx i, j | P)
+        ints_3c2e_ip1 = df.incore.aux_e2(mol, auxmol, intor='int3c2e_ip1', comp=3)
+        # Use the same metric as before
+        deriv_cderi = np.einsum('PQ,xijP -> xijQ', metric, ints_3c2e_ip1)
+        
+        # Full 4c derivative integrals can be reconstructed as:
+        # df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, cd_array)
+
+        return cd_array, deriv_cderi
+    
+    else:
+        return cd_array
+    

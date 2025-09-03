@@ -17,7 +17,7 @@ from pyscf import gto, fci, scf, lib, ao2mo, mcscf, df
 from evcont.FCI_EVCont import FCI_EVCont_obj
 #from evcont.CASCI_EVCont import CAS_EVCont_obj
 
-from evcont.electron_integral_utils import get_basis, get_integrals, get_loewdin_trafo
+from evcont.electron_integral_utils import get_basis, get_integrals, get_loewdin_trafo, get_df_integrals
 
 #from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC
 
@@ -91,14 +91,23 @@ lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
 #lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1, 'save_diag':True}
-lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':5, 'save_diag':True}
+lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':3, 'save_diag':True}
 
 vectorize = True
+
 use_diag = True
+coul_diag_only = True # Only use diagonal corrections that contribute as J builds
+sao_diag = False # Diagonal inference in SAO basis
 
 # For testing, use reconstructed 2tRDM instead of full evcont
 # - to see if fast inference is working as intended
 compare_to_reconstruct = True
+
+# If true, remove other contributions (nuclear terms)
+remove_nuclear_grad = False
+remove_nondiag = False # only from reconstructed RDM inference
+remove_Jdiag = False # Set J diagonals of the low-rank representation to zero for testing
+
 
 #test_range = np.linspace(0.8, 3.0,40)
 test_range = np.linspace(0.8, 3.0, 15)
@@ -127,6 +136,49 @@ def load_pickle(filename):
 def save_pickle(filename, data_dict):
     with open(filename, 'wb') as f:
        	pickle.dump(data_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+def numerical_gradients(mol, energy_func, h=1e-6):
+    """
+    Compute numerical nuclear gradients of a molecule for one or multiple states.
+    
+    Args:
+        mol: PySCF Mole object
+        energy_func: callable(mol) -> float or array-like
+            Function that takes a mol and returns energy (float) or list/array of energies
+        h: finite difference step size (Bohr)
+
+    Returns:
+        grads: (nstates, natm, 3) array of gradients
+    """
+    coords = mol.atom_coords()
+    ref_energies = np.atleast_1d(energy_func(mol))
+    nstates = len(ref_energies)
+    natm = mol.natm
+    grads = np.zeros((nstates, natm, 3))
+    
+    eye_atoms = np.eye(natm)
+
+    for i in range(natm):
+        for a in range(3):  # x, y, z
+            disp = np.zeros(3)
+            disp[a] = h
+
+            # +h displacement
+            mol.set_geom_(coords + eye_atoms[i][:, None] * disp, unit='Bohr')
+            e_plus = np.atleast_1d(energy_func(mol))
+
+            # -h displacement
+            mol.set_geom_(coords - eye_atoms[i][:, None] * disp, unit='Bohr')
+            e_minus = np.atleast_1d(energy_func(mol))
+
+            grads[:, i, a] = (e_plus - e_minus) / (2 * h)
+
+            # reset geometry
+            mol.set_geom_(coords, unit='Bohr')
+
+    return grads if nstates > 1 else grads[0]
+
+
 
 mol_dummy = get_mol([(x, 0.0, 0.0) for x in test_range[0] * np.arange(natom)])
 
@@ -197,22 +249,32 @@ else:
     vecs_lr = continuation_object.vecs_lowrank
     diag_lr = continuation_object.diagonal_lr
 
+if remove_Jdiag:
+    diag_lr[0] = np.zeros_like(diag_lr[0])
+    
 # Reconstruct the two_rdm for testing
 two_rdm_rec = np.zeros_like(continuation_object_full.two_rdm)
 
+from evcont.low_rank_utils import unstack_tril
 # Only use the J coul
 diagonals_rec = np.zeros_like(continuation_object.diagonal_lr)
 if use_diag:
-    diagonals_rec[:,:,0] = continuation_object.diagonal_lr[:,:,0]
+    if not remove_Jdiag:
+        diagonals_rec[:,:,0] = unstack_tril(diag_lr[0], False) #continuation_object.diagonal_lr[:,:,0]
+    
+    if not coul_diag_only:
+        diagonals_rec[:,:,1:] = continuation_object.diagonal_lr[:,:,1:]
 
 from evcont.low_rank_utils import reconstruct_rdm2_joint
 
 norb = two_rdm_rec.shape[-1]
 for (i,j), vi in continuation_object.vecs_lowrank.items():
     
-    rdm2_i = reconstruct_rdm2_joint(vi[:3], diagonals=diagonals_rec[i,j],joint=vi[-1])
-    # Diagonal only - for testing
-    #rdm2_i = reconstruct_rdm2_joint([np.zeros([2]),np.zeros([norb,norb,2]),np.zeros([2,norb,norb])], diagonals=diagonals_rec[i,j],joint=vi[-1])
+    if not remove_nondiag:
+        rdm2_i = reconstruct_rdm2_joint(vi[:3], diagonals=diagonals_rec[i,j],joint=vi[-1])
+    else:
+        # Diagonal only - for testing
+        rdm2_i = reconstruct_rdm2_joint([np.zeros([2]),np.zeros([norb,norb,2]),np.zeros([2,norb,norb])], diagonals=diagonals_rec[i,j],joint=vi[-1])
 
     two_rdm_rec[i,j] = rdm2_i
     two_rdm_rec[j,i] = np.einsum('ijkl->jilk',rdm2_i.conj())
@@ -257,6 +319,8 @@ for i, test_dist in enumerate(trainig_dists):
         vecs_lr,
         diags, 
         continuation_object.overlap,
+        coul_diag_only=coul_diag_only,
+        sao_diag=sao_diag,
         nroots=nroots_evcont
     )
     lr_tot += (time.time()-start); lr_n_eval += 1
@@ -275,16 +339,32 @@ for i, test_dist in enumerate(trainig_dists):
     
 #1/0
 
+def lowrank_en(mol):
+    return approximate_multistate_lowrank_OAO(
+        mol, 
+        continuation_object.one_rdm,  
+        vecs_lr,
+        diags, 
+        continuation_object.overlap,
+        coul_diag_only=coul_diag_only,
+        sao_diag=sao_diag,
+        nroots=nroots_evcont+1
+    )[0]
+    
+    
 # Prediction on test dataset and comparison against FCI results
+nroots_to_compute = nroots_evcont + 1
+
 fci_en = np.zeros([len(test_range),nroots_evcont])
 ref_en = np.zeros([len(test_range),nroots_evcont])
 hf_en = np.zeros([len(test_range)])
-cont_en = np.zeros([len(test_range),nroots_evcont+1])
-cont_lowrank_en = np.zeros([len(test_range),nroots_evcont+1])
+cont_en = np.zeros([len(test_range),nroots_to_compute])
+cont_lowrank_en = np.zeros([len(test_range),nroots_to_compute])
 
 ref_grad = np.zeros([len(test_range),nroots_evcont, mol.natm, 3])
-cont_grad = np.zeros([len(test_range),nroots_evcont+1, mol.natm, 3])
-cont_lr_grad = np.zeros([len(test_range),nroots_evcont+1, mol.natm, 3])
+cont_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
+cont_lr_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
+num_lr_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
 
 for i, test_dist in enumerate(test_range):
     print(i)
@@ -302,7 +382,9 @@ for i, test_dist in enumerate(test_range):
         vecs_lr,
         diags, 
         continuation_object.overlap,
-        nroots=nroots_evcont+1,
+        nroots=nroots_to_compute,
+        coul_diag_only=coul_diag_only,
+        sao_diag=sao_diag,
         df_basis=df_basis
     )
     
@@ -310,16 +392,21 @@ for i, test_dist in enumerate(test_range):
     out = get_lowrank_en_with_grad_and_NAC(mol, continuation_object.one_rdm, 
                                            continuation_object.overlap,
                                            vecs_lr, diags, 
-                                           nroots=nroots_evcont+1,
+                                           sao_diag=sao_diag,
+                                           nroots=nroots_to_compute,
                                            density_fit=density_fit,
+                                           coul_diag_only=coul_diag_only,
                                            df_basis=df_basis)
     #"""
     lr_tot += (time.time()-start); lr_n_eval += 1
     
     print('   low rank - finish - %.1f sec'%(time.time()-start))
 
-    #cont_lowrank_en += [en_continuation_ms]
+    #cont_lowrank_en[i,:] += en_continuation_ms
     cont_lowrank_en[i,:] = out[1] #en_continuation_ms
+    
+    grad_num = numerical_gradients(mol, lowrank_en)
+    num_lr_grad[i,:] = grad_num
     
     ## HF and FCI
     mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
@@ -337,6 +424,8 @@ for i, test_dist in enumerate(test_range):
     h1e_mo = np.einsum('ai,ab,bj->ij', mf.mo_coeff, h1_ao, mf.mo_coeff)
     #print(h1e_mo, df_eri, mol.nao, mol.nelec)
 
+    Lpq_ao, deriv_cderi = get_df_integrals(mol, auxbasis=df_basis, grad=True)
+    """
     # DF-ERI gradients
     auxmol = df.addons.make_auxmol(mol, df_basis)
     
@@ -354,8 +443,9 @@ for i, test_dist in enumerate(test_range):
     ints_3c2e_ip1 = df.incore.aux_e2(mol, auxmol, intor='int3c2e_ip1', comp=3)
     # Use the same metric as before
     deriv_cderi = np.einsum('PQ,xijP -> xijQ', metric, ints_3c2e_ip1)
+    """
     # To reconstruct the full 4c derivative integrals, we need to contract with the previous cderi integrals
-    df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, cd_array)
+    df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, Lpq_ao)
     
     h2_ao_deriv = df_grad_4c_ints
     h2_ao = lib.einsum('Pij,Pkl->ijkl', Lpq_ao, Lpq_ao)
@@ -369,7 +459,10 @@ for i, test_dist in enumerate(test_range):
     #grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
 
     #cont_lr_grad[i] = out[2]
-    cont_lr_grad[i] = out[2] #- grad_nuc
+    if remove_nuclear_grad:
+        cont_lr_grad[i] = out[2] - grad_nuc
+    else:
+        cont_lr_grad[i] = out[2]
 
     # Only do FCI if number of orbitals is less than 16
     if mol.nao < 16 and (cont_solver == 'FCI' or fci_done):
@@ -392,8 +485,11 @@ for i, test_dist in enumerate(test_range):
             
         ref_grad[i] = np.array(grad_ref_l)
         
-        grad_ref = grad_method.kernel(state=0) #- grad_method.grad_nuc()
-        
+        if remove_nuclear_grad:
+            grad_ref = grad_method.kernel(state=0) - grad_method.grad_nuc()
+        else:
+            grad_ref = grad_method.kernel(state=0) #- grad_method.grad_nuc()
+
     else:
         fci_done = False
 
@@ -445,12 +541,12 @@ for i, test_dist in enumerate(test_range):
         continuation_object_full.one_rdm,
         two_rdm_to_comp,#continuation_object_full.two_rdm, 
         continuation_object_full.overlap,
-        nroots=nroots_evcont+1
+        nroots=nroots_to_compute
     )
     
     # Get grad
     grad_cont = []
-    for i_state in range(nroots_evcont+1):
+    for i_state in range(nroots_to_compute):
         vec_i = vec[i_state,:]
         vec_j = vec_i
         
@@ -464,13 +560,16 @@ for i, test_dist in enumerate(test_range):
                                     two_rdm_predicted)
         grad_cont.append(grad_i + grad_nuc)
     
-    cont_grad[i] = np.array(grad_cont) #- grad_nuc
+    if remove_nuclear_grad:
+        cont_grad[i] = np.array(grad_cont) - grad_nuc
+    else:
+        cont_grad[i] = np.array(grad_cont) #- grad_nuc
 
     out_full = get_multistate_energy_with_grad_and_NAC(mol,
                                                        continuation_object_full.one_rdm,
                                                        two_rdm_to_comp, #continuation_object_full.two_rdm,
                                                        continuation_object_full.overlap,
-                                                       nroots=nroots_evcont+1, savemem=True)
+                                                       nroots=nroots_to_compute, savemem=True)
     
     cont_en[i,:] = en_continuation_ms + mol.energy_nuc()
     
@@ -482,7 +581,11 @@ for i, test_dist in enumerate(test_range):
 
     else:
         print(ehf, ref_en[i,:], cont_en[i], cont_lowrank_en[i])
-        print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]), np.linalg.norm(out_full[2][0]-out[2][0]))
+        print('grad', np.linalg.norm(grad_ref-out[2][0]),
+              np.linalg.norm(grad_cont[0]-out[2][0]), 
+              np.linalg.norm(out_full[2][0]-out[2][0]), 
+              np.linalg.norm(grad_num[0]-out[2][0]),
+              )
         #print('nac','\n', out[4],'\n', out_full[4])
         #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
         #1/0
@@ -556,6 +659,8 @@ if nroots_evcont > 1:
     ax1.plot(test_range,cont_lowrank_en,'--r',label=['low rank evcont']+[None]*(cont_lowrank_en.shape[-1]-1))
     ax4.plot(test_range,np.linalg.norm(cont_grad,axis=(2,3)),'b',label=['full evcont']+[None]*(cont_en.shape[-1]-1))
     ax4.plot(test_range,np.linalg.norm(cont_lr_grad,axis=(2,3)),'--r',label=['low rank evcont']+[None]*(cont_lowrank_en.shape[-1]-1))
+    ax4.plot(test_range,np.linalg.norm(num_lr_grad,axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7,label=['numerical lowrank']+[None]*(cont_en.shape[-1]-1))
+
 else:
     if (cont_solver == 'FCI' or fci_done):
         ax1.plot(test_range,fci_en,'k',label='FCI')
@@ -568,6 +673,7 @@ else:
 ax1.plot(trainig_dists,train_en,'xb')
 ax1.plot(trainig_dists,train_lowrank_en,'xr')
 ax1.legend()
+ax4.legend()
 
 if (cont_solver == 'FCI' or fci_done):
     ax2.plot(test_range,cont_en[:,:nroots_evcont] - fci_en,'b')
@@ -575,6 +681,7 @@ if (cont_solver == 'FCI' or fci_done):
 
     ax5.plot(test_range,np.linalg.norm(cont_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'b')
     ax5.plot(test_range,np.linalg.norm(cont_lr_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'--r')
+    ax5.plot(test_range,np.linalg.norm(num_lr_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7)
 
 if cont_solver != 'FCI':
     ax3.plot(test_range,cont_en[:,:nroots_evcont] - ref_en,'b')
@@ -587,6 +694,8 @@ else:
     ax3.set_ylabel(r'$E_{cont}$ - $E_{lowrank}$ (Ha)')
     
     ax6.plot(test_range,np.linalg.norm(cont_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'--r')
+    ax6.plot(test_range,np.linalg.norm(cont_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'--r')
+    ax6.plot(test_range,np.linalg.norm(num_lr_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7)
 
     
 ax1.set_title('Energy')

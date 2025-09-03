@@ -48,7 +48,7 @@ from pyscf.df.grad.rhf import Gradients as mf_grad_df
 from pyscf.grad.rhf import get_jk as get_jk_grad_nodf
 from pyscf.grad.rhf import Gradients as mf_grad_nodf
 
-from evcont.electron_integral_utils import get_loewdin_trafo, get_integrals
+from evcont.electron_integral_utils import get_loewdin_trafo, get_integrals, get_df_integrals
 from evcont.logging_utils import logger, log_time, timeit
 
 ########################################################################
@@ -309,9 +309,10 @@ def reconstruct_subspace(lowrank_vecs, h2, ntrain=3):
 ########################################################################
 @timeit         
 def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
-                        sao_basis=None, df_basis=None, coul_diag_only=True,
+                        sao_basis=None, df_basis=None, 
+                        coul_diag_only=True, sao_diag=True,
                         hermitian=True,
-                        debug=False):
+                        debug=True):
     """
     Construct subspace Hamiltonian using the low-rank decomposition of 
     2-transition-cumulant
@@ -344,12 +345,18 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     h1e_sao = np.einsum('ai,ab,bj->ij', sao_basis, h1_ao, sao_basis)
     
     # Get ERIs in SAO basis (using density fitting) for debugging
-    if debug:
-        print('Debug mode')
+    if debug or sao_diag:
         # Run calculation to fill the MF object
-        mf.scf()
+        #mf.scf()
+        #Lpq = mf.with_df._cderi
+        #print(Lpq.shape)
+        
+        # Alternative - without using MF object
+        Lpq = get_df_integrals(mol,auxbasis=df_basis)
+        Lpq = lib.pack_tril(Lpq)
+        #print(Lpq.shape)
 
-        Lpq_sao = ao2mo._ao2mo.nr_e2(mf.with_df._cderi, sao_basis,
+        Lpq_sao = ao2mo._ao2mo.nr_e2(Lpq, sao_basis,
             (0, sao_basis.shape[1], 0, sao_basis.shape[1]),aosym="s2",mosym="s2")
         Lpq_sao = lib.unpack_tril(Lpq_sao)
         df_eri_sao = lib.einsum('Pij,Pkl->ijkl', Lpq_sao, Lpq_sao)
@@ -489,40 +496,54 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
 
         if use_diag:
             
-            # Transform the low-rank vecs into
-            diagJ_ao = np.einsum('Nij,wi,xi->Njwx',diagonals[0], sao_basis, sao_basis)
+            if not sao_diag:
+                # Transform the low-rank vecs into
+                diagJ_ao = np.einsum('Nij,wi,xi->Njwx',diagonals[0], sao_basis, sao_basis)
+    
+                # Flatten
+                orig_shape = diagJ_ao.shape[:2]
+                flat_diagJ_ao = diagJ_ao.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
+                
+                # JK Builds
+                vj_list = mf.with_df.get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
+    
+                # Unflatten
+                vj_unflat = vj_list.reshape(*orig_shape, *flat_diagJ_ao.shape[1:])  # (3, 4, 5, 6)
+                vj = unstack_tril(vj_unflat,hermitian=hermitian)
+    
+                subspace_h += 0.5 * np.einsum('yj,zj,XYjyz->XY', sao_basis, sao_basis, vj)
 
-            # Flatten
-            orig_shape = diagJ_ao.shape[:2]
-            flat_diagJ_ao = diagJ_ao.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
-            
-            # JK Builds
-            vj_list = mf.with_df.get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
-
-            # Unflatten
-            vj_unflat = vj_list.reshape(*orig_shape, *flat_diagJ_ao.shape[1:])  # (3, 4, 5, 6)
-            vj = unstack_tril(vj_unflat,hermitian=hermitian)
-
-            subspace_h += 0.5 * np.einsum('yj,zj,XYjyz->XY', sao_basis, sao_basis, vj)
+            else:
+                diagJ_unpack = unstack_tril(diagonals[0],hermitian=False)
+                subspace_h += 0.5 * np.einsum('XYij,Pii,Pjj->XY',diagJ_unpack, Lpq_sao, Lpq_sao)
 
         
             if not coul_diag_only:
-                # Transform the low-rank vecs into
-                diagK_ao = np.einsum('Nij,wi,yi->Njwy',diagonals[1], sao_basis, sao_basis)
-
-                # Flatten
-                orig_shape = diagK_ao.shape[:2]
-                flat_diagK_ao = diagK_ao.reshape(orig_shape[0] * orig_shape[1], *diagK_ao.shape[2:])
                 
-                # JK Builds
-                vk_list = mf.with_df.get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
+                if not sao_diag:
+                    # Transform the low-rank vecs into
+                    diagK_ao = np.einsum('Nij,wi,yi->Njwy',diagonals[1], sao_basis, sao_basis)
+    
+                    # Flatten
+                    orig_shape = diagK_ao.shape[:2]
+                    flat_diagK_ao = diagK_ao.reshape(orig_shape[0] * orig_shape[1], *diagK_ao.shape[2:])
+                    
+                    # JK Builds
+                    vk_list = mf.with_df.get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
+    
+                    # Unflatten
+                    vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
+                    vk = unstack_tril(vk_unflat,hermitian=hermitian)
+    
+                    subspace_h += 0.5 * np.einsum('xj,zj,XYjxz->XY', sao_basis, sao_basis, vk)
 
-                # Unflatten
-                vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
-                vk = unstack_tril(vk_unflat,hermitian=hermitian)
+                else:
+                    diagK_unpack = unstack_tril(diagonals[1],hermitian=False)
+                    #print(diagJ_unpack.shape)
+                    #1/0
 
-                subspace_h += 0.5 * np.einsum('xj,zj,XYjxz->XY', sao_basis, sao_basis, vk)
-
+                    subspace_h += 0.5 * np.einsum('XYij,Pij,Pij->XY',diagK_unpack, Lpq_sao, Lpq_sao)
+                    
         
     if hermitian:
         # Set the upper triangle
@@ -536,7 +557,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
 ###############################################################################
 @timeit
 def get_jk_builds(mol, lowrank_vecs,
-                  diagonals=None, coul_diag_only=True,
+                  diagonals=None, coul_diag_only=True, sao_diag=True,
                   ao_mo_trafo=None,
                   density_fit=False, df_basis=None,
                   df_response=False):
@@ -691,8 +712,8 @@ def get_jk_builds(mol, lowrank_vecs,
             vj_r_grad = lib.tag_array(vhf_grad_t, aux=np.array(vj_r_aux))
 
     # Diagonal JK builds
-    if use_diag:
-        
+    if use_diag and not sao_diag:
+                
         ### First the Coulomb build
         
         # Expand out the 'i' indices for J builds
@@ -773,7 +794,7 @@ def get_jk_builds(mol, lowrank_vecs,
     if lowrank_vecs['has_svd']:
         svd_return = (svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, vj_left, vj_right, vj_l_grad, vj_r_grad)
 
-    if use_diag:
+    if use_diag and not sao_diag:
         diag_return = (vj, vj_grad, vj_grad_t, vk, vk_grad)
 
     return ed_return, svd_return, diag_return
