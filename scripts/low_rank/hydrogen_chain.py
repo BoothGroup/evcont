@@ -77,6 +77,10 @@ if fix_sym == None:
 else:
     mol_sym = True
     
+use_diag = True
+Jdiag_only = True # Only use diagonal corrections that contribute as J builds
+sao_diag = False # Diagonal inference in SAO basis
+
 lowrank_kwargs = {
     'truncation_style':'nvec', 
     'nvecs':10,
@@ -87,21 +91,17 @@ lowrank_kwargs = {
 
 #lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-12}
 lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
-#lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
+lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.001, 'save_diag':use_diag}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
-#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1, 'save_diag':True}
-lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':3, 'save_diag':True}
+#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1, 'save_diag':use_diag}
+#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':3, 'save_diag':True}
 
 vectorize = True
 
-use_diag = True
-coul_diag_only = False # Only use diagonal corrections that contribute as J builds
-sao_diag = False # Diagonal inference in SAO basis
-
 # For testing, use reconstructed 2tRDM instead of full evcont
 # - to see if fast inference is working as intended
-compare_to_reconstruct = True
+compare_to_reconstruct = False
 
 # If true, remove other contributions (nuclear terms)
 remove_nuclear_grad = False
@@ -200,7 +200,7 @@ equilibrium_dist = 1.78596
 
 equilibrium_pos = np.array([(x * equilibrium_dist, 0.0, 0.0) for x in range(10)])
 
-trainig_dists = [0.97, 1.76]#, 2.60]
+trainig_dists = [0.97, 1.76, 2.60]
 #trainig_dists = np.linspace(0.97,2.60,5)
 
 if cont_solver == 'FCI':
@@ -262,7 +262,7 @@ if use_diag:
     if not remove_Jdiag:
         diagonals_rec[:,:,0] = unstack_tril(diag_lr[0], False) #continuation_object.diagonal_lr[:,:,0]
     
-    if not coul_diag_only:
+    if not Jdiag_only:
         diagonals_rec[:,:,1:] = continuation_object.diagonal_lr[:,:,1:]
 
 from evcont.low_rank_utils import reconstruct_rdm2_joint
@@ -319,7 +319,7 @@ for i, test_dist in enumerate(trainig_dists):
         vecs_lr,
         diags, 
         continuation_object.overlap,
-        coul_diag_only=coul_diag_only,
+        Jdiag_only=Jdiag_only,
         sao_diag=sao_diag,
         nroots=nroots_evcont
     )
@@ -346,7 +346,7 @@ def lowrank_en(mol):
         vecs_lr,
         diags, 
         continuation_object.overlap,
-        coul_diag_only=coul_diag_only,
+        Jdiag_only=Jdiag_only,
         sao_diag=sao_diag,
         nroots=nroots_evcont+1
     )[0]
@@ -383,7 +383,7 @@ for i, test_dist in enumerate(test_range):
         diags, 
         continuation_object.overlap,
         nroots=nroots_to_compute,
-        coul_diag_only=coul_diag_only,
+        Jdiag_only=Jdiag_only,
         sao_diag=sao_diag,
         df_basis=df_basis
     )
@@ -395,7 +395,7 @@ for i, test_dist in enumerate(test_range):
                                            sao_diag=sao_diag,
                                            nroots=nroots_to_compute,
                                            density_fit=density_fit,
-                                           coul_diag_only=coul_diag_only,
+                                           Jdiag_only=Jdiag_only,
                                            df_basis=df_basis)
     #"""
     lr_tot += (time.time()-start); lr_n_eval += 1

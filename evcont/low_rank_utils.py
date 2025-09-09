@@ -48,7 +48,7 @@ from pyscf.df.grad.rhf import Gradients as mf_grad_df
 from pyscf.grad.rhf import get_jk as get_jk_grad_nodf
 from pyscf.grad.rhf import Gradients as mf_grad_nodf
 
-from evcont.electron_integral_utils import get_loewdin_trafo, get_integrals, get_df_integrals
+from evcont.electron_integral_utils import get_loewdin_trafo, get_integrals, get_df_integrals, get_basis
 from evcont.logging_utils import logger, log_time, timeit
 
 ########################################################################
@@ -94,10 +94,10 @@ def try_iterative_diag(mat, k, which='LM', use_svd=False, max_time=100000):
 @timeit
 def reduce_2rdm(rdm1, rdm2, ovlp, 
                 truncation_style='eigval',nvecs=10, eval_thr=0.1, ham_thr=0.001,
-                diag_mask=None, save_diag=False,
+                save_diag=False,
                 use_svd=False,
                 iterative=False, nit=None, max_iter_time=10000,
-                mol=None,train_en=None):
+                mol=None,train_en=None,Jdiag_only=True):
     """
     Function to lower the rank of 2-transition-RDM between a pair of 
     training states into the diagonals of 2-transition-cumulant and
@@ -121,6 +121,12 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
 
         diag_mas (np.array([n,n,n,n])): Mask choosing diagonal matrices of (n,n,n,n) tensor. Computed 
                                         OTF if not given
+                           
+        # Parameters relevant for Hamiltonian error truncation
+        mol (pyscf Mole object): Molecule object that is used for computing the Hamiltonian error
+        train_en (float):  Energy of the training geometry used for the truncation
+        Jdiag_only (bool): Whether only Coulomb diagonals are used in the inference when determining the 
+                           Hamiltonian error truncation
 
     Output:
         lowrank_vecs (vals_trunc, vecs_trunc): Low rank eigenvalues and eigenvectors of off-diagonal 2-cumulant
@@ -176,81 +182,96 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     #### Select low rank vectors
     
     # Choose at least one vector (lower bound for dynamic truncation)
-    min_nvecs = 1
+    min_nvecs = 2
     
-    # Fixed truncation based on 'nvecs' parameter
-    # Or dynamic truncation based on the eigenvalue magnitude
-    if truncation_style in ['eigval','nvec']:
-        
-        # Choose the most compact decomposition between joint eigendecomp and Coulomb SVD
-        if not joint:
-            # If not Hermitian, just use SVD
-            lowrank_vecs = select_lowrank(evals, evecs, norb, rightvecs=rightvecs, truncation_style=truncation_style, 
-                                          nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
-            
-        else:
-            
-            lowrank_vecs_joint = select_lowrank(evals, evecs, norb, rightvecs=rightvecs, truncation_style=truncation_style, 
-                                          nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
-            
-            if not use_svd:
-                lowrank_vecs = lowrank_vecs_joint
-
-            else:
-                # TODO: Add considerations for norm error; not just compactness
-                # SVD as well
-                if not iterative:
-                    evecs2, evals2, rightvecs2 = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
-                else:
-                    evecs2, evals2, rightvecs2 = svds(rdm2.reshape((norb_sq, norb_sq)), k=nit, which='LM')
-
-                
-                lowrank_vecs_svd = select_lowrank(evals2, evecs2, norb, rightvecs=rightvecs2, truncation_style=truncation_style, 
-                                              nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
-                
-                # Check which one is more compact
-                if truncation_style == 'eigval':
-                    if len(lowrank_vecs_joint[0]) < len(lowrank_vecs_svd[0]):
-                        lowrank_vecs = lowrank_vecs_joint
-                    else:
-                        print('**Using SVD')
-                        lowrank_vecs = lowrank_vecs_svd
-                        joint = False
-                        
-                else:
-                    if np.abs(lowrank_vecs_joint[0]).max() < np.abs(lowrank_vecs_svd[0]).max():
-                        lowrank_vecs = lowrank_vecs_joint
-                    else:
-                        print('**Using SVD')
-                        lowrank_vecs = lowrank_vecs_svd
-                        joint = False
-    
-    elif truncation_style in ['ham','ham_en']:
-        
-        print('Error in reduce_2rdm: Hamiltonian error not implemented yet.')
-        sys.exit()
-        #### NEED TO CHANGE FOR THE NEW IMPLEMENTATION
-        diagonals = None
-        
-        # Make sure the mol and training energy is given for this truncation
+    # Make sure the mol and training energy is given for this truncation
+    if truncation_style in ['ham','ham_en']:
         if mol is None or train_en is None:
             print('Error in reduce_2rdm: Insufficient input for decomposition based on Hamiltonian error.')
             sys.exit()
             
-        lowrank_vecs = select_lowrank_ham(evals, evecs, diagonals, norb,
-                               rdm1, ovlp,
-                               mol, train_en,
-                               rightvecs=rightvecs,
-                               truncation_style=truncation_style,
-                               ham_thr=ham_thr, min_nvec=min_nvecs)
-        #print('Error in reduce_2rdm: Truncation based on subspace Hamiltonian elements has not been implemented yet.')
-        #sys.exit()
-
-    else:
+    elif truncation_style not in ['eigval','nvec']:
         print('Unknown truncation_style in reduce_2rdm: %s'%truncation_style)
         sys.exit()    
+        
+    # Fixed truncation based on 'nvecs' parameter
+    # Or dynamic truncation based on the eigenvalue magnitude
+        
+    # Choose the most compact decomposition between joint eigendecomp and Coulomb SVD
+    if not joint:
+        
+        if truncation_style in ['eigval','nvec']:
+
+            # If not Hermitian, just use SVD
+            lowrank_vecs = select_lowrank(evals, evecs, norb, rightvecs=rightvecs, truncation_style=truncation_style, 
+                                          nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
+        elif truncation_style in ['ham','ham_en']:
+                
+            lowrank_vecs = select_lowrank_ham(evals, evecs, joint, norb,
+                                   rdm2, rdm1, ovlp, save_diag,
+                                   mol, train_en, Jdiag_only,
+                                   rightvecs=rightvecs,
+                                   truncation_style=truncation_style,
+                                   ham_thr=ham_thr, min_nvec=min_nvecs)
+    else:
+        if truncation_style in ['eigval','nvec']:
+
+            lowrank_vecs_joint = select_lowrank(evals, evecs, norb, rightvecs=rightvecs, 
+                                                truncation_style=truncation_style, 
+                                                nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
+            
+        elif truncation_style in ['ham','ham_en']:
+                
+            lowrank_vecs_joint = select_lowrank_ham(evals, evecs, joint, norb,
+                                   rdm2, rdm1, ovlp,save_diag,
+                                   mol, train_en, Jdiag_only,
+                                   rightvecs=rightvecs,
+                                   truncation_style=truncation_style,
+                                   ham_thr=ham_thr, min_nvec=min_nvecs)
+            
+        if not use_svd:
+            lowrank_vecs = lowrank_vecs_joint
+
+        else:
+            # TODO: Add considerations for norm error; not just compactness
+            # SVD as well
+            if not iterative:
+                evecs2, evals2, rightvecs2 = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
+            else:
+                evecs2, evals2, rightvecs2 = svds(rdm2.reshape((norb_sq, norb_sq)), k=nit, which='LM')
+
+            if truncation_style in ['eigval','nvec']:
+
+                lowrank_vecs_svd = select_lowrank(evals2, evecs2, norb, rightvecs=rightvecs2, truncation_style=truncation_style, 
+                                              nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
+            
+            elif truncation_style in ['ham','ham_en']:
+                    
+                lowrank_vecs_svd = select_lowrank_ham(evals2, evecs2, joint, norb,
+                                       rdm2, rdm1, ovlp,save_diag,
+                                       mol, train_en, Jdiag_only,
+                                       rightvecs=rightvecs2,
+                                       truncation_style=truncation_style,
+                                       ham_thr=ham_thr, min_nvec=min_nvecs)
+                
+            # Check which one is more compact
+            if truncation_style == 'eigval':
+                if len(lowrank_vecs_joint[0]) < len(lowrank_vecs_svd[0]):
+                    lowrank_vecs = lowrank_vecs_joint
+                else:
+                    print('**Using SVD')
+                    lowrank_vecs = lowrank_vecs_svd
+                    joint = False
+                    
+            else:
+                if np.abs(lowrank_vecs_joint[0]).max() < np.abs(lowrank_vecs_svd[0]).max():
+                    lowrank_vecs = lowrank_vecs_joint
+                else:
+                    print('**Using SVD')
+                    lowrank_vecs = lowrank_vecs_svd
+                    joint = False
+
     ########################################################################
-    
     if not save_diag:
         diagonals = None
         
@@ -268,14 +289,8 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
                 diagonals[1, i, j] = remainder[ i, j, i, j]
                 diagonals[2, i, j] = remainder[ i, j, j, i]
 
-        # If not given to the function, compute the diagonal mask
-        #if diag_mask is None:
-        #    diag_mask = build_diag_mask(norb)
-        #mat_decomp -= diag_mask*mat_decomp
-
     print('-- Norm error:', np.linalg.norm(reconstruct_rdm2_joint(lowrank_vecs, diagonals, joint=joint) - rdm2))
 
-          
     return lowrank_vecs, diagonals, joint
 
 def reconstruct_rdm2_joint(lowrank_vecs, diagonals=None, joint=True):
@@ -309,8 +324,8 @@ def reconstruct_subspace(lowrank_vecs, h2, ntrain=3):
 ########################################################################
 @timeit         
 def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
-                        sao_basis=None, df_basis=None, 
-                        coul_diag_only=True, sao_diag=True,
+                        sao_basis=None, density_fit=True, df_basis=None, 
+                        Jdiag_only=True, sao_diag=True,
                         hermitian=True,
                         debug=True):
     """
@@ -321,6 +336,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
         mol (Mole object): pySCF mole object at the test geometry
         
     """
+
     ### Preliminaries
     ntrain = S.shape[0]
     
@@ -334,7 +350,15 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
         
     # Initiate the mean field object to use DF integrals (no need to use kernel)
     #mol.symmetry = False
-    mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
+    if density_fit:
+        mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
+        mf_grad = mf_grad_df
+        get_jk = mf.with_df.get_jk
+        
+    else:
+        mf = scf.RHF(mol)
+        mf_grad = mf_grad_nodf
+        get_jk = mf.get_jk
     
     # AO to SAO basis transformation
     if sao_basis is None:
@@ -359,10 +383,10 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
         Lpq_sao = ao2mo._ao2mo.nr_e2(Lpq, sao_basis,
             (0, sao_basis.shape[1], 0, sao_basis.shape[1]),aosym="s2",mosym="s2")
         Lpq_sao = lib.unpack_tril(Lpq_sao)
-        df_eri_sao = lib.einsum('Pij,Pkl->ijkl', Lpq_sao, Lpq_sao)
+        df_eri_sao = lib.einsum('Pij,Pkl->ijkl', Lpq_sao, Lpq_sao,optimize='optimal')
 
     ### 1-body contributions
-    subspace_h = np.einsum('...kl,kl->...', one_RDM, h1e_sao)
+    subspace_h = np.einsum('...kl,kl->...', one_RDM, h1e_sao,optimize='optimal')
 
     # Check if low-rank vectors have been vectorized
     if ('vals' in lowrank_vecs):
@@ -395,7 +419,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     
                 # JK build
                 if use_joint:
-                    vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+                    vj_list, vk_list = get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
                     subspace_h[bra,ket] += 0.5*np.einsum('aij,aij,a->', vj_list - 0.5 * vk_list, lr_vecs_ao.conj(), lowrank_vecs[(bra, ket)][0])
         
                 # J build from SVD
@@ -416,23 +440,23 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                         subspace_h[bra,ket] += 0.5*np.einsum('ijkl,ijkl->', rdm2_i, df_eri_sao)
                         
                     else:
-                        vj_list, vk_list = mf.with_df.get_jk(dm=lr_rightvecs_ao, hermi=0, with_k=False)  # Specify hermiticity per case
+                        vj_list, vk_list = get_jk(dm=lr_rightvecs_ao, hermi=0, with_k=False)  # Specify hermiticity per case
                         subspace_h[bra,ket] += 0.5*np.einsum('aij,aij,a->', vj_list, lr_vecs_ao, lowrank_vecs[(bra, ket)][0])
 
                 if use_diag:
                     
                     # Avoid transforming DF array, and do everything via Coulomb and exchange builds
                     diag_ao_1 = np.einsum('ij,wi,xi->jwx',diagonals[bra, ket, 0, :, :], sao_basis, sao_basis)
-                    vj = mf.with_df.get_jk(dm = diag_ao_1, hermi=0, with_k=False)[0]
+                    vj = get_jk(dm = diag_ao_1, hermi=0, with_k=False)[0]
                     subspace_h[bra, ket] += 0.5 * np.einsum('yj,zj,jyz->', sao_basis, sao_basis, vj)
             
-                    if not coul_diag_only:
+                    if not Jdiag_only:
                         diag_ao_23 = np.einsum('ij,wi,yi->jwy',diagonals[bra, ket, 1, :, :] + diagonals[bra, ket, 2, :, :], sao_basis, sao_basis)
-                        vk = mf.with_df.get_jk(dm = diag_ao_23, hermi=0, with_j=False)[1]
+                        vk = get_jk(dm = diag_ao_23, hermi=0, with_j=False)[1]
                         subspace_h[bra, ket] += 0.5 * np.einsum('xj,zj,jxz->', sao_basis, sao_basis, vk)
             
                     #diag_ao_3 = np.einsum('ij,wi,yi->jwy', diagonals[bra, ket, 2, :, :], sao_basis, sao_basis)
-                    #vk = mf.with_df.get_jk(dm = diag_ao_3, hermi=0, with_j=False)[1]
+                    #vk = get_jk(dm = diag_ao_3, hermi=0, with_j=False)[1]
                     #subspace_h[bra, ket] += 0.5 * np.einsum('xj,zj,jxz->', sao_basis, sao_basis, vk)
                     
                     """
@@ -455,7 +479,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
             lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
             
             # JK build
-            vj_list, vk_list = mf.with_df.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+            vj_list, vk_list = get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
             vhf = vj_list - 0.5*vk_list
             
             # Reindex to separate bra, ket, nvec indices
@@ -482,7 +506,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
             svd_vecs_ao = svd_vecs_ao.reshape((svd_vecs_grouped.shape[0],norb,norb))
             
             # J build
-            vj_list, _ = mf.with_df.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)  # Specify hermiticity per case
+            vj_list, _ = get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)  # Specify hermiticity per case
     
             # Reindex to separate bra, ket, nvec indices
             vj = unpack_vec(vj_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian)
@@ -505,7 +529,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                 flat_diagJ_ao = diagJ_ao.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
                 
                 # JK Builds
-                vj_list = mf.with_df.get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
+                vj_list = get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
     
                 # Unflatten
                 vj_unflat = vj_list.reshape(*orig_shape, *flat_diagJ_ao.shape[1:])  # (3, 4, 5, 6)
@@ -518,7 +542,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                 subspace_h += 0.5 * np.einsum('XYij,Pii,Pjj->XY',diagJ_unpack, Lpq_sao, Lpq_sao)
 
         
-            if not coul_diag_only:
+            if not Jdiag_only:
                 
                 if not sao_diag:
                     # Transform the low-rank vecs into
@@ -529,7 +553,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                     flat_diagK_ao = diagK_ao.reshape(orig_shape[0] * orig_shape[1], *diagK_ao.shape[2:])
                     
                     # JK Builds
-                    vk_list = mf.with_df.get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
+                    vk_list = get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
     
                     # Unflatten
                     vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
@@ -539,12 +563,9 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
 
                 else:
                     diagK_unpack = unstack_tril(diagonals[1],hermitian=False)
-                    #print(diagJ_unpack.shape)
-                    #1/0
 
                     subspace_h += 0.5 * np.einsum('XYij,Pij,Pij->XY',diagK_unpack, Lpq_sao, Lpq_sao)
                     
-        
     if hermitian:
         # Set the upper triangle
         subspace_h[np.triu_indices(ntrain)] = subspace_h.T[np.triu_indices(ntrain)].conj()
@@ -557,7 +578,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
 ###############################################################################
 @timeit
 def get_jk_builds(mol, lowrank_vecs,
-                  diagonals=None, coul_diag_only=True, sao_diag=True,
+                  diagonals=None, Jdiag_only=True, sao_diag=True,
                   ao_mo_trafo=None,
                   density_fit=False, df_basis=None,
                   df_response=False):
@@ -727,7 +748,7 @@ def get_jk_builds(mol, lowrank_vecs,
         
         # JK Builds
         with log_time("Diag J Builds (1)"):
-            vj_list = mf.with_df.get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
+            vj_list = get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
 
         # JK grad builds
         with log_time("Diag Grad J Builds (1)"):
@@ -744,7 +765,7 @@ def get_jk_builds(mol, lowrank_vecs,
         #vj_grad_t_unflat = vj_grad_t_list.reshape(*orig_shape, *vj_grad_t_list.shape[1:])  
         #vj_grad_t = unstack_tril(vj_grad_t_unflat,hermitian=hermitian)
     
-        if not coul_diag_only:
+        if not Jdiag_only:
             # Transform the low-rank vecs into
             diagK_ao = np.einsum('Nij,wi,yi->Njwy',diagonals[1], ao_mo_trafo, ao_mo_trafo,optimize='optimal')
             diagK_ao_T = np.einsum('Nji,wi,yi->Njwy',diagonals[1], ao_mo_trafo, ao_mo_trafo,optimize='optimal')
@@ -756,8 +777,8 @@ def get_jk_builds(mol, lowrank_vecs,
             
             # JK Builds
             with log_time("Diag K Builds (1)"):
-                vk_list = mf.with_df.get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
-                vk_t_list = mf.with_df.get_jk(dm = flat_diagK_ao_T, hermi=0, with_j=False)[1]
+                vk_list = get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
+                vk_t_list = get_jk(dm = flat_diagK_ao_T, hermi=0, with_j=False)[1]
     
             # JK grad builds
             with log_time("Diag Grad K Builds (1)"):
@@ -825,10 +846,11 @@ def select_lowrank(evals, evecs, norb,
 
     return vals_trunc, vecs_trunc, rightvecs_trunc
 
-def select_lowrank_ham(evals, evecs, diagonal, norb,
-                       rdm1, ovlp,
-                       mol, training_energy,
+def select_lowrank_ham(evals, evecs, joint, norb,
+                       rdm2, rdm1, ovlp, save_diag,
+                       mol, training_energy, Jdiag_only,
                        rightvecs=None,
+                       density_fit=True,
                        truncation_style='ham',
                        ham_thr=0.001, min_nvec=0
                        ):
@@ -840,8 +862,15 @@ def select_lowrank_ham(evals, evecs, diagonal, norb,
     """
     # Check if right eigenvectors are given
     if rightvecs is None:
-        rightvecs = evecs.transpose(1,0)
+        rightvecs = evecs.T
 
+    """
+    lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
+                            sao_basis=None, df_basis=None, 
+                            Jdiag_only=True, sao_diag=True,
+                            hermitian=True,
+                            debug=True)
+    """
     # Sort the eigenstates by the square of their eigenvalue
     idx = (-np.power(evals, 2)).argsort()
     evals_sort = evals[idx]
@@ -852,26 +881,47 @@ def select_lowrank_ham(evals, evecs, diagonal, norb,
     one_RDM = np.zeros([1,1,norb,norb])
     one_RDM[0,0,:,:] = rdm1
     
-    cum_diagonal = np.zeros([1,1,3,norb,norb])
-    cum_diagonal[0,0,:,:,:] = diagonal
-    
     S = np.array([[ovlp]])
     
     # Exact element of subspace Hamiltonian
     ham_training = ovlp * training_energy
     
+    # For direct contraction
+    h1, h2 = get_integrals(mol, get_basis(mol))
+
     # Iterate over subset
     ham_err = [1000,1000]
     nvecs = 0
-    while (abs(ham_err[-1]) > ham_thr or abs(ham_err[-2]) > ham_thr) and nvecs <= norb*norb:
+    while ((abs(ham_err[-1]) > ham_thr or abs(ham_err[-2]) > ham_thr) or nvecs < min_nvec+2) and nvecs <= norb*norb:
         # Truncate
         vals_trunc = evals_sort[:nvecs]
         vecs_trunc = evecs_sort[:,:nvecs].reshape((norb, norb, nvecs))
-        lowrank_vecs = {(0,0):(vals_trunc,vecs_trunc)}
+        rightvecs_trunc = rightvecs_sort[:nvecs,:].reshape((nvecs,norb, norb))
+
+        #lowrank_vecs = {(0,0):(vals_trunc,vecs_trunc, rightvecs_trunc)}
         
+        # Diagonal of the remainder
+        rdm2_reconstructed = reconstruct_rdm2_joint((vals_trunc,vecs_trunc, rightvecs_trunc),
+                                                    joint=joint)
+        
+        if save_diag:
+            remainder = rdm2 - rdm2_reconstructed
+            
+            # Fix the diagonals
+            for (i,j) in itertools.product(range(norb), range(norb)):
+                rdm2_reconstructed[ i, i, j, j] += remainder[ i, i, j, j]
+                if not Jdiag_only and i!= j:
+                    rdm2_reconstructed[ i, j, i, j] += remainder[ i, j, i, j]
+                    rdm2_reconstructed[ i, j, j, i] += remainder[ i, j, j, i]
+
         # Compute subspace Hamiltonian
-        ham_new = lowrank_hamiltonian(mol, one_RDM, S, cum_diagonal, 
-                                      lowrank_vecs, sao_basis=None)[0,0]
+        ham_new = lib.einsum('ij,ij->',h1,rdm1) + 0.5*lib.einsum('ijkl,ijkl->',h2,rdm2_reconstructed)
+
+        # Since rdm2 is already reconstructed, it's better to use that for now
+        #ham_new = lowrank_hamiltonian(mol, one_RDM, S, diagonals, 
+        #                              lowrank_vecs, sao_basis=None,
+        #                              Jdiag_only=Jdiag_only, 
+        #                              density_fit=density_fit)[0,0]
         
         # Compute error and go to next iteration to see if it is good enough
         if truncation_style == 'ham':
@@ -887,12 +937,15 @@ def select_lowrank_ham(evals, evecs, diagonal, norb,
     if nvecs > norb*norb:
         nvec_select = norb*norb 
     else:
-        nvec_select = max(min_nvec, nvecs-2)
+        #nvec_select = max(min_nvec, nvecs-2)
+        nvec_select = nvecs-2
         
+    print(nvec_select)
     vals_trunc = evals_sort[:nvec_select]
     vecs_trunc = evecs_sort[:,:nvec_select].reshape((norb, norb, nvec_select))
-    
-    return vals_trunc, vecs_trunc
+    rightvecs_trunc = rightvecs_sort[:nvec_select,:].reshape((nvec_select,norb, norb))
+
+    return vals_trunc, vecs_trunc, rightvecs_trunc
     
 ###############################################################################
 def stack_lowrank(vecs_lowrank, hermitian=True):

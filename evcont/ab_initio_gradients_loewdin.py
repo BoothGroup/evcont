@@ -1173,12 +1173,12 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
             vj_l_grad, vj_r_grad = SVD_builds
 
     # Unpack diagonal builds
-    use_diag, coul_diag_only = False, True
+    use_diag, Jdiag_only = False, True
     if diag_builds is not None:
         use_diag = True
         (vj, vj_grad, vk, vk_t, vk_grad, vk_grad_t) = diag_builds
         if vk is not None:
-            coul_diag_only = False
+            Jdiag_only = False
 
     # If SAO implementation for diagonal corrections 
     if ints_SAO is not None:
@@ -1187,11 +1187,11 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
         Lpq, Lpq_sao, Lpq_grad_sao = ints_SAO
         
         if len(Lpq_grad_sao.shape) == 5:
-            coul_diag_only = False
+            Jdiag_only = False
             Lpq_grad_sao_diag = np.einsum('nPiaa->nPia',Lpq_grad_sao)
             
         elif len(Lpq_grad_sao.shape) == 4:
-            coul_diag_only = True
+            Jdiag_only = True
             Lpq_grad_sao_diag = Lpq_grad_sao
 
         else:
@@ -1248,7 +1248,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
             #pulay_term += lib.einsum('zj,ABjyz->AByj', 
             #                           ao_mo_trafo, vj + vj.transpose(0,1,2,4,3),
             #                           optimize='optimal')
-            if not coul_diag_only:
+            if not Jdiag_only:
 
                 pulay_term += 2*lib.einsum('xi,ABiwx->ABwi', 
                                            ao_mo_trafo, vk + vk_t,
@@ -1264,7 +1264,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
                                        Lpq_sao,
                                        optimize='optimal')
 
-            if not coul_diag_only:
+            if not Jdiag_only:
                 # TODO: diag_K contributions
                 diagK_unpack = unstack_tril(diagonals[1],hermitian=False)
 
@@ -1318,7 +1318,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
             #                        vj_grad_t, ao_mo_trafo, ao_mo_trafo,
             #                        optimize='optimal')
             
-            if not coul_diag_only:
+            if not Jdiag_only:
 
                 grad_h2 += 2*lib.einsum('ABinwy,wi,yi->ABnw',
                                         vk_grad, ao_mo_trafo, ao_mo_trafo,
@@ -1337,7 +1337,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
             # so we need to subtract these contributions in SAO
             grad_h2 -= 2 * lib.einsum('ABab,nPia,Pbb->ABni',diagJ_unpack + diagJ_unpack.transpose(0,1,3,2), Lpq_grad_sao_diag, Lpq_sao)
 
-            if not coul_diag_only:
+            if not Jdiag_only:
 
                 diagK_unpack = unstack_tril(diagonals[1],hermitian=False)
                 
@@ -1376,7 +1376,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
 
 @timeit
 def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, 
-                                     diagonals=None, coul_diag_only=True, sao_diag=False,
+                                     diagonals=None, Jdiag_only=True, sao_diag=False,
                                      nroots=1, 
                                      density_fit=False, df_basis=None,
                                      ao_mo_trafo=None, ao_mo_trafo_grad=None,
@@ -1423,7 +1423,7 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
     ED_builds, SVD_builds, diag_builds = get_jk_builds(
         mol, lowrank_vecs,
         diagonals=diagonals, 
-        coul_diag_only=coul_diag_only, 
+        Jdiag_only=Jdiag_only, 
         sao_diag=False, # TODO: Need to change this once sao diag is fully implemented - for now always computes the JK builds for diags
         ao_mo_trafo=ao_mo_trafo,
         density_fit=density_fit, 
@@ -1477,7 +1477,7 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
             # Explicit transformation (for testing, comment out later)
             #Lpq_grad_sao = np.einsum('xabP,ia,jb->xPij',Lpq_grad,ao_mo_trafo,ao_mo_trafo)
             
-            if coul_diag_only:
+            if Jdiag_only:
                 Lpq_grad_sao = np.einsum('ia,ja,nijP->nPia', ao_mo_trafo, ao_mo_trafo, Lpq_grad, optimize='optimal')
             else:
                 Lpq_grad_sao = np.einsum('ia,jb,nijP->nPiab', ao_mo_trafo, ao_mo_trafo, Lpq_grad, optimize='optimal')
@@ -1504,13 +1504,13 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
             
             if not sao_diag:
                 subspace_h += 0.5 * np.einsum('yj,zj,XYjyz->XY', ao_mo_trafo, ao_mo_trafo, vj)
-                if not coul_diag_only:
+                if not Jdiag_only:
                     subspace_h += 0.5 * np.einsum('xj,zj,XYjxz->XY', ao_mo_trafo, ao_mo_trafo, vk)
 
             else:
                 diagJ_unpack = unstack_tril(diagonals[0],hermitian=False)
                 subspace_h += 0.5 * np.einsum('XYij,Pii,Pjj->XY',diagJ_unpack, Lpq_sao, Lpq_sao)
-                if not coul_diag_only:
+                if not Jdiag_only:
                     diagK_unpack = unstack_tril(diagonals[1],hermitian=False)
                     subspace_h += 0.5 * np.einsum('XYij,Pij,Pij->XY',diagK_unpack, Lpq_sao, Lpq_sao)
                     
