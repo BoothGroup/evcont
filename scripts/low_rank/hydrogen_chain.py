@@ -96,7 +96,7 @@ lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':3, 'save_diag':True}
 vectorize = True
 
 use_diag = True
-coul_diag_only = True # Only use diagonal corrections that contribute as J builds
+coul_diag_only = False # Only use diagonal corrections that contribute as J builds
 sao_diag = False # Diagonal inference in SAO basis
 
 # For testing, use reconstructed 2tRDM instead of full evcont
@@ -590,6 +590,7 @@ for i, test_dist in enumerate(test_range):
         #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
         #1/0
 
+    
 
 print('Time per low-rank (s): %.2f'%(lr_tot/lr_n_eval))
 

@@ -717,13 +717,13 @@ def get_jk_builds(mol, lowrank_vecs,
         ### First the Coulomb build
         
         # Expand out the 'i' indices for J builds
-        diagJ_ao = np.einsum('Nij,wj,xj->Niwx',diagonals[0], ao_mo_trafo, ao_mo_trafo)
-        diagJ_ao_T = np.einsum('Nji,wj,xj->Niwx',diagonals[0], ao_mo_trafo, ao_mo_trafo)
+        diagJ_ao = np.einsum('Nij,wj,xj->Niwx',diagonals[0], ao_mo_trafo, ao_mo_trafo,optimize='optimal')
+        #diagJ_ao_T = np.einsum('Nji,wj,xj->Niwx',diagonals[0], ao_mo_trafo, ao_mo_trafo,optimize='optimal')
 
         # Flatten
         orig_shape = diagJ_ao.shape[:2]
         flat_diagJ_ao = diagJ_ao.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
-        flat_diagJ_ao_T = diagJ_ao_T.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
+        #flat_diagJ_ao_T = diagJ_ao_T.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
         
         # JK Builds
         with log_time("Diag J Builds (1)"):
@@ -732,7 +732,7 @@ def get_jk_builds(mol, lowrank_vecs,
         # JK grad builds
         with log_time("Diag Grad J Builds (1)"):
             vj_grad_list = grad_obj.get_jk(dm=flat_diagJ_ao.transpose(0,2,1), hermi=0, with_k=False) [0]
-            vj_grad_t_list = grad_obj.get_jk(dm=flat_diagJ_ao_T.transpose(0,2,1), hermi=0, with_k=False) [0]
+            #vj_grad_t_list = grad_obj.get_jk(dm=flat_diagJ_ao_T.transpose(0,2,1), hermi=0, with_k=False) [0]
 
         # Unflatten
         vj_unflat = vj_list.reshape(*orig_shape, *vj_list.shape[1:])
@@ -741,49 +741,45 @@ def get_jk_builds(mol, lowrank_vecs,
         vj_grad_unflat = vj_grad_list.reshape(*orig_shape, *vj_grad_list.shape[1:])  
         vj_grad = unstack_tril(vj_grad_unflat,hermitian=hermitian)
         
-        vj_grad_t_unflat = vj_grad_t_list.reshape(*orig_shape, *vj_grad_t_list.shape[1:])  
-        vj_grad_t = unstack_tril(vj_grad_t_unflat,hermitian=hermitian)
-
-        """
-        print(diagJ_ao.shape, orig_shape)
-        print(flat_diagJ_ao.shape)
-        
-        print(vj_grad_list.shape, vj_grad_unflat.shape, vj_grad.shape)
-        print(vj_grad_t_list.shape, vj_grad_t_unflat.shape, vj_grad_t.shape)
-
-        print(np.linalg.norm(vj_grad - vj_grad_t.transpose(0,1,2,3,5,4)))
-
-        1/0
-        """
-        #subspace_h += 0.5 * np.einsum('yj,zj,XYjyz->XY', ao_mo_trafo, ao_mo_trafo, vj)
-
+        #vj_grad_t_unflat = vj_grad_t_list.reshape(*orig_shape, *vj_grad_t_list.shape[1:])  
+        #vj_grad_t = unstack_tril(vj_grad_t_unflat,hermitian=hermitian)
     
         if not coul_diag_only:
             # Transform the low-rank vecs into
-            diagK_ao = np.einsum('Nij,wi,yi->Njwy',diagonals[1], ao_mo_trafo, ao_mo_trafo)
+            diagK_ao = np.einsum('Nij,wi,yi->Njwy',diagonals[1], ao_mo_trafo, ao_mo_trafo,optimize='optimal')
+            diagK_ao_T = np.einsum('Nji,wi,yi->Njwy',diagonals[1], ao_mo_trafo, ao_mo_trafo,optimize='optimal')
 
             # Flatten
             orig_shape = diagK_ao.shape[:2]
             flat_diagK_ao = diagK_ao.reshape(orig_shape[0] * orig_shape[1], *diagK_ao.shape[2:])
+            flat_diagK_ao_T = diagK_ao_T.reshape(orig_shape[0] * orig_shape[1], *diagK_ao.shape[2:])
             
             # JK Builds
             with log_time("Diag K Builds (1)"):
                 vk_list = mf.with_df.get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
+                vk_t_list = mf.with_df.get_jk(dm = flat_diagK_ao_T, hermi=0, with_j=False)[1]
     
             # JK grad builds
-            with log_time("Diag Grad J Builds (1)"):
-                vk_grad_list = grad_obj.get_jk(dm=flat_diagK_ao, hermi=0, with_j=False) [1]
-
+            with log_time("Diag Grad K Builds (1)"):
+                vk_grad_list = grad_obj.get_jk(dm=flat_diagK_ao.transpose(0,2,1), hermi=0, with_j=False) [1]
+                vk_grad_t_list = grad_obj.get_jk(dm=flat_diagK_ao_T.transpose(0,2,1), hermi=0, with_j=False) [1]
+                
             # Unflatten
             vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
             vk = unstack_tril(vk_unflat,hermitian=hermitian)
             
+            vk_t_unflat = vk_t_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
+            vk_t = unstack_tril(vk_t_unflat,hermitian=hermitian)
+            
             vk_grad_unflat = vk_grad_list.reshape(*orig_shape, *vk_grad_list.shape[1:])  
             vk_grad = unstack_tril(vk_grad_unflat,hermitian=hermitian)
+            
+            vk_grad_t_unflat = vk_grad_t_list.reshape(*orig_shape, *vk_grad_list.shape[1:])  
+            vk_grad_t = unstack_tril(vk_grad_t_unflat,hermitian=hermitian)
 
             #subspace_h += 0.5 * np.einsum('xj,zj,XYjxz->XY', ao_mo_trafo, ao_mo_trafo, vk)
         else:
-            vk, vk_grad = None, None
+            vk, vk_t, vk_grad, vk_grad_t = None, None, None, None
     
     # Function OUTPUT
     ed_return, svd_return, diag_return = None, None, None
@@ -795,7 +791,7 @@ def get_jk_builds(mol, lowrank_vecs,
         svd_return = (svd_lvecs, svd_rvecs, svd_lvecs_ao, svd_rvecs_ao, vj_left, vj_right, vj_l_grad, vj_r_grad)
 
     if use_diag and not sao_diag:
-        diag_return = (vj, vj_grad, vj_grad_t, vk, vk_grad)
+        diag_return = (vj, vj_grad, vk, vk_t, vk_grad, vk_grad_t)
 
     return ed_return, svd_return, diag_return
 

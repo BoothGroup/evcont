@@ -1176,7 +1176,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
     use_diag, coul_diag_only = False, True
     if diag_builds is not None:
         use_diag = True
-        (vj, vj_grad, vj_grad_t, vk, vk_grad) = diag_builds
+        (vj, vj_grad, vk, vk_t, vk_grad, vk_grad_t) = diag_builds
         if vk is not None:
             coul_diag_only = False
 
@@ -1249,10 +1249,11 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
             #                           ao_mo_trafo, vj + vj.transpose(0,1,2,4,3),
             #                           optimize='optimal')
             if not coul_diag_only:
-                # TODO: diag_K contributions
-                print('Error: diag_K contributions to gradients not implemented yet')
-                sys.exit()
-                
+
+                pulay_term += 2*lib.einsum('xi,ABiwx->ABwi', 
+                                           ao_mo_trafo, vk + vk_t,
+                                           optimize='optimal')
+                                
         else:
             diagJ_unpack = unstack_tril(diagonals[0],hermitian=False)
 
@@ -1308,18 +1309,25 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
 
         ## AO Builds
         if not sao_diag:
-            grad_h2 += 2*lib.einsum('ABinyz,yi,zi->ABny',
+            grad_h2 += 4*lib.einsum('ABinyz,yi,zi->ABny',
                                     vj_grad, ao_mo_trafo, ao_mo_trafo,
                                     optimize='optimal')
             
-            grad_h2 += 2*lib.einsum('ABinyz,yi,zi->ABny',
-                                    vj_grad_t, ao_mo_trafo, ao_mo_trafo,
-                                    optimize='optimal')
+            # Same result as above
+            #grad_h2 += 2*lib.einsum('ABinyz,yi,zi->ABny',
+            #                        vj_grad_t, ao_mo_trafo, ao_mo_trafo,
+            #                        optimize='optimal')
             
             if not coul_diag_only:
-                # TODO: diag_K contributions
-                print('Error: diag_K contributions to gradients not implemented yet')
-                sys.exit()
+
+                grad_h2 += 2*lib.einsum('ABinwy,wi,yi->ABnw',
+                                        vk_grad, ao_mo_trafo, ao_mo_trafo,
+                                        optimize='optimal')
+                
+                grad_h2 += 2*lib.einsum('ABinwy,wi,yi->ABnw',
+                                        vk_grad_t, ao_mo_trafo, ao_mo_trafo,
+                                        optimize='optimal')
+                
                 
         else:
             # df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, cd_array)
@@ -1327,15 +1335,12 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
 
             # NOTE: Unlike AO, the minus sign is not included in the integrals
             # so we need to subtract these contributions in SAO
-            #grad_h2 -= 2 * lib.einsum('ABij,nPii,Pjj->ABni',diagJ_unpack + diagJ_unpack.transpose(0,1,3,2), Lpq_grad_sao, Lpq_sao)
             grad_h2 -= 2 * lib.einsum('ABab,nPia,Pbb->ABni',diagJ_unpack + diagJ_unpack.transpose(0,1,3,2), Lpq_grad_sao_diag, Lpq_sao)
-
-            #grad_h2 -= lib.einsum('ABij,nPii,Pjj->ABni',diagJ_unpack, Lpq_grad_sao, Lpq_sao)
 
             if not coul_diag_only:
 
                 diagK_unpack = unstack_tril(diagonals[1],hermitian=False)
-                #grad_h2 -= 2 * lib.einsum('ABij,nPij,Pij->ABni',diagK_unpack + diagK_unpack.transpose(0,1,3,2), Lpq_grad_sao, Lpq_sao)
+                
                 grad_h2 -= 2 * lib.einsum('ABab,nPiab,Pab->ABni',diagK_unpack + diagK_unpack.transpose(0,1,3,2), Lpq_grad_sao, Lpq_sao)
                 
     if lowrank_vecs['hermitian']:
@@ -1345,7 +1350,6 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
     # Sum contributions from each orbital on atom site, i
     intermediate_h2 = np.zeros([ntrain, ntrain, mol.natm, 3])
     for i, slice in enumerate(atm_slices):
-        #grad_i[i,:] += grad_el_traced[:,slice[0] : slice[1]].sum(axis=1) 
         intermediate_h2[:,:,i,:] += grad_h2[:,:,:,slice[0] : slice[1]].sum(axis=3) 
             
     # Response of the auxillary basis (Currently NOT WORKING)
@@ -1438,7 +1442,7 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
     use_diag = False
     if diag_builds is not None:
         use_diag = True
-        (vj, vj_grad, vj_grad_t, vk, vk_grad) = diag_builds
+        (vj, vj_grad, vk, vk_t, vk_grad, vk_grad_t) = diag_builds
         
     # if sao_diag
     elif diagonals is not None:
