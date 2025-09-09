@@ -61,6 +61,7 @@ cassolver='SS-CASSCF'
 #cassolver='CASCI'
 ncas, neleca = 2,2
 figsave = True
+figshow = True
 
 #plot_extensive = False
 fix_singlet = False
@@ -95,7 +96,7 @@ lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.001, 'save_diag':use_dia
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
 #lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1, 'save_diag':use_diag}
-#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':3, 'save_diag':True}
+#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':3, 'save_diag':use_diag}
 
 vectorize = True
 
@@ -200,7 +201,7 @@ equilibrium_dist = 1.78596
 
 equilibrium_pos = np.array([(x * equilibrium_dist, 0.0, 0.0) for x in range(10)])
 
-trainig_dists = [0.97, 1.76, 2.60]
+trainig_dists = [0.97, 1.76]#, 2.60]
 #trainig_dists = np.linspace(0.97,2.60,5)
 
 if cont_solver == 'FCI':
@@ -295,6 +296,50 @@ save_pickle('vecs_lr.pkl', vecs_lr)
 
 np.save('trn_geometries_{}.npy'.format(i), trn_geometries)
 
+# Plot the low-rank decomposition distribution for training state pairs
+from matplotlib.patches import Patch
+
+# Expansion limit
+key_clrs = ['tab:blue', 'tab:orange']
+no_vec_dic = {}
+clr_dic = {}
+for key, item in continuation_object.vecs_lowrank.items():
+    #print(key, item[0].shape)
+    if item[-1]:
+        kclr = key_clrs[0]
+    else:
+        kclr = key_clrs[1]
+    if key[1] >= key[0]:
+        no_vec_dic[','.join([str(i) for i in key])] = item[0].shape[0]
+        clr_dic[','.join([str(i) for i in key])] = kclr
+
+fig, ax = plt.subplots(figsize=[4,7])
+ax.grid(alpha=0.5)
+
+# Extract keys, values, and corresponding colors
+labels, values = zip(*no_vec_dic.items())
+colors = [clr_dic[label] for label in labels]
+
+# Plot with specified colors
+ax.barh(labels, values, color=colors)
+#D = {u'Label1':26, u'Label2': 17, u'Label3':30}
+#ax.barh(*zip(*no_vec_dic.items()))
+ax.set_xlabel('Number of vectors (max %i)'%(continuation_object.one_rdm.shape[-1]**2))
+ax.set_ylabel('(bra, ket) index')
+
+# Add legend
+legend_elements = [
+    Patch(facecolor=key_clrs[0], label='Joint ED'),
+    Patch(facecolor=key_clrs[1], label='Coulomb SVD')
+]
+ax.legend(handles=legend_elements, loc='best')
+
+if figsave:
+    plt.savefig('nvecs_H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png',bbox_inches='tight',dpi=500)
+
+if figshow:
+    plt.show()
+    
 if use_diag:
     diags = diag_lr
 else:
@@ -337,7 +382,9 @@ for i, test_dist in enumerate(trainig_dists):
     
     train_en += [en_continuation_ms]
     
-#1/0
+
+##############
+# Testing
 
 def lowrank_en(mol):
     return approximate_multistate_lowrank_OAO(
@@ -712,44 +759,4 @@ else:
     plt.show()
 
     
-from matplotlib.patches import Patch
 
-# Expansion limit
-key_clrs = ['tab:blue', 'tab:orange']
-no_vec_dic = {}
-clr_dic = {}
-for key, item in continuation_object.vecs_lowrank.items():
-    #print(key, item[0].shape)
-    if item[-1]:
-        kclr = key_clrs[0]
-    else:
-        kclr = key_clrs[1]
-    if key[1] >= key[0]:
-        no_vec_dic[','.join([str(i) for i in key])] = item[0].shape[0]
-        clr_dic[','.join([str(i) for i in key])] = kclr
-
-fig, ax = plt.subplots(figsize=[4,7])
-ax.grid(alpha=0.5)
-
-# Extract keys, values, and corresponding colors
-labels, values = zip(*no_vec_dic.items())
-colors = [clr_dic[label] for label in labels]
-
-# Plot with specified colors
-ax.barh(labels, values, color=colors)
-#D = {u'Label1':26, u'Label2': 17, u'Label3':30}
-#ax.barh(*zip(*no_vec_dic.items()))
-ax.set_xlabel('Number of vectors (max %i)'%(continuation_object.one_rdm.shape[-1]**2))
-ax.set_ylabel('(bra, ket) index')
-
-# Add legend
-legend_elements = [
-    Patch(facecolor=key_clrs[0], label='Joint ED'),
-    Patch(facecolor=key_clrs[1], label='Coulomb SVD')
-]
-ax.legend(handles=legend_elements, loc='best')
-
-if figsave:
-    plt.savefig('nvecs_H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png',bbox_inches='tight',dpi=500)
-else:
-    plt.show()

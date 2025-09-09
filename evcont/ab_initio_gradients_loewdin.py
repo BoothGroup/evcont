@@ -1176,7 +1176,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
     use_diag, Jdiag_only = False, True
     if diag_builds is not None:
         use_diag = True
-        (vj, vj_grad, vk, vk_t, vk_grad, vk_grad_t) = diag_builds
+        (vj, vj_grad, vk, vk_t, vk_grad) = diag_builds
         if vk is not None:
             Jdiag_only = False
 
@@ -1324,9 +1324,10 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
                                         vk_grad, ao_mo_trafo, ao_mo_trafo,
                                         optimize='optimal')
                 
-                grad_h2 += 2*lib.einsum('ABinwy,wi,yi->ABnw',
-                                        vk_grad_t, ao_mo_trafo, ao_mo_trafo,
-                                        optimize='optimal')
+                # Included this term in the K build
+                #grad_h2 += 2*lib.einsum('ABinwy,wi,yi->ABnw',
+                #                        vk_grad_t, ao_mo_trafo, ao_mo_trafo,
+                #                        optimize='optimal')
                 
                 
         else:
@@ -1442,7 +1443,7 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
     use_diag = False
     if diag_builds is not None:
         use_diag = True
-        (vj, vj_grad, vk, vk_t, vk_grad, vk_grad_t) = diag_builds
+        (vj, vj_grad, vk, vk_t, vk_grad) = diag_builds
         
     # if sao_diag
     elif diagonals is not None:
