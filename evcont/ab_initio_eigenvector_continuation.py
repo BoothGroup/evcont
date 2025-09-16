@@ -93,10 +93,11 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
 
     return en_approx, gs_approx
 
-def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-8):
+def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-4):
     """
     Diagonalize the subspace Hamiltonian
     """
+
     if hermitian is True:
         # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
         #vals, vecs = eigh(H, S)
@@ -122,7 +123,8 @@ def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-8):
     return en_approx, evec_approx
 
 def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
-                                   nroots=1, hermitian=True, df_basis='weigend'):
+                                   nroots=1, Jdiag_only=True, sao_diag=True, 
+                                   hermitian=True, df_basis='weigend'):
     """
     Returns multiple approximate electronic states from solving the generalised
     eigenvalue problem defined via the one- and two-body transition RDMs.
@@ -140,8 +142,10 @@ def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S,
     Returns:
         Tuple[float, np.ndarray]: Energy approximation and ground state approximation.
     """
+
     # Calculate the Hamiltonian matrix
-    H = lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, cum_diagonal, df_basis=df_basis)
+    H = lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, cum_diagonal, df_basis=df_basis,
+                            Jdiag_only=Jdiag_only, sao_diag=sao_diag)
 
     #print('  Hamiltonian')
     #print(H.tolist())
@@ -216,43 +220,14 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
 
     else:
         assert False
-
-    #print('  Hamiltonian')
-    #print(H.tolist())
-    #plt.figure()
-    #sb.heatmap(H, annot=True)
-    #plt.show()
-    #plt.savefig('hamiltonian_%i.png'%(rdm_computation))
-    #print('  Overlap')
-    #print(S.tolist())
     
-    if hermitian is True:
-        # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
-        #vals, vecs = eigh(H, S)
-        vals, vecs, _ = safe_eigh(H, S, lindep=1e-3)
-        
-    else:
-        # Solve the generalized eigenvalue problem for non-Hermitian Hamiltonian
-        vals, vecs = eig(H, S)
-
-    # Filter out imaginary eigenvalues
-    valid_vals = abs(vals.imag) < 1.0e-5
-    
-    # Make sure nroots isn't higher than available eigenstates
-    assert vals[valid_vals].shape[0] >= nroots
-
-    # Find the index of the minimum GS eigenvalue
-    argroots = np.argsort(vals[valid_vals].real)[:nroots]
-
-    # Get the energy approximation and ground state approximation
-    en_approx = vals[valid_vals][argroots].real
-    evec_approx = vecs[:, valid_vals][:, argroots].real.T
+    en_approx, evec_approx = solve_subspace(H, S, nroots=nroots, hermitian=hermitian)
 
     return en_approx, evec_approx
 
 
-import matplotlib.pylab as plt
-import seaborn as sb 
+#import matplotlib.pylab as plt
+#import seaborn as sb 
 
 def approximate_multistate_otf(h1, h2, one_RDM=None, two_RDM=None, S=None, otf_hamiltonian=None, nroots=1, hermitian=True, mol=None):
     """
@@ -301,27 +276,7 @@ def approximate_multistate_otf(h1, h2, one_RDM=None, two_RDM=None, S=None, otf_h
     #print('  Overlap')
     #print(S)
 
-    if hermitian is True:
-        # Solve the generalized eigenvalue problem for Hermitian Hamiltonian
-        #vals, vecs = eigh(H, S)
-        vals, vecs, _ = safe_eigh(H, S)
-        
-    else:
-        # Solve the generalized eigenvalue problem for non-Hermitian Hamiltonian
-        vals, vecs = eig(H, S)
-
-    # Filter out imaginary eigenvalues
-    valid_vals = abs(vals.imag) < 1.0e-5
-
-    # Make sure nroots isn't higher than available eigenstates
-    assert vals[valid_vals].shape[0] >= nroots
-
-    # Find the index of the minimum GS eigenvalue
-    argroots = np.argsort(vals[valid_vals].real)[:nroots]
-
-    # Get the energy approximation and ground state approximation
-    en_approx = vals[valid_vals][argroots].real
-    evec_approx = vecs[:, valid_vals][:, argroots].real.T
+    en_approx, evec_approx = solve_subspace(H, S, nroots=nroots, hermitian=hermitian)
 
     return en_approx, evec_approx
 
@@ -402,7 +357,8 @@ def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=Tru
 
 
 def approximate_multistate_lowrank_OAO(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
-                                       nroots=1, hermitian=True, df_basis='weigend'):
+                                       nroots=1, Jdiag_only=True, sao_diag=True,
+                                       hermitian=True, df_basis='weigend'):
     """
     This function approximates multiple state energies and wavefunctions of a given
     molecule from an eigenvector continuation with t-RDMS and the overlap matrix S.
@@ -428,7 +384,8 @@ def approximate_multistate_lowrank_OAO(mol, one_RDM, lowrank_vecs, cum_diagonal,
     # Approximate the ground state energy and wavefunction in projected subspace
     #en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
     en, vec = approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
-                                             nroots=nroots, hermitian=hermitian, df_basis=df_basis)
+                                             nroots=nroots, hermitian=hermitian, df_basis=df_basis, 
+                                             Jdiag_only=Jdiag_only, sao_diag=sao_diag)
     # Calculate the total energy by adding the nuclear repulsion energy
     total_energy = en.real + mol.energy_nuc()
 

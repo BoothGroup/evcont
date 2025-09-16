@@ -17,7 +17,7 @@ from pyscf import gto, fci, scf, lib, ao2mo, mcscf, df
 from evcont.FCI_EVCont import FCI_EVCont_obj
 #from evcont.CASCI_EVCont import CAS_EVCont_obj
 
-from evcont.electron_integral_utils import get_basis, get_integrals, get_loewdin_trafo
+from evcont.electron_integral_utils import get_basis, get_integrals, get_loewdin_trafo, get_df_integrals
 
 #from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC
 
@@ -52,7 +52,7 @@ density_fit = True
 #df_basis = 'cc-pvdz-ri'
 df_basis = None
 
-natom = 2
+natom = 4
 
 #cont_solver = 'CAS'
 cont_solver = 'FCI'
@@ -61,6 +61,7 @@ cassolver='SS-CASSCF'
 #cassolver='CASCI'
 ncas, neleca = 2,2
 figsave = True
+figshow = True
 
 #plot_extensive = False
 fix_singlet = False
@@ -77,6 +78,10 @@ if fix_sym == None:
 else:
     mol_sym = True
     
+use_diag = True
+Jdiag_only = True # Only use diagonal corrections that contribute as J builds
+sao_diag = False # Diagonal inference in SAO basis
+
 lowrank_kwargs = {
     'truncation_style':'nvec', 
     'nvecs':10,
@@ -87,10 +92,23 @@ lowrank_kwargs = {
 
 #lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-12}
 lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
-#lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.002}
+lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.001, 'save_diag':use_diag}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
+#lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1, 'save_diag':use_diag}
+#lowrank_kwargs = {'truncation_style':'nvec', 'nvecs':3, 'save_diag':use_diag}
+
 vectorize = True
+
+# For testing, use reconstructed 2tRDM instead of full evcont
+# - to see if fast inference is working as intended
+compare_to_reconstruct = False
+
+# If true, remove other contributions (nuclear terms)
+remove_nuclear_grad = False
+remove_nondiag = False # only from reconstructed RDM inference
+remove_Jdiag = False # Set J diagonals of the low-rank representation to zero for testing
+
 
 #test_range = np.linspace(0.8, 3.0,40)
 test_range = np.linspace(0.8, 3.0, 15)
@@ -103,8 +121,8 @@ def get_mol(positions):
         atom=[("H", pos) for pos in positions],
         #basis="sto-3g",
         #basis="sto-6g",
-        #basis="6-31g",
-        basis='cc-pvdz',
+        basis="6-31g",
+        #basis='cc-pvdz',
         symmetry=mol_sym,
         unit="Bohr",
         verbose=0
@@ -119,6 +137,49 @@ def load_pickle(filename):
 def save_pickle(filename, data_dict):
     with open(filename, 'wb') as f:
        	pickle.dump(data_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+def numerical_gradients(mol, energy_func, h=1e-6):
+    """
+    Compute numerical nuclear gradients of a molecule for one or multiple states.
+    
+    Args:
+        mol: PySCF Mole object
+        energy_func: callable(mol) -> float or array-like
+            Function that takes a mol and returns energy (float) or list/array of energies
+        h: finite difference step size (Bohr)
+
+    Returns:
+        grads: (nstates, natm, 3) array of gradients
+    """
+    coords = mol.atom_coords()
+    ref_energies = np.atleast_1d(energy_func(mol))
+    nstates = len(ref_energies)
+    natm = mol.natm
+    grads = np.zeros((nstates, natm, 3))
+    
+    eye_atoms = np.eye(natm)
+
+    for i in range(natm):
+        for a in range(3):  # x, y, z
+            disp = np.zeros(3)
+            disp[a] = h
+
+            # +h displacement
+            mol.set_geom_(coords + eye_atoms[i][:, None] * disp, unit='Bohr')
+            e_plus = np.atleast_1d(energy_func(mol))
+
+            # -h displacement
+            mol.set_geom_(coords - eye_atoms[i][:, None] * disp, unit='Bohr')
+            e_minus = np.atleast_1d(energy_func(mol))
+
+            grads[:, i, a] = (e_plus - e_minus) / (2 * h)
+
+            # reset geometry
+            mol.set_geom_(coords, unit='Bohr')
+
+    return grads if nstates > 1 else grads[0]
+
+
 
 mol_dummy = get_mol([(x, 0.0, 0.0) for x in test_range[0] * np.arange(natom)])
 
@@ -182,21 +243,107 @@ for i, dist in enumerate(trainig_dists):
 
 # If vectorize
 if vectorize:
-    continuation_object.vectorize_lowrank(hermitian=True)
+    continuation_object.vectorize_lowrank(hermitian=False)
     vecs_lr = continuation_object.lowrank_vectorized
+    diag_lr = continuation_object.diagonal_vectorized
 else:
     vecs_lr = continuation_object.vecs_lowrank
+    diag_lr = continuation_object.diagonal_lr
+
+if remove_Jdiag:
+    diag_lr[0] = np.zeros_like(diag_lr[0])
     
+# Reconstruct the two_rdm for testing
+two_rdm_rec = np.zeros_like(continuation_object_full.two_rdm)
+
+from evcont.low_rank_utils import unstack_tril
+# Only use the J coul
+diagonals_rec = np.zeros_like(continuation_object.diagonal_lr)
+if use_diag:
+    if not remove_Jdiag:
+        diagonals_rec[:,:,0] = unstack_tril(diag_lr[0], False) #continuation_object.diagonal_lr[:,:,0]
+    
+    if not Jdiag_only:
+        diagonals_rec[:,:,1:] = continuation_object.diagonal_lr[:,:,1:]
+
+from evcont.low_rank_utils import reconstruct_rdm2_joint
+
+norb = two_rdm_rec.shape[-1]
+for (i,j), vi in continuation_object.vecs_lowrank.items():
+    
+    if not remove_nondiag:
+        rdm2_i = reconstruct_rdm2_joint(vi[:3], diagonals=diagonals_rec[i,j],joint=vi[-1])
+    else:
+        # Diagonal only - for testing
+        rdm2_i = reconstruct_rdm2_joint([np.zeros([2]),np.zeros([norb,norb,2]),np.zeros([2,norb,norb])], diagonals=diagonals_rec[i,j],joint=vi[-1])
+
+    two_rdm_rec[i,j] = rdm2_i
+    two_rdm_rec[j,i] = np.einsum('ijkl->jilk',rdm2_i.conj())
+    
+if compare_to_reconstruct:
+    two_rdm_to_comp = two_rdm_rec
+else:
+    two_rdm_to_comp = continuation_object_full.two_rdm
+
 # Save
 i = 'final'
 np.save("overlap_{}.npy".format(i), continuation_object.overlap)
 np.save("one_rdm_{}.npy".format(i), continuation_object.one_rdm)
 
-np.save("diagonal_lr_{}.npy".format(i), continuation_object.diagonal_lr)
+np.save("diagonal_lr_{}.npy".format(i), diag_lr)
 np.save("lowrank_vecs_{}.npy".format(i), continuation_object.vecs_lowrank)
 save_pickle('vecs_lr.pkl', vecs_lr)
 
 np.save('trn_geometries_{}.npy'.format(i), trn_geometries)
+
+# Plot the low-rank decomposition distribution for training state pairs
+from matplotlib.patches import Patch
+
+# Expansion limit
+key_clrs = ['tab:blue', 'tab:orange']
+no_vec_dic = {}
+clr_dic = {}
+for key, item in continuation_object.vecs_lowrank.items():
+    #print(key, item[0].shape)
+    if item[-1]:
+        kclr = key_clrs[0]
+    else:
+        kclr = key_clrs[1]
+    if key[1] >= key[0]:
+        no_vec_dic[','.join([str(i) for i in key])] = item[0].shape[0]
+        clr_dic[','.join([str(i) for i in key])] = kclr
+
+fig, ax = plt.subplots(figsize=[4,7])
+ax.grid(alpha=0.5)
+
+# Extract keys, values, and corresponding colors
+labels, values = zip(*no_vec_dic.items())
+colors = [clr_dic[label] for label in labels]
+
+# Plot with specified colors
+ax.barh(labels, values, color=colors)
+#D = {u'Label1':26, u'Label2': 17, u'Label3':30}
+#ax.barh(*zip(*no_vec_dic.items()))
+ax.set_xlabel('Number of vectors (max %i)'%(continuation_object.one_rdm.shape[-1]**2))
+ax.set_ylabel('(bra, ket) index')
+
+# Add legend
+legend_elements = [
+    Patch(facecolor=key_clrs[0], label='Joint ED'),
+    Patch(facecolor=key_clrs[1], label='Coulomb SVD')
+]
+ax.legend(handles=legend_elements, loc='best')
+
+if figsave:
+    plt.savefig('nvecs_H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png',bbox_inches='tight',dpi=500)
+
+if figshow:
+    plt.show()
+    
+if use_diag:
+    diags = diag_lr
+else:
+    diags = None
 
 lr_tot = 0.; lr_n_eval = 0
 train_lowrank_en = []
@@ -215,8 +362,10 @@ for i, test_dist in enumerate(trainig_dists):
         mol, 
         continuation_object.one_rdm,  
         vecs_lr,
-        None, #continuation_object.diagonal_lr, 
+        diags, 
         continuation_object.overlap,
+        Jdiag_only=Jdiag_only,
+        sao_diag=sao_diag,
         nroots=nroots_evcont
     )
     lr_tot += (time.time()-start); lr_n_eval += 1
@@ -233,14 +382,37 @@ for i, test_dist in enumerate(trainig_dists):
     
     train_en += [en_continuation_ms]
     
-#1/0
 
+##############
+# Testing
+
+def lowrank_en(mol):
+    return approximate_multistate_lowrank_OAO(
+        mol, 
+        continuation_object.one_rdm,  
+        vecs_lr,
+        diags, 
+        continuation_object.overlap,
+        Jdiag_only=Jdiag_only,
+        sao_diag=sao_diag,
+        nroots=nroots_evcont+1
+    )[0]
+    
+    
 # Prediction on test dataset and comparison against FCI results
+nroots_to_compute = nroots_evcont + 1
+
 fci_en = np.zeros([len(test_range),nroots_evcont])
 ref_en = np.zeros([len(test_range),nroots_evcont])
 hf_en = np.zeros([len(test_range)])
-cont_en = np.zeros([len(test_range),nroots_evcont+1])
-cont_lowrank_en = np.zeros([len(test_range),nroots_evcont+1])
+cont_en = np.zeros([len(test_range),nroots_to_compute])
+cont_lowrank_en = np.zeros([len(test_range),nroots_to_compute])
+
+ref_grad = np.zeros([len(test_range),nroots_evcont, mol.natm, 3])
+cont_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
+cont_lr_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
+num_lr_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
+
 for i, test_dist in enumerate(test_range):
     print(i)
     positions = [(x, 0.0, 0.0) for x in test_dist * np.arange(natom)]
@@ -255,28 +427,35 @@ for i, test_dist in enumerate(test_range):
         mol, 
         continuation_object.one_rdm, 
         vecs_lr,
-        None, #continuation_object.diagonal_lr, 
+        diags, 
         continuation_object.overlap,
-        nroots=nroots_evcont+1,
+        nroots=nroots_to_compute,
+        Jdiag_only=Jdiag_only,
+        sao_diag=sao_diag,
         df_basis=df_basis
     )
     
+    #"""
     out = get_lowrank_en_with_grad_and_NAC(mol, continuation_object.one_rdm, 
                                            continuation_object.overlap,
-                                           vecs_lr, None, 
-                                           nroots=nroots_evcont+1,
+                                           vecs_lr, diags, 
+                                           sao_diag=sao_diag,
+                                           nroots=nroots_to_compute,
                                            density_fit=density_fit,
+                                           Jdiag_only=Jdiag_only,
                                            df_basis=df_basis)
-    
+    #"""
     lr_tot += (time.time()-start); lr_n_eval += 1
     
     print('   low rank - finish - %.1f sec'%(time.time()-start))
 
-    #cont_lowrank_en += [en_continuation_ms]
-    cont_lowrank_en[i,:] = en_continuation_ms
+    #cont_lowrank_en[i,:] += en_continuation_ms
+    cont_lowrank_en[i,:] = out[1] #en_continuation_ms
+    
+    grad_num = numerical_gradients(mol, lowrank_en)
+    num_lr_grad[i,:] = grad_num
     
     ## HF and FCI
-
     mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
     # Note that in performant code, we don't actually need to run HF at the training points,
     # just have access to the get_jk function.
@@ -292,6 +471,8 @@ for i, test_dist in enumerate(test_range):
     h1e_mo = np.einsum('ai,ab,bj->ij', mf.mo_coeff, h1_ao, mf.mo_coeff)
     #print(h1e_mo, df_eri, mol.nao, mol.nelec)
 
+    Lpq_ao, deriv_cderi = get_df_integrals(mol, auxbasis=df_basis, grad=True)
+    """
     # DF-ERI gradients
     auxmol = df.addons.make_auxmol(mol, df_basis)
     
@@ -309,8 +490,9 @@ for i, test_dist in enumerate(test_range):
     ints_3c2e_ip1 = df.incore.aux_e2(mol, auxmol, intor='int3c2e_ip1', comp=3)
     # Use the same metric as before
     deriv_cderi = np.einsum('PQ,xijP -> xijQ', metric, ints_3c2e_ip1)
+    """
     # To reconstruct the full 4c derivative integrals, we need to contract with the previous cderi integrals
-    df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, cd_array)
+    df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, Lpq_ao)
     
     h2_ao_deriv = df_grad_4c_ints
     h2_ao = lib.einsum('Pij,Pkl->ijkl', Lpq_ao, Lpq_ao)
@@ -323,6 +505,11 @@ for i, test_dist in enumerate(test_range):
     grad_nuc = df.grad.RHF(mf).grad_nuc()    
     #grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
 
+    #cont_lr_grad[i] = out[2]
+    if remove_nuclear_grad:
+        cont_lr_grad[i] = out[2] - grad_nuc
+    else:
+        cont_lr_grad[i] = out[2]
 
     # Only do FCI if number of orbitals is less than 16
     if mol.nao < 16 and (cont_solver == 'FCI' or fci_done):
@@ -338,8 +525,18 @@ for i, test_dist in enumerate(test_range):
         assert mc.converged
         
         grad_method = mc.Gradients()
-        grad_ref = grad_method.kernel(state=0) #- grad_method.grad_nuc()
         
+        grad_ref_l = []
+        for refi in range(nroots_evcont):
+            grad_ref_l.append(grad_method.kernel(state=refi))# - grad_method.grad_nuc())
+            
+        ref_grad[i] = np.array(grad_ref_l)
+        
+        if remove_nuclear_grad:
+            grad_ref = grad_method.kernel(state=0) - grad_method.grad_nuc()
+        else:
+            grad_ref = grad_method.kernel(state=0) #- grad_method.grad_nuc()
+
     else:
         fci_done = False
 
@@ -389,31 +586,37 @@ for i, test_dist in enumerate(test_range):
         h1e_sao,
         df_eri_sao,
         continuation_object_full.one_rdm,
-        continuation_object_full.two_rdm,
+        two_rdm_to_comp,#continuation_object_full.two_rdm, 
         continuation_object_full.overlap,
-        nroots=nroots_evcont+1
+        nroots=nroots_to_compute
     )
     
     # Get grad
     grad_cont = []
-    for i_state in range(nroots_evcont+1):
+    for i_state in range(nroots_to_compute):
         vec_i = vec[i_state,:]
         vec_j = vec_i
         
         one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), continuation_object_full.one_rdm, axes=2)
-        two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), continuation_object_full.two_rdm, axes=2)
+        two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), 
+                                         two_rdm_to_comp,#continuation_object_full.two_rdm, 
+                                         axes=2)
             
         grad_i = get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, 
                                     one_rdm_predicted,
                                     two_rdm_predicted)
         grad_cont.append(grad_i + grad_nuc)
     
-    
+    if remove_nuclear_grad:
+        cont_grad[i] = np.array(grad_cont) - grad_nuc
+    else:
+        cont_grad[i] = np.array(grad_cont) #- grad_nuc
+
     out_full = get_multistate_energy_with_grad_and_NAC(mol,
                                                        continuation_object_full.one_rdm,
-                                                       continuation_object_full.two_rdm,
+                                                       two_rdm_to_comp, #continuation_object_full.two_rdm,
                                                        continuation_object_full.overlap,
-                                                       nroots=nroots_evcont+1, savemem=True)
+                                                       nroots=nroots_to_compute, savemem=True)
     
     cont_en[i,:] = en_continuation_ms + mol.energy_nuc()
     
@@ -425,10 +628,16 @@ for i, test_dist in enumerate(test_range):
 
     else:
         print(ehf, ref_en[i,:], cont_en[i], cont_lowrank_en[i])
-        print('grad', np.linalg.norm(grad_ref-out[2][0]),np.linalg.norm(grad_cont[0]-out[2][0]), np.linalg.norm(out_full[2][0]-out[2][0]))
+        print('grad', np.linalg.norm(grad_ref-out[2][0]),
+              np.linalg.norm(grad_cont[0]-out[2][0]), 
+              np.linalg.norm(out_full[2][0]-out[2][0]), 
+              np.linalg.norm(grad_num[0]-out[2][0]),
+              )
         #print('nac','\n', out[4],'\n', out_full[4])
         #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
         #1/0
+
+    
 
 print('Time per low-rank (s): %.2f'%(lr_tot/lr_n_eval))
 
@@ -479,44 +688,75 @@ if figsave:
 else:
     plt.show()
 
-from matplotlib.patches import Patch
 
-# Expansion limit
-key_clrs = ['tab:blue', 'tab:orange']
-no_vec_dic = {}
-clr_dic = {}
-for key, item in continuation_object.vecs_lowrank.items():
-    #print(key, item[0].shape)
-    if item[-1]:
-        kclr = key_clrs[0]
-    else:
-        kclr = key_clrs[1]
-    if key[1] >= key[0]:
-        no_vec_dic[','.join([str(i) for i in key])] = item[0].shape[0]
-        clr_dic[','.join([str(i) for i in key])] = kclr
+# PLOT - with grads
+fig, axes = plt.subplots(nrows=3, ncols=2, sharex=True,figsize=[8,7],height_ratios=[3,1.5,1.5],
+                                 gridspec_kw={'hspace':0.,'wspace':0.2})
 
-fig, ax = plt.subplots(figsize=[4,7])
-ax.grid(alpha=0.5)
+[ax1,ax2,ax3] = axes[:,0]
+[ax4,ax5,ax6] = axes[:,1]
 
-# Extract keys, values, and corresponding colors
-labels, values = zip(*no_vec_dic.items())
-colors = [clr_dic[label] for label in labels]
+ax1.plot(test_range, hf_en,'orange',label='HF')
+if nroots_evcont > 1:
+    if (cont_solver == 'FCI' or fci_done):
+        ax1.plot(test_range,fci_en,'k',label=['FCI']+[None]*(nroots_evcont-1))
+        ax4.plot(test_range,np.linalg.norm(ref_grad,axis=(2,3)),'k',label=['FCI']+[None]*(nroots_evcont-1))
+    if cont_solver != 'FCI':
+        ax1.plot(test_range,ref_en,'green',label=[cont_solver]+[None]*(nroots_evcont-1))
+    ax1.plot(test_range,cont_en,'b',label=['full evcont']+[None]*(cont_en.shape[-1]-1))
+    ax1.plot(test_range,cont_lowrank_en,'--r',label=['low rank evcont']+[None]*(cont_lowrank_en.shape[-1]-1))
+    ax4.plot(test_range,np.linalg.norm(cont_grad,axis=(2,3)),'b',label=['full evcont']+[None]*(cont_en.shape[-1]-1))
+    ax4.plot(test_range,np.linalg.norm(cont_lr_grad,axis=(2,3)),'--r',label=['low rank evcont']+[None]*(cont_lowrank_en.shape[-1]-1))
+    ax4.plot(test_range,np.linalg.norm(num_lr_grad,axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7,label=['numerical lowrank']+[None]*(cont_en.shape[-1]-1))
 
-# Plot with specified colors
-ax.barh(labels, values, color=colors)
-#D = {u'Label1':26, u'Label2': 17, u'Label3':30}
-#ax.barh(*zip(*no_vec_dic.items()))
-ax.set_xlabel('Number of vectors (max %i)'%(continuation_object.one_rdm.shape[-1]**2))
-ax.set_ylabel('(bra, ket) index')
+else:
+    if (cont_solver == 'FCI' or fci_done):
+        ax1.plot(test_range,fci_en,'k',label='FCI')
+    if cont_solver != 'FCI':
+        ax1.plot(test_range,ref_en,'green',label=cont_solver)
+    ax1.plot(test_range,cont_en,'b',label='full evcont')
+    ax1.plot(test_range,cont_lowrank_en,'--r',label='low rank evcont')
+   
 
-# Add legend
-legend_elements = [
-    Patch(facecolor=key_clrs[0], label='Joint ED'),
-    Patch(facecolor=key_clrs[1], label='Coulomb SVD')
-]
-ax.legend(handles=legend_elements, loc='best')
+ax1.plot(trainig_dists,train_en,'xb')
+ax1.plot(trainig_dists,train_lowrank_en,'xr')
+ax1.legend()
+ax4.legend()
+
+if (cont_solver == 'FCI' or fci_done):
+    ax2.plot(test_range,cont_en[:,:nroots_evcont] - fci_en,'b')
+    ax2.plot(test_range,cont_lowrank_en[:,:nroots_evcont] - fci_en,'--r')
+
+    ax5.plot(test_range,np.linalg.norm(cont_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'b')
+    ax5.plot(test_range,np.linalg.norm(cont_lr_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'--r')
+    ax5.plot(test_range,np.linalg.norm(num_lr_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7)
+
+if cont_solver != 'FCI':
+    ax3.plot(test_range,cont_en[:,:nroots_evcont] - ref_en,'b')
+    ax3.plot(test_range,cont_lowrank_en[:,:nroots_evcont] - ref_en,'--r')
+    ax3.set_ylabel(r'$E_{cont}$ - $E_{%s}$ (Ha)'%cont_solver)
+    
+else:
+    
+    ax3.plot(test_range,cont_lowrank_en - cont_en,'--r')
+    ax3.set_ylabel(r'$E_{cont}$ - $E_{lowrank}$ (Ha)')
+    
+    ax6.plot(test_range,np.linalg.norm(cont_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'--r')
+    ax6.plot(test_range,np.linalg.norm(cont_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'--r')
+    ax6.plot(test_range,np.linalg.norm(num_lr_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7)
+
+    
+ax1.set_title('Energy')
+ax4.set_title('Gradient')
+
+ax1.set_ylabel('Energy (Ha)')
+ax2.set_ylabel(r'$E_{cont}$ - $E_{FCI}$ (Ha)')
+ax3.set_xlabel('Atomic separation ($a_0$)')
 
 if figsave:
-    plt.savefig('nvecs_H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png',bbox_inches='tight',dpi=500)
+    plt.savefig('H%i_%s_roots%i_%s'%(natom,cont_solver,nroots_evcont,lowrank_kwargs['truncation_style'])+'.png',bbox_inches='tight',dpi=500)
 else:
     plt.show()
+
+    
+

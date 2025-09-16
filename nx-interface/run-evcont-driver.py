@@ -19,40 +19,42 @@ import numpy as np
 
 import os
 import sys
+import pickle
 
 ############################
 # INPUTS (might be converted to an input file later on)
-BASIS = "sto-6g"
-use_pyscf = False
-trdm_path = None
+#BASIS = "sto-6g"
+#use_pyscf = False
+#trdm_path = None
 
 # FCI related if use_pyscf
-fix_singlet = True
-fix_sym = 'A1g' #None
+#fix_singlet = True
+#fix_sym = 'A1g' #None
 #fix_sym = None
+
 ############################
 # Checks for evcont and pyscf
 try:
-   from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC
+   from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC, get_lowrank_en_with_grad_and_NAC
    from evcont.FCI_NAC import get_FCI_energy_with_grad_and_NAC, get_FCI_energy_with_grad_and_NAC_withsym
 except:
-   print('evcont is not installed!')
+   print('Error in run-evcont-driver: evcont is not installed!')
    sys.exit()
    
 try:
     from pyscf import gto
 except:
-   print('pyscf is not installed!')
+   print('Error in run-evcont-driver: pyscf is not installed!')
    sys.exit()
             
-   
+
 # Get parameters from nx-interface
 NSTAT  	  = int(sys.argv[1])
 NSTATDYN  = int(sys.argv[2])
 
 ############################
 
-def read_mol(basis):
+def read_mol(basis, mol_sym):
     """
     Read the current geometry from the trajectory and build the molecule object
     """
@@ -83,31 +85,132 @@ def read_mol(basis):
     return mol
 
 ############################
-# Symmetry
-if fix_sym == None or not use_pyscf:
-    mol_sym = False
-else:
-    mol_sym = True
-    
-MOL = read_mol(BASIS)
 
-# Set FCI solver if use_pyscf
-if use_pyscf:
-    from pyscf import fci
-    # Set fci solver to be used
-    
-    if fix_sym == None:
-        FCISOLVER = fci.direct_spin0.FCI()
-    else:
-        FCISOLVER = fci.direct_spin0_symm.FCI(MOL)
-        FCISOLVER.wfnsym = fix_sym
-        
-    FCISOLVER.nroots = NSTAT+1
+def read_input_file(filename='evcont.in'):
 
-    if fix_singlet:
-        fci.addons.fix_spin_(FCISOLVER,ss=0) # Fix spin
-        
-############################
+    # Default input parameters
+    defaults = {
+        'basis': 'sto-6g',
+        'use_pyscf': False,
+        'trdm_path': None,
+        'fix_singlet' : False,
+        'fix_sym' : None,
+        'lowrank' : False,
+        'density_fit' : False,
+        'df_basis' : None
+    }
+
+    variables = defaults.copy()
+    input_path = os.path.join(os.getcwd(), filename)
+
+    if not os.path.exists(input_path):
+        print(f"Warning: '{filename}' not found in the current directory. Using all default values.")
+        return variables
+
+    with open(input_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+
+                # Attempt type conversion based on defaults
+                if key in defaults:
+                    expected_type = type(defaults[key])
+                    try:
+                        if expected_type == bool:
+                            value = value.lower() == 'true'
+                        else:
+                            value = expected_type(value)
+                    except ValueError:
+                        print(f"Warning: Could not convert '{key}' to {expected_type.__name__}, using default.")
+                        continue
+                variables[key] = value
+
+    return variables
+
+
+def read_input_file(filename='evcont.in'):
+    """
+    Reads key=value pairs from an input file and fills in defaults.
+    
+    Args:
+        filename (str): Path to input file. Defaults to 'evcont.in'.
+        defaults (dict): Dictionary of default values.
+        required_keys (list): Keys that must be present in input or defaults.
+    
+    Returns:
+        dict: Dictionary of input parameters.
+    
+    Raises:
+        FileNotFoundError: If input file is not found.
+        ValueError: If required keys are missing.
+    """
+    # Default input parameters
+    defaults = {
+        'basis': 'sto-6g',
+        'use_pyscf': False,
+        'trdm_path': None,
+        'fix_singlet' : False,
+        'fix_sym' : None,
+        'lowrank' : False,
+        'density_fit' : False,
+        'df_basis' : None
+    }
+    
+    required_keys=[]
+
+    if not os.path.isfile(filename):
+        raise FileNotFoundError(f"Input file '{filename}' not found.")
+
+    user_inputs = {}
+    with open(filename, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' not in line:
+                continue
+            key, value = map(str.strip, line.split('=', 1))
+            value_lower = value.lower()
+
+            # If value is "none", interpret as Python None
+            if value_lower == 'none':
+                converted_value = None
+            elif key in defaults:
+                default_value = defaults[key]
+                if default_value is None:
+                    converted_value = value
+                else:
+                    expected_type = type(default_value)
+                    try:
+                        if expected_type == bool:
+                            converted_value = value_lower == 'true'
+                        else:
+                            converted_value = expected_type(value)
+                    except ValueError:
+                        print(f"Warning: Could not convert '{key}' to {expected_type.__name__}, using raw value.")
+                        converted_value = value
+            else:
+                # No default given — store as string or None
+                converted_value = None if value_lower == 'none' else value
+
+            user_inputs[key] = converted_value
+
+    # Fill in defaults for missing keys
+    for key, val in defaults.items():
+        if key not in user_inputs:
+            user_inputs[key] = val
+
+    # Enforce required keys
+    missing = [k for k in required_keys if k not in user_inputs or user_inputs[k] is None]
+    if missing:
+        raise ValueError(f"Missing required input(s): {', '.join(missing)}")
+
+    return user_inputs
 
 def run_training(path):
     """
@@ -115,31 +218,45 @@ def run_training(path):
     """
     pass
 
+def load_pickle(filename):
+    with open(filename, 'rb') as f:
+        return pickle.load(f)
 
 def read_model(path):
     """
     Read the intermediate data that will be used for predictions, namely:
         - Overlap of training wavefunctions, S
         - 1-el reduced transition density matrices of training wavefunctions
-        - 2-el reduced transition density matrices of training wavefunctions
+        - 2-el reduced transition density matrices of training wavefunctions,
+          either as a full tensor (two_rdm_final.npy) or low-rank vectors (lowrank_vecs.pkl)
 
     Args:
         path (str): 
-            path to the model files - for now it is in the JOB_NAD drc
-            (assumes a single directory containing files: 
-                 overlap_final.npy, one_rdm_final.npy, two_rdm_final.npy)
-        
+            Path to the model files directory. Must contain:
+                - overlap_final.npy
+                - one_rdm_final.npy
+                - two_rdm_final.npy OR lowrank_vecs.pkl
+
     Returns:
         overlap (ndarray)
         one_rdm (ndarray)
-        two_rdm (ndarray)
+        two_rdm (ndarray or any object from lowrank_vecs.pkl)
     """
-    
-    overlap = np.load(os.path.join(path,'overlap_final.npy'))
-    one_rdm = np.load(os.path.join(path,'one_rdm_final.npy'))
-    two_rdm = np.load(os.path.join(path,'two_rdm_final.npy'))
-    
+    overlap = np.load(os.path.join(path, 'overlap_final.npy'))
+    one_rdm = np.load(os.path.join(path, 'one_rdm_final.npy'))
+
+    two_rdm_npy = os.path.join(path, 'two_rdm_final.npy')
+    two_rdm_pkl = os.path.join(path, 'lowrank_vecs.pkl')
+
+    if os.path.exists(two_rdm_npy):
+        two_rdm = np.load(two_rdm_npy)
+    elif os.path.exists(two_rdm_pkl):
+        two_rdm = load_pickle(two_rdm_pkl)
+    else:
+        raise FileNotFoundError("Neither 'two_rdm_final.npy' nor 'lowrank_vecs.pkl' was found in the specified path.")
+
     return overlap, one_rdm, two_rdm
+
 
 def get_phase(old,new):
     
@@ -229,9 +346,38 @@ def evcont_feed_nx(mode, adjustphase=True):
                     Updates energies, gradients and NACs
     '''
     
-    # Get the mol object for continuation
-    mol = read_mol(BASIS)
+    # Read the input parameters
+    inputs = read_input_file()
+
+    trdm_path = inputs['trdm_path']
+    use_pyscf = inputs['use_pyscf']
+    fix_sym = inputs['fix_sym']
     
+    # Symmetry
+    if fix_sym == None or not use_pyscf:
+        mol_sym = False
+    else:
+        mol_sym = True
+        
+    # Get the mol object for continuation
+    mol = read_mol(inputs['basis'], mol_sym)
+
+    # Set FCI solver if use_pyscf
+    if use_pyscf:
+        from pyscf import fci
+        # Set fci solver to be used
+        
+        if fix_sym == None:
+            FCISOLVER = fci.direct_spin0.FCI()
+        else:
+            FCISOLVER = fci.direct_spin0_symm.FCI(mol)
+            FCISOLVER.wfnsym = fix_sym
+            
+        FCISOLVER.nroots = NSTAT+1
+
+        if fix_singlet:
+            fci.addons.fix_spin_(FCISOLVER,ss=0) # Fix spin
+
     # Add the current geometry to list of geometries along the trajectory
     write_traj(mol)
     
@@ -247,11 +393,23 @@ def evcont_feed_nx(mode, adjustphase=True):
             cont_ovlp, cont_1rdm, cont_2rdm = read_model(trdm_path)
         
         # From eigenvector continuation
-        vec_cont, en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
-            mol,
-            cont_1rdm, cont_2rdm, cont_ovlp,
-            nroots=NSTAT+1
-            )
+        if inputs['lowrank']:
+            vec_cont, en_cont, grad_cont, nac_cont, _ = get_lowrank_en_with_grad_and_NAC(
+                mol,
+                cont_1rdm,
+                cont_ovlp,
+                cont_2rdm, 
+                None,
+                nroots=NSTAT+1,
+                density_fit=inputs['density_fit'],
+                df_basis=inputs['df_basis']
+                )
+        else:
+            vec_cont, en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
+                mol,
+                cont_1rdm, cont_2rdm, cont_ovlp,
+                nroots=NSTAT+1
+                )
         
         write_cont(vec_cont)
 
@@ -326,7 +484,7 @@ if __name__ == '__main__':
         os.chdir(drc)
         #evcont_feed_nx(1)
     
-        mol = read_mol(BASIS)
+        mol = read_mol('sto-3g',False)
         
         tmpd = os.getcwd()
         cont_ovlp, cont_1rdm, cont_2rdm = read_model(tmpd)
