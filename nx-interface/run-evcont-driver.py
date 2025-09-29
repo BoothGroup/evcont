@@ -20,17 +20,7 @@ import numpy as np
 import os
 import sys
 import pickle
-
-############################
-# INPUTS (might be converted to an input file later on)
-#BASIS = "sto-6g"
-#use_pyscf = False
-#trdm_path = None
-
-# FCI related if use_pyscf
-#fix_singlet = True
-#fix_sym = 'A1g' #None
-#fix_sym = None
+from pathlib import Path
 
 ############################
 # Checks for evcont and pyscf
@@ -40,13 +30,14 @@ try:
 except:
    print('Error in run-evcont-driver: evcont is not installed!')
    sys.exit()
-   
+
 try:
-    from pyscf import gto
+    from pyscf import gto, fci, scf, mcscf, lib, grad
+
 except:
    print('Error in run-evcont-driver: pyscf is not installed!')
    sys.exit()
-            
+
 
 # Get parameters from nx-interface
 NSTAT  	  = int(sys.argv[1])
@@ -60,17 +51,17 @@ def read_mol(basis, mol_sym):
     """
     # Assumes geom file is in the current directory
     geom_f = 'geom'
-    
+
     atom_f = []
     with open(geom_f,'r') as f:
         for line in f.readlines():
             splt = line.split()
             #sym, atomic no, xc, yc, zc, mass
-            atom_f.append((splt[0], np.array(splt[2:5],dtype=np.float64)))            
-            #atom_f.append((splt[0], [float(i) for i in splt[2:5]]))      
-            
+            atom_f.append((splt[0], np.array(splt[2:5],dtype=np.float64)))
+            #atom_f.append((splt[0], [float(i) for i in splt[2:5]]))
+
     #print(atom_f)
-    
+
     # Create the molecule
     mol = gto.Mole()
 
@@ -81,23 +72,25 @@ def read_mol(basis, mol_sym):
         unit="Bohr",
         verbose=0
     )
-    
+
     return mol
 
 ############################
-
+"""
 def read_input_file(filename='evcont.in'):
 
     # Default input parameters
     defaults = {
         'basis': 'sto-6g',
-        'use_pyscf': False,
         'trdm_path': None,
         'fix_singlet' : False,
         'fix_sym' : None,
         'lowrank' : False,
         'density_fit' : False,
-        'df_basis' : None
+        'df_basis' : None,
+        'use_pyscf': False,
+        'use_quantel' : False,
+        'pyscf_solver': None,
     }
 
     variables = defaults.copy()
@@ -131,20 +124,20 @@ def read_input_file(filename='evcont.in'):
                 variables[key] = value
 
     return variables
-
+"""
 
 def read_input_file(filename='evcont.in'):
     """
     Reads key=value pairs from an input file and fills in defaults.
-    
+
     Args:
         filename (str): Path to input file. Defaults to 'evcont.in'.
         defaults (dict): Dictionary of default values.
         required_keys (list): Keys that must be present in input or defaults.
-    
+
     Returns:
         dict: Dictionary of input parameters.
-    
+
     Raises:
         FileNotFoundError: If input file is not found.
         ValueError: If required keys are missing.
@@ -158,9 +151,13 @@ def read_input_file(filename='evcont.in'):
         'fix_sym' : None,
         'lowrank' : False,
         'density_fit' : False,
-        'df_basis' : None
+        'df_basis' : None,
+        'pyscf_solver' : None,
+        'use_quantel' : False,
+        'ncas' : None,
+        'nelec' : None
     }
-    
+
     required_keys=[]
 
     if not os.path.isfile(filename):
@@ -207,6 +204,16 @@ def read_input_file(filename='evcont.in'):
 
     # Enforce required keys
     missing = [k for k in required_keys if k not in user_inputs or user_inputs[k] is None]
+    # Specialized enforcement
+    if user_inputs['use_pyscf'] and user_inputs['pyscf_solver'] is None:
+        missing.append('pyscf_solver')
+
+    if 'cas' in user_inputs['pyscf_solver']:
+        if user_inputs['ncas'] is None:
+            missing.append('ncas')
+        if user_inputs['nelec'] is None:
+            missing.append('ncas')
+
     if missing:
         raise ValueError(f"Missing required input(s): {', '.join(missing)}")
 
@@ -231,7 +238,7 @@ def read_model(path):
           either as a full tensor (two_rdm_final.npy) or low-rank vectors (lowrank_vecs.pkl)
 
     Args:
-        path (str): 
+        path (str):
             Path to the model files directory. Must contain:
                 - overlap_final.npy
                 - one_rdm_final.npy
@@ -257,87 +264,147 @@ def read_model(path):
 
     return overlap, one_rdm, two_rdm
 
-
 def get_phase(old,new):
-    
+
     #norm_old = np.linalg.norm(old)
     #norm_new = np.linalg.norm(new)
 
     cosq = np.einsum("ij,ij",old, new)
-        
+
     if cosq >= 0:
         return 1.
     else:
         return -1.
-    
+
 def adjust_phase(natm):
-    
+
     # Read old and current NACs
     currentnac = np.loadtxt('nad_vectors')
     try:
         oldnac = np.loadtxt('oldh')
     except:
         oldnac = currentnac
-        
+
     # Compute the overlap and adjust the phase
     n_nac = int(oldnac.shape[0]/natm)
-    
+
     adjusted_nacs = []
     for i in range(n_nac):
         oldi= oldnac[i*natm : (i+1)*natm, :]
         curri = currentnac[i*natm : (i+1)*natm, :]
-        
+
         phase = get_phase(oldi,curri)
         adjusted_nacs.append(phase * curri)
-        
+
     # Write the adjusted NACs
     np.savetxt('nad_vectors',np.vstack(adjusted_nacs))
-    
+
 def write_traj(mol):
     '''
-    Write positions along the trajectory to a separate file, 'traj_geom.npy' 
+    Write positions along the trajectory to a separate file, 'traj_geom.npy'
     (to retain more precision than 'dyn.out')
 
     '''
     fnam = 'traj_geom.npy'
-    
+
     if not os.path.isfile(fnam):
         # Create the first instance
         np.save(fnam, [mol.atom_coords()])
-        
+
     else:
         # Load
         coord = np.load(fnam)
-        
+
         # Add the new geometry
         new_traj = np.concatenate((coord,[mol.atom_coords()]))
-        
+
         # Write to file
         np.save(fnam, new_traj)
-        
+
 def write_cont(vec):
     '''
-    Write positions along the trajectory to a separate file, 'traj_geom.npy' 
+    Write positions along the trajectory to a separate file, 'traj_geom.npy'
     (to retain more precision than 'dyn.out')
 
     '''
     fnam = 'traj_vec.npy'
-    
+
     if not os.path.isfile(fnam):
         # Create the first instance
         np.save(fnam, [vec])
-        
-    else:        
+
+    else:
         # Write to file
         np.save(fnam, np.concatenate((np.load(fnam),[vec])))
 
+def sacasscf_en_with_grad_and_nac(mol, cas, nroots=1, 
+                                  fix_singlet=True,
+                                  anneal=True,
+                                  compute_grad=True, compute_nac=True):
+    """
+    Wrapper for running pyscf CASSCF calculation for each molecular geometry
+    along a NAMD trajectory
+    """
+    # CAS
+    ncas, nelec = cas
+    
+    # Setup calculation
+    mf = scf.RHF (mol).run()
+    mc = mcscf.CASSCF (mf, ncas, nelec)
+    if fix_singlet:
+        mc.fix_spin_(ss=0, shift=1)
+        
+    mc = mc.state_average ([1/nroots for i in range(nroots)])
+    mc.conv_tol = 1e-10
+    
+    # Setup orbitals and run CASSCF calculation
+    orb_path = "cas_orbitals.npy"
+    if anneal and Path(orb_path).exists():
+        mo_prev = np.load(orb_path)
+        mo_proj = mcscf.project_init_guess(mc, mo_prev)
+        mc.kernel(mo_proj)
+        
+    elif anneal:
+        print('File with orbitals from previous CAS iteration (cas_orbitals.npy) not found. Using mean-field starting point.')
+        mc.run()
+
+    else:
+        mc.run()
+
+    # Save orbitals for next iteration
+    if anneal:
+        np.save(orb_path,mc.mo_coeff)
+                
+    # Set grad and NAC objects
+    if compute_grad: 
+        mc_grads = mc.Gradients()
+    if compute_nac:
+        mc_nacs = mc.nac_method()
+
+    # Compute energy, grad and NAC
+    en = mc.e_states[:nroots]
+    #print(en)
+    grad_all = []
+    nac_all = {}
+    for state in range(nroots):
+        # Gradients
+        if compute_grad:
+            grad_all.append( mc_grads.kernel(state=state))
+    
+        # NACs
+        for jstate in range(state):
+            if compute_nac:
+                nac_all[str(state)+str(jstate)] = mc_nacs.kernel (state=(state,jstate))
+
+    return en, np.array(grad_all), nac_all
+
 def evcont_feed_nx(mode, adjustphase=True):
     '''
-    Call evcont at the geometry to extract energies, gradients and nonadiabatic 
+    Call evcont at the geometry to extract energies, gradients and nonadiabatic
     coupling vectors (can be extended to other properties)
-    
+
     Modified from run-mlatom-driver.py in Newton-X MLAtom interface
-    
+
     Args:
         mode (int):
             0 - initcond
@@ -345,34 +412,36 @@ def evcont_feed_nx(mode, adjustphase=True):
             1 - dynamics
                     Updates energies, gradients and NACs
     '''
-    
+
     # Read the input parameters
     inputs = read_input_file()
 
     trdm_path = inputs['trdm_path']
     use_pyscf = inputs['use_pyscf']
+    use_quantel = inputs['use_quantel']
+    pyscf_solver = inputs['pyscf_solver']
     fix_sym = inputs['fix_sym']
-    
+    fix_singlet = inputs['fix_singlet']
+
     # Symmetry
     if fix_sym == None or not use_pyscf:
         mol_sym = False
     else:
         mol_sym = True
-        
+
     # Get the mol object for continuation
     mol = read_mol(inputs['basis'], mol_sym)
 
     # Set FCI solver if use_pyscf
     if use_pyscf:
-        from pyscf import fci
         # Set fci solver to be used
-        
+
         if fix_sym == None:
             FCISOLVER = fci.direct_spin0.FCI()
         else:
             FCISOLVER = fci.direct_spin0_symm.FCI(mol)
             FCISOLVER.wfnsym = fix_sym
-            
+
         FCISOLVER.nroots = NSTAT+1
 
         if fix_singlet:
@@ -380,7 +449,7 @@ def evcont_feed_nx(mode, adjustphase=True):
 
     # Add the current geometry to list of geometries along the trajectory
     write_traj(mol)
-    
+
     # Get energies, gradients, NAC
     if not use_pyscf:
         print('Implementation: evcont')
@@ -391,14 +460,19 @@ def evcont_feed_nx(mode, adjustphase=True):
             cont_ovlp, cont_1rdm, cont_2rdm = read_model(cwd)
         else:
             cont_ovlp, cont_1rdm, cont_2rdm = read_model(trdm_path)
-        
+
+
         # From eigenvector continuation
         if inputs['lowrank']:
+            if inputs['density_fit']:
+                print('Low-rank inference - with density fitting (%s basis)'%inputs['df_basis'])
+            else:
+               	print('Low-rank inference - w/out density fitting')
             vec_cont, en_cont, grad_cont, nac_cont, _ = get_lowrank_en_with_grad_and_NAC(
                 mol,
                 cont_1rdm,
                 cont_ovlp,
-                cont_2rdm, 
+                cont_2rdm,
                 None,
                 nroots=NSTAT+1,
                 density_fit=inputs['density_fit'],
@@ -410,39 +484,48 @@ def evcont_feed_nx(mode, adjustphase=True):
                 cont_1rdm, cont_2rdm, cont_ovlp,
                 nroots=NSTAT+1
                 )
-        
+
         write_cont(vec_cont)
 
     else:
-        print('Implementation: pyscf FCI - sym_%s'%fix_sym)
-        # FCI results in SAO basis
-        en_cont, grad_cont, nac_cont, _ = get_FCI_energy_with_grad_and_NAC_withsym(
-            mol,
-            FCISOLVER,
-            nroots=NSTAT+1,
-            irrep_name=fix_sym
-            )
-    
+
+        if pyscf_solver in ['fci','FCI']:
+            print('Implementation: pyscf FCI - sym_%s'%fix_sym)
+            # FCI results in SAO basis
+            en_cont, grad_cont, nac_cont, _ = get_FCI_energy_with_grad_and_NAC_withsym(
+                mol,
+                FCISOLVER,
+                nroots=NSTAT+1,
+                irrep_name=fix_sym
+                )
+
+        elif pyscf_solver in ['sacasscf', 'SACASSCF']:
+            print('Implementation: pyscf CASSCF - sym_%s'%fix_sym)
+
+            cas = (int(inputs['ncas']), int(inputs['nelec']))
+            en_cont, grad_cont, nac_cont = sacasscf_en_with_grad_and_nac(mol, cas, nroots=NSTAT, fix_singlet=fix_singlet)
+
     # Checks - write to output (going into EVCont.out)
     print('geom',mol.atom_coords())
     print()
-    print('vec', vec_cont, vec_cont.shape)
-    print()
+    if not (use_pyscf or use_quantel):
+        print('vec', vec_cont, vec_cont.shape)
+        print()
     print('en',en_cont)
     print()
     print('grad', grad_cont)
     print()
     print('nac',nac_cont)
     print()
-    
+
     # Write energies and gradients
     with open('epot', 'w') as fepot, open('grad.all', 'w') as fgradall, open('grad', 'w') as fgrad:
         for istate in range(1,NSTAT+1):
             fepot.writelines(' %.13f\n' % en_cont[istate-1])
-            
+
             for iatom in range(mol.natm):
                 current = grad_cont[istate-1,iatom,:]
-                
+
                 fgradall.writelines(' %.13f %.13f %.13f\n' % (current[0],current[1],current[2]))
                 if (istate == NSTATDYN):
                     fgrad.writelines(' %.13f %.13f %.13f\n' % (current[0],current[1],current[2]))
@@ -452,7 +535,7 @@ def evcont_feed_nx(mode, adjustphase=True):
         for ii in range(NSTAT):
             for jj in range(ii):
                 nac_str = str(ii)+str(jj)
-                
+
                 for iatom in range(mol.natm):
                     current = nac_cont[nac_str][iatom,:]
 
@@ -460,13 +543,13 @@ def evcont_feed_nx(mode, adjustphase=True):
 
     if adjustphase:
         adjust_phase(mol.natm)
-        
+
 	# TODO: Transition moments, Oscillator strengths, energy gaps, etc.
 
     return 1
 
 if __name__ == '__main__':
-    
+
     check = False
     #mol = read_mol(basis=BASIS)
 
@@ -476,25 +559,24 @@ if __name__ == '__main__':
     # Try for specific cases
     if check:
         import os
-        
+
         drc = '/Users/katalar/Code/newtonx/Analysis/H8/S2-dt01/evcont-ntrain11/TEMP'
-        
+
         cwd = os.getcwd()
-        
+
         os.chdir(drc)
         #evcont_feed_nx(1)
-    
+
         mol = read_mol('sto-3g',False)
-        
+
         tmpd = os.getcwd()
         cont_ovlp, cont_1rdm, cont_2rdm = read_model(tmpd)
-        
+
         # From eigenvector continuation
         en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
             mol,
             cont_1rdm, cont_2rdm, cont_ovlp,
             nroots=NSTAT+1
             )
-        
-        os.chdir(cwd)
 
+        os.chdir(cwd)
