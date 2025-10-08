@@ -477,12 +477,11 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     # Check if low-rank vectors have been vectorized
     if ('vals' in lowrank_vecs):
         vectorized = True
-        # Whether to use training point symmetry
-        hermitian = lowrank_vecs['hermitian']
-        
+        # Whether to use training point symmetry; keep original 'hermitian' arg as default
+        hermitian = lowrank_vecs.get('hermitian', hermitian)
+
     else:
         vectorized = False
-        
         
     # Construct the subspace Hamiltonian
     if not vectorized:
@@ -499,7 +498,9 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                 use_joint = lowrank_vecs[(bra, ket)][3]
 
                 # Transform the low-rank vecs into
-                lr_vecs_ao = ao2mo._ao2mo.nr_e2(lowrank_vecs[(bra, ket)][1].transpose((2,0,1)), sao_basis.T,
+                lr_vecs_group = np.ascontiguousarray(lowrank_vecs[(bra, ket)][1].transpose((2,0,1)))
+                sao_basis_T = np.ascontiguousarray(sao_basis.T)
+                lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_group, sao_basis_T,
                 (0, norb, 0, norb), aosym='s1', mosym='s1')
                 lr_vecs_ao = lr_vecs_ao.reshape((nvec,norb,norb))
     
@@ -510,7 +511,9 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
         
                 # J build from SVD
                 else:
-                    lr_rightvecs_ao = ao2mo._ao2mo.nr_e2(lowrank_vecs[(bra, ket)][2], sao_basis,
+                    lr_rightvecs_group = np.ascontiguousarray(lowrank_vecs[(bra, ket)][2])
+                    sao_basis_arr = np.ascontiguousarray(sao_basis)
+                    lr_rightvecs_ao = ao2mo._ao2mo.nr_e2(lr_rightvecs_group, sao_basis_arr,
                     (0, norb, 0, norb), aosym='s1', mosym='s1')
                     lr_rightvecs_ao = lr_rightvecs_ao.reshape((nvec,norb,norb))
                     #lr_rightvecs_ao = np.einsum('ai,...ij,bj->...ab', sao_basis, lowrank_vecs[(bra, ket)][2], sao_basis)
@@ -546,7 +549,10 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                     #subspace_h[bra, ket] += 0.5 * np.einsum('xj,zj,jxz->', sao_basis, sao_basis, vk)
                     
                     """
-                    subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pii,Pjj->',diagonals[bra, ket, 0, :, :], Lpq_sao, Lpq_sao)
+                    # Contract diagonal J using the diagonal of Lpq_sao to avoid ambiguous
+                    # repeated-index broadcasting ('Pii') in einsum which can lead to shape errors.
+                    Ldiag = np.diagonal(Lpq_sao, axis1=1, axis2=2)  # shape (P, norb)
+                    subspace_h[bra, ket] += 0.5 * np.einsum('ij,pi,pj->', diagonals[bra, ket, 0, :, :], Ldiag, Ldiag, optimize='optimal')
                     subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pij,Pij->',diagonals[bra, ket, 1, :, :], Lpq_sao, Lpq_sao)
                     subspace_h[bra, ket] += 0.5 * np.einsum('ij,Pij,Pji->',diagonals[bra, ket, 2, :, :], Lpq_sao, Lpq_sao)
                     """
@@ -560,7 +566,9 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
             lr_vecs_grouped = lowrank_vecs['vecs_stacked']
             
             # Transform the low-rank vecs into
-            lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, sao_basis.T,
+            lr_vecs_grouped_c = np.ascontiguousarray(lr_vecs_grouped)
+            sao_basis_T = np.ascontiguousarray(sao_basis.T)
+            lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped_c, sao_basis_T,
             (0, norb, 0, norb), aosym='s1', mosym='s1')
             lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
             
@@ -584,11 +592,15 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
             svd_rightvecs_grouped = lowrank_vecs['rightvecs_stacked']
     
             # Transform the low-rank vecs into AO basis
-            svd_rightvecs_ao = ao2mo._ao2mo.nr_e2(svd_rightvecs_grouped, sao_basis.T,
+            svd_rightvecs_grouped_c = np.ascontiguousarray(svd_rightvecs_grouped)
+            sao_basis_T = np.ascontiguousarray(sao_basis.T)
+            svd_rightvecs_ao = ao2mo._ao2mo.nr_e2(svd_rightvecs_grouped_c, sao_basis_T,
             (0, norb, 0, norb), aosym='s1', mosym='s1')
             svd_rightvecs_ao = svd_rightvecs_ao.reshape((svd_rightvecs_grouped.shape[0],norb,norb))
             
-            svd_vecs_ao = ao2mo._ao2mo.nr_e2(svd_vecs_grouped, sao_basis.T,
+            svd_vecs_grouped_c = np.ascontiguousarray(svd_vecs_grouped)
+            sao_basis_T = np.ascontiguousarray(sao_basis.T)
+            svd_vecs_ao = ao2mo._ao2mo.nr_e2(svd_vecs_grouped_c, sao_basis_T,
             (0, norb, 0, norb), aosym='s1', mosym='s1')
             svd_vecs_ao = svd_vecs_ao.reshape((svd_vecs_grouped.shape[0],norb,norb))
             
@@ -606,52 +618,50 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
         #    sys.exit()
 
         if use_diag:
-            
+
             if not sao_diag:
-                # Transform the low-rank vecs into
-                diagJ_ao = np.einsum('Nij,wi,xi->Njwx',diagonals[0], sao_basis, sao_basis)
-    
+                # Transform the low-rank vecs into AO basis for J builds
+                diagJ_ao = np.einsum('Nij,wi,xi->Njwx', diagonals[0], sao_basis, sao_basis)
+
                 # Flatten
                 orig_shape = diagJ_ao.shape[:2]
                 flat_diagJ_ao = diagJ_ao.reshape(orig_shape[0] * orig_shape[1], *diagJ_ao.shape[2:])
-                
+
                 # JK Builds
-                vj_list = get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
-    
+                vj_list = get_jk(dm=flat_diagJ_ao, hermi=0, with_k=False)[0]
+
                 # Unflatten
-                vj_unflat = vj_list.reshape(*orig_shape, *flat_diagJ_ao.shape[1:])  # (3, 4, 5, 6)
-                vj = unstack_tril(vj_unflat,hermitian=hermitian)
-    
+                vj_unflat = vj_list.reshape(*orig_shape, *flat_diagJ_ao.shape[1:])
+                vj = unstack_tril(vj_unflat, hermitian=hermitian)
+
                 subspace_h += 0.5 * np.einsum('yj,zj,XYjyz->XY', sao_basis, sao_basis, vj)
 
             else:
-                diagJ_unpack = unstack_tril(diagonals[0],hermitian=False)
-                subspace_h += 0.5 * np.einsum('XYij,Pii,Pjj->XY',diagJ_unpack, Lpq_sao, Lpq_sao)
+                diagJ_unpack = unstack_tril(diagonals[0], hermitian=hermitian)
+                subspace_h += 0.5 * np.einsum('XYij,Pii,Pjj->XY', diagJ_unpack, Lpq_sao, Lpq_sao)
 
-        
             if not Jdiag_only:
-                
+
                 if not sao_diag:
-                    # Transform the low-rank vecs into
-                    diagK_ao = np.einsum('Nij,wi,yi->Njwy',diagonals[1], sao_basis, sao_basis)
-    
+                    # Transform the low-rank vecs into AO basis for K builds
+                    diagK_ao = np.einsum('Nij,wi,yi->Njwy', diagonals[1], sao_basis, sao_basis)
+
                     # Flatten
                     orig_shape = diagK_ao.shape[:2]
                     flat_diagK_ao = diagK_ao.reshape(orig_shape[0] * orig_shape[1], *diagK_ao.shape[2:])
-                    
+
                     # JK Builds
-                    vk_list = get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
-    
+                    vk_list = get_jk(dm=flat_diagK_ao, hermi=0, with_j=False)[1]
+
                     # Unflatten
-                    vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
-                    vk = unstack_tril(vk_unflat,hermitian=hermitian)
-    
+                    vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])
+                    vk = unstack_tril(vk_unflat, hermitian=hermitian)
+
                     subspace_h += 0.5 * np.einsum('xj,zj,XYjxz->XY', sao_basis, sao_basis, vk)
 
                 else:
-                    diagK_unpack = unstack_tril(diagonals[1],hermitian=False)
-
-                    subspace_h += 0.5 * np.einsum('XYij,Pij,Pij->XY',diagK_unpack, Lpq_sao, Lpq_sao)
+                    diagK_unpack = unstack_tril(diagonals[1], hermitian=hermitian)
+                    subspace_h += 0.5 * np.einsum('XYij,Pij,Pij->XY', diagK_unpack, Lpq_sao, Lpq_sao)
                     
     if hermitian:
         # Set the upper triangle
@@ -727,7 +737,9 @@ def get_jk_builds(mol, lowrank_vecs,
         
         with log_time("AO transform (1)"):
             # Transform the low-rank vecs into
-            lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped, ao_mo_trafo.T,
+            lr_vecs_grouped_c = np.ascontiguousarray(lr_vecs_grouped)
+            ao_mo_trafo_T = np.ascontiguousarray(ao_mo_trafo.T)
+            lr_vecs_ao = ao2mo._ao2mo.nr_e2(lr_vecs_grouped_c, ao_mo_trafo_T,
             (0, norb, 0, norb), aosym='s1', mosym='s1')
             lr_vecs_ao = lr_vecs_ao.reshape((lr_vecs_grouped.shape[0],norb,norb))
             
@@ -781,11 +793,15 @@ def get_jk_builds(mol, lowrank_vecs,
 
         with log_time("AO transform (2)"):
             # Transform the low-rank vecs into AO basis
-            svd_rightvecs_ao = ao2mo._ao2mo.nr_e2(svd_rightvecs_grouped, ao_mo_trafo.T,
+            svd_rightvecs_grouped_c = np.ascontiguousarray(svd_rightvecs_grouped)
+            ao_mo_trafo_T = np.ascontiguousarray(ao_mo_trafo.T)
+            svd_rightvecs_ao = ao2mo._ao2mo.nr_e2(svd_rightvecs_grouped_c, ao_mo_trafo_T,
             (0, norb, 0, norb), aosym='s1', mosym='s1')
             svd_rightvecs_ao = svd_rightvecs_ao.reshape((svd_rightvecs_grouped.shape[0],norb,norb))
             
-            svd_vecs_ao = ao2mo._ao2mo.nr_e2(svd_vecs_grouped, ao_mo_trafo.T,
+            svd_vecs_grouped_c = np.ascontiguousarray(svd_vecs_grouped)
+            ao_mo_trafo_T = np.ascontiguousarray(ao_mo_trafo.T)
+            svd_vecs_ao = ao2mo._ao2mo.nr_e2(svd_vecs_grouped_c, ao_mo_trafo_T,
             (0, norb, 0, norb), aosym='s1', mosym='s1')
             svd_vecs_ao = svd_vecs_ao.reshape((svd_vecs_grouped.shape[0],norb,norb))
             
@@ -801,8 +817,9 @@ def get_jk_builds(mol, lowrank_vecs,
         with log_time("J Grad Builds (2)"):
             #vj_lgrad_list, _ = grad_obj.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False) 
             #vj_rgrad_list, _ = grad_obj.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False) 
-            vj_lgrad_list, _ = parallel_get_jk(svd_vecs_ao, grad_obj.get_jk, hermi=0, with_k=False)
-            vj_rgrad_list, _ = parallel_get_jk(svd_rightvecs_ao, grad_obj.get_jk, hermi=0, with_k=False)
+            # gradient JK builds 
+            vj_lgrad_list = parallel_get_jk(svd_vecs_ao, grad_obj.get_j, hermi=0)
+            vj_rgrad_list = parallel_get_jk(svd_rightvecs_ao, grad_obj.get_j, hermi=0)
 
         # Reindex to separate bra, ket, nvec indices
         vj_right = unpack_vec(vj_r_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian, nbra=ntrain)
@@ -851,7 +868,9 @@ def get_jk_builds(mol, lowrank_vecs,
             #vj_grad_list = grad_obj.get_jk(dm=flat_diagJ_ao.transpose(0,2,1), hermi=0, with_k=False) [0]
             #vj_grad_t_list = grad_obj.get_jk(dm=flat_diagJ_ao_T.transpose(0,2,1), hermi=0, with_k=False) [0]
 
-            vj_grad_list = parallel_get_jk(flat_diagJ_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0, with_k=False) [0]
+            # gradient JK builds for diagonals
+            #vj_grad_list = parallel_get_jk(flat_diagJ_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0, with_k=False)[0]
+            vj_grad_list = parallel_get_jk(flat_diagJ_ao.transpose(0,2,1), grad_obj.get_j, hermi=0)
 
         # Unflatten
         vj_unflat = vj_list.reshape(*orig_shape, *vj_list.shape[1:])
@@ -885,7 +904,8 @@ def get_jk_builds(mol, lowrank_vecs,
                 #vk_grad_list = grad_obj.get_jk(dm=flat_diagK_ao.transpose(0,2,1) + flat_diagK_ao_T.transpose(0,2,1), hermi=0, with_j=False) [1]
                 #vk_grad_t_list = grad_obj.get_jk(dm=flat_diagK_ao_T.transpose(0,2,1), hermi=0, with_j=False) [1]
                 
-                vk_grad_list = parallel_get_jk(flat_diagK_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0, with_j=False) [1]
+                # gradient JK builds for diagonals
+                vk_grad_list = parallel_get_jk(flat_diagK_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0, with_j=False)[1]
 
             # Unflatten
             vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
@@ -1187,36 +1207,68 @@ def unstack_tril(packed, hermitian=True):
         arr : np.ndarray
             Output array of shape (n, n, ...)
     """
+    # If the input already appears to be in full (n, n, ...) grid form, just
+    # return it (but ensure Hermitian symmetry is enforced when requested).
+    if packed.ndim >= 2 and packed.shape[0] == packed.shape[1]:
+        arr = packed.copy()
+        if hermitian:
+            n = arr.shape[0]
+            for i in range(n):
+                for j in range(i + 1, n):
+                    try:
+                        arr[j, i] = arr[i, j].conj()
+                    except Exception:
+                        arr[j, i] = arr[i, j]
+        return arr
+
     m = packed.shape[0]
     rest_shape = packed.shape[1:]
 
-    if hermitian:
-        # Solve m = n(n+1)//2 ⇒ n = (-1 + sqrt(1 + 8m)) // 2
-        n = int((-1 + math.isqrt(1 + 8 * m)) // 2)
-        if n * (n + 1) // 2 != m:
-            raise ValueError("Invalid packed shape for Hermitian lower triangle: m = n(n+1)//2")
+    # The packed length m can sometimes be both a triangular number and a perfect square
+    # (e.g., m=36 -> triangular for n=8, square for n=6). Use the `hermitian` flag to
+    # disambiguate: when hermitian=True prefer triangular (lower-triangle) packing,
+    # otherwise prefer full-grid (n*n) packing.
 
+    # Check triangular possibility: solve n(n+1)/2 == m
+    tri_n = int((math.isqrt(1 + 8 * m) - 1) // 2)
+    is_tri = (tri_n * (tri_n + 1) // 2 == m)
+
+    # Check square possibility: m == n*n
+    sq_n = int(math.isqrt(m))
+    is_sq = (sq_n * sq_n == m)
+
+    # Prefer triangular when requested or when square interpretation is impossible
+    if is_tri and (hermitian or not is_sq):
+        n = tri_n
         arr = np.zeros((n, n) + rest_shape, dtype=packed.dtype)
         idx = 0
         for i in range(n):
             for j in range(i + 1):  # j <= i
-                arr[i, j] = packed[idx]
+                val = packed[idx]
+                arr[i, j] = val
+                # Mirror to the upper triangle to restore full matrix symmetry
+                try:
+                    arr[j, i] = val.conj()
+                except Exception:
+                    arr[j, i] = val
                 idx += 1
+        return arr
 
-    else:
-        # Solve m = n*n ⇒ n = sqrt(m)
-        n = int(math.isqrt(m))
-        if n * n != m:
-            raise ValueError("Invalid packed shape for full matrix: m = n*n")
+    # If square packing fits (n*n) interpret as full-grid
+    if is_sq:
+        n = sq_n
+        arr = packed.reshape((n, n) + rest_shape).copy()
+        if hermitian:
+            for i in range(n):
+                for j in range(i + 1, n):
+                    try:
+                        arr[j, i] = arr[i, j].conj()
+                    except Exception:
+                        arr[j, i] = arr[i, j]
+        return arr
 
-        arr = np.zeros((n, n) + rest_shape, dtype=packed.dtype)
-        idx = 0
-        for i in range(n):
-            for j in range(n):
-                arr[i, j] = packed[idx]
-                idx += 1
-
-    return arr
+    # If none of the interpretations matched, raise an informative error
+    raise ValueError(f"Invalid packed shape for unstacking: not triangular nor square (m={m})")
 
 
 def stack_diagonal(diagonals, hermitian=True):
@@ -1385,52 +1437,189 @@ def vectorize_lowrank(self, hermitian=True):
     # Find the largest number of vectors for each bra,ket pair
     nbra = self.overlap.shape[0]
     norb = self.one_rdm.shape[-1]
-    nvec_max = 0
-    for i, j in itertools.product(range(nbra), range(nbra)):
-        nvec_max = max(nvec_max, self.vecs_lowrank[(i,j)][0].shape[-1])
-        
-    # Convert the dictionary of states into a np.array
-    vecs_lr = np.zeros([nbra, nbra, nvec_max, norb, norb])
-    rightvecs_lr = np.zeros([nbra, nbra, nvec_max, norb, norb])
-    vals_lr = np.zeros([nbra, nbra, nvec_max])
-    for i, j in itertools.product(range(nbra), range(nbra)):
-        lr_i = self.vecs_lowrank[(i,j)]
-        nvec_i = lr_i[0].shape[-1]
-        vecs_lr[i,j,:nvec_i] = lr_i[1].transpose(2,0,1) 
-        rightvecs_lr[i,j,:nvec_i] = lr_i[2]#.transpose(2,0,1) 
-        vals_lr[i,j,:nvec_i] = lr_i[0]
-        
-    # Stack vectors for more efficient inference
-    # TODO: Clean up this function as there is a large overlap between
-    # the previous steps and stack_lowrank function
+    # Determine maximum vectors per pair quickly
+    nvec_max = max((lr[0].shape[-1] for lr in self.vecs_lowrank.values()), default=0)
+
+    # Use stack_lowrank to get packed/staged arrays and flags
     stacked, has_svd, has_ed = stack_lowrank(self.vecs_lowrank, hermitian=hermitian)
+
+    # Allocate padded arrays for per-pair fast indexing
+    vals_lr = np.zeros((nbra, nbra, nvec_max), dtype=float)
+    vecs_lr = np.zeros((nbra, nbra, nvec_max, norb, norb), dtype=float)
+    # store number of vectors per pair explicitly to make unpack lossless
+    nvecs_per_pair = np.zeros((nbra, nbra), dtype=int)
+    # Only allocate rightvecs if any pair uses ED (joint decomposition)
+    rightvecs_lr = None
+    if has_ed:
+        rightvecs_lr = np.zeros((nbra, nbra, nvec_max, norb, norb), dtype=float)
+
+    # Fill padded arrays from the original per-pair dict (single pass)
+    for (i, j), lr_i in self.vecs_lowrank.items():
+        vals = lr_i[0]
+        vecs = lr_i[1]
+        rvecs = lr_i[2]
+        nvec_i = vals.shape[-1]
+
+        if nvec_i == 0:
+            continue
+
+        vals_lr[i, j, :nvec_i] = vals
+        nvecs_per_pair[i, j] = nvec_i
+        # stored as (norb, norb, nvec) in original, need to transpose to (nvec, norb, norb)
+        vecs_lr[i, j, :nvec_i] = vecs.transpose(2, 0, 1)
+        if rightvecs_lr is not None:
+            rightvecs_lr[i, j, :nvec_i] = rvecs
     
-    # Vectorize diagonal corrections
-    diagJ, diagK = stack_diagonal(self.diagonal_lr, hermitian=hermitian)
-    
-    self.diagonal_vectorized = np.stack((diagJ, diagK))
+    # Vectorize diagonal corrections: store both the packed J and the packed K-sum
+    # for compatibility, but also keep packed components of diag[1] and diag[2]
+    if getattr(self, 'diagonal_lr', None) is not None:
+        diagJ = self.diagonal_lr[:, :, 0]
+        diagK1 = self.diagonal_lr[:, :, 1]
+        diagK2 = self.diagonal_lr[:, :, 2]
+
+        stacked_diagJ = stack_tril(diagJ, hermitian=hermitian)
+        stacked_diagKsum = stack_tril(diagK1 + diagK2, hermitian=hermitian)
+        # Also store separated components for lossless roundtrip
+        stacked_diagK1 = stack_tril(diagK1, hermitian=hermitian)
+        stacked_diagK2 = stack_tril(diagK2, hermitian=hermitian)
+
+        self.diagonal_vectorized = np.stack((stacked_diagJ, stacked_diagKsum))
+        # components stored separately to enable exact reconstruction
+        self.diagonal_vectorized_components = np.stack((stacked_diagK1, stacked_diagK2))
+    else:
+        self.diagonal_vectorized = None
+        self.diagonal_vectorized_components = None
     #self.diagonal_K = diagK
 
     # Set this low-rank description
-    self.lowrank_vectorized = {}
-    self.lowrank_vectorized['vals'] = vals_lr
-    self.lowrank_vectorized['vecs'] = vecs_lr
-    
+    # Build final dict
+    self.lowrank_vectorized = {
+        'vals': vals_lr,
+        'vecs': vecs_lr,
+        'hermitian': hermitian,
+        'has_ed': has_ed,
+        'has_svd': has_svd,
+        'nvecs': nvecs_per_pair,
+    }
+
     if has_ed:
         self.lowrank_vectorized['rightvecs'] = rightvecs_lr
         self.lowrank_vectorized['vecs_stacked'] = stacked['vecs']
         self.lowrank_vectorized['pairloc'] = stacked['pairloc']
-    
+
     if has_svd:
         self.lowrank_vectorized['rightvecs_stacked'] = stacked['rightvecs_svd']
         self.lowrank_vectorized['vecs_svd_stacked'] = stacked['vecs_svd']
         self.lowrank_vectorized['pairloc_svd'] = stacked['pairloc_svd']
-
-    self.lowrank_vectorized['hermitian'] = hermitian
-    self.lowrank_vectorized['has_ed'] = has_ed
-    self.lowrank_vectorized['has_svd'] = has_svd
+    
     
 ###############################################################################
+
+def unpack_vectorized_lowrank(self):
+    """
+    Reconstruct per-(bra,ket) lowrank dict (`self.vecs_lowrank`) and
+    `self.diagonal_lr` from the vectorized representations
+    (`self.lowrank_vectorized` and `self.diagonal_vectorized`). This
+    enables appending new training points when the object is already
+    vectorized. Mirrors the helper previously attached to the FCI_EVCont_obj.
+    """
+    if not getattr(self, 'lowrank_vectorized', None):
+        return
+
+    lv = self.lowrank_vectorized
+    vals = lv.get('vals')
+    vecs = lv.get('vecs')
+    rightvecs = lv.get('rightvecs', None)
+    pairloc = lv.get('pairloc', {})
+    pairloc_svd = lv.get('pairloc_svd', {})
+    hermitian = lv.get('hermitian', True)
+    nvecs_per_pair = lv.get('nvecs', None)
+
+    # Basic shapes
+    nbra = vals.shape[0]
+    norb = vecs.shape[-1]
+
+    # Reconstruct per-pair vecs_lowrank
+    vecs_lowrank = {}
+    for i, j in itertools.product(range(nbra), range(nbra)):
+        vals_ij = vals[i, j]
+        vecs_ij = vecs[i, j]
+
+        # Determine nvec for this pair: prefer explicit stored count if present
+        if nvecs_per_pair is not None:
+            nvec = int(nvecs_per_pair[i, j])
+        else:
+            mask = np.any(np.abs(vecs_ij) > 1e-12, axis=(1, 2))
+            nvec = int(mask.sum())
+
+        if nvec == 0:
+            # keep zero-length arrays for consistency
+            vals_i = np.zeros((0,))
+            vecs_i = np.zeros((norb, norb, 0))
+            right_i = np.zeros((0, norb, norb)) if rightvecs is not None else np.zeros((0, norb, norb))
+        else:
+            vals_i = vals_ij[:nvec].copy()
+            # stored in vectorize_lowrank as (nvec, norb, norb)
+            vecs_i = vecs_ij[:nvec].transpose(1, 2, 0).copy()
+            if rightvecs is not None:
+                right_i = rightvecs[i, j, :nvec].copy()
+            else:
+                # try to recover from stacked SVD/rightvecs_stacked if present
+                if 'rightvecs_stacked' in lv and (i, j) in pairloc_svd:
+                    st, en = pairloc_svd[(i, j)]
+                    right_i = lv['rightvecs_stacked'][st:en].copy()
+                elif 'rightvecs_stacked' in lv and (j, i) in pairloc_svd:
+                    st, en = pairloc_svd[(j, i)]
+                    right_i = lv['rightvecs_stacked'][st:en].copy()
+                else:
+                    right_i = np.zeros((nvec, norb, norb))
+
+        # Determine whether this pair used joint ED (present in pairloc in either order)
+        use_joint = (i, j) in pairloc or (j, i) in pairloc
+
+        vecs_lowrank[(i, j)] = (vals_i, vecs_i, right_i, use_joint)
+
+    # Reconstruct diagonals from diagonal_vectorized if available
+    if getattr(self, 'diagonal_vectorized', None) is not None:
+        diag_stack = self.diagonal_vectorized
+        # diag_stack shape (2, m, norb, norb)
+        diagJ_packed = diag_stack[0]
+        diagKsum_packed = diag_stack[1]
+
+        # If explicit components were stored at vectorization time, use them to reconstruct exact diag[1] and diag[2]
+        comp = getattr(self, 'diagonal_vectorized_components', None)
+        if comp is not None:
+            diagK1_packed = comp[0]
+            diagK2_packed = comp[1]
+
+            diagJ_unpacked = unstack_tril(diagJ_packed, hermitian=hermitian)
+            diagK1_unpacked = unstack_tril(diagK1_packed, hermitian=hermitian)
+            diagK2_unpacked = unstack_tril(diagK2_packed, hermitian=hermitian)
+
+            diagonal_lr = np.zeros((nbra, nbra, 3, norb, norb), dtype=diagJ_unpacked.dtype)
+            diagonal_lr[:, :, 0, :, :] = diagJ_unpacked
+            diagonal_lr[:, :, 1, :, :] = diagK1_unpacked
+            diagonal_lr[:, :, 2, :, :] = diagK2_unpacked
+
+        else:
+            # Fallback: only K-sum available
+            diagJ_unpacked = unstack_tril(diagJ_packed, hermitian=hermitian)
+            diagK_unpacked = unstack_tril(diagKsum_packed, hermitian=hermitian)
+
+            # Recreate original 3-component diagonal array: [J, K_sum, 0]
+            diagonal_lr = np.zeros((nbra, nbra, 3, norb, norb), dtype=diagJ_unpacked.dtype)
+            diagonal_lr[:, :, 0, :, :] = diagJ_unpacked
+            # diagK_unpacked contains sum of original diag[1] + diag[2]
+            diagonal_lr[:, :, 1, :, :] = diagK_unpacked
+            diagonal_lr[:, :, 2, :, :] = 0.0
+
+    else:
+        diagonal_lr = None
+
+    # Assign back to self so append_to_rdms can operate on the per-pair structures
+    self.vecs_lowrank = vecs_lowrank
+    self.diagonal_lr = diagonal_lr
+
 
         
 def rdm2_from_rdm1(rdm1, ovlp):

@@ -10,7 +10,7 @@ from pyscf.fci.addons import transform_ci
 
 from evcont.ab_initio_gradients_loewdin import get_loewdin_trafo
 
-from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
+from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank, unpack_vectorized_lowrank
 
 class FCI_EVCont_obj:
     """
@@ -95,8 +95,8 @@ class FCI_EVCont_obj:
     def vectorize_lowrank(self,hermitian=True):        
         vectorize_lowrank(self,hermitian=hermitian)
 
-    
-            
+    def unpack_vectorized_lowrank(self):
+        unpack_vectorized_lowrank(self)
         
     def append_to_rdms(self, mol):
         """
