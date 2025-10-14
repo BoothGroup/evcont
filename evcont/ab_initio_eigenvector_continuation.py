@@ -158,6 +158,7 @@ def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S,
     #print('  Overlap')
     #print(S.tolist())
     
+    #print(H, S)
     en_approx, evec_approx = solve_subspace(H, S, nroots=nroots, hermitian=hermitian, lindep=lindep)
 
     return en_approx, evec_approx

@@ -15,7 +15,7 @@ import pickle
 from pyscf import gto, fci, scf, lib, ao2mo, mcscf, df
 
 from evcont.FCI_EVCont import FCI_EVCont_obj
-#from evcont.CASCI_EVCont import CAS_EVCont_obj
+from evcont.CASCI_EVCont import CAS_EVCont_obj
 
 from evcont.electron_integral_utils import get_basis, get_integrals, get_loewdin_trafo, get_df_integrals
 
@@ -54,12 +54,12 @@ df_basis = None
 
 natom = 4
 
-#cont_solver = 'CAS'
-cont_solver = 'FCI'
+cont_solver = 'CAS'
+#cont_solver = 'FCI'
 
-cassolver='SS-CASSCF'
-#cassolver='CASCI'
-ncas, neleca = 2,2
+#cassolver='SA-CASSCF'
+cassolver='CASCI'
+ncas, neleca = 4,2
 figsave = True
 figshow = True
 
@@ -78,7 +78,7 @@ if fix_sym == None:
 else:
     mol_sym = True
     
-use_diag = True
+use_diag = False
 Jdiag_only = True # Only use diagonal corrections that contribute as J builds
 sao_diag = False # Diagonal inference in SAO basis
 
@@ -92,7 +92,7 @@ lowrank_kwargs = {
 
 #lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-12}
 lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-3}
-lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.001, 'save_diag':use_diag}
+#lowrank_kwargs = {'truncation_style':'ham', 'ham_thr':0.001, 'save_diag':use_diag}
 #lowrank_kwargs = {'truncation_style':'ham_en', 'ham_thr':0.0002}
 
 #lowrank_kwargs = {'truncation_style':'eigval', 'eval_thr':1e-1, 'save_diag':use_diag}
@@ -103,6 +103,10 @@ vectorize = True
 # For testing, use reconstructed 2tRDM instead of full evcont
 # - to see if fast inference is working as intended
 compare_to_reconstruct = False
+
+compare_gradients = False
+# If True, also compare against the numerical gradient through FD
+compare_to_numerical = False
 
 # If true, remove other contributions (nuclear terms)
 remove_nuclear_grad = False
@@ -178,8 +182,6 @@ def numerical_gradients(mol, energy_func, h=1e-6):
             mol.set_geom_(coords, unit='Bohr')
 
     return grads if nstates > 1 else grads[0]
-
-
 
 mol_dummy = get_mol([(x, 0.0, 0.0) for x in test_range[0] * np.arange(natom)])
 
@@ -411,7 +413,8 @@ cont_lowrank_en = np.zeros([len(test_range),nroots_to_compute])
 ref_grad = np.zeros([len(test_range),nroots_evcont, mol.natm, 3])
 cont_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
 cont_lr_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
-num_lr_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
+if compare_to_numerical:
+    num_lr_grad = np.zeros([len(test_range),nroots_to_compute, mol.natm, 3])
 
 for i, test_dist in enumerate(test_range):
     print(i)
@@ -423,37 +426,39 @@ for i, test_dist in enumerate(test_range):
     print('   low rank - start')
     # Continuation
     start = time.time()
-    en_continuation_ms, vec = approximate_multistate_lowrank_OAO(
-        mol, 
-        continuation_object.one_rdm, 
-        vecs_lr,
-        diags, 
-        continuation_object.overlap,
-        nroots=nroots_to_compute,
-        Jdiag_only=Jdiag_only,
-        sao_diag=sao_diag,
-        df_basis=df_basis
-    )
+    if not compare_gradients:
+        en_continuation_ms, vec = approximate_multistate_lowrank_OAO(
+            mol, 
+            continuation_object.one_rdm, 
+            vecs_lr,
+            diags, 
+            continuation_object.overlap,
+            nroots=nroots_to_compute,
+            Jdiag_only=Jdiag_only,
+            sao_diag=sao_diag,
+            df_basis=df_basis
+        )
+        cont_lowrank_en[i,:] += en_continuation_ms
+
+    else:
+        out = get_lowrank_en_with_grad_and_NAC(mol, continuation_object.one_rdm, 
+                                            continuation_object.overlap,
+                                            vecs_lr, diags, 
+                                            sao_diag=sao_diag,
+                                            nroots=nroots_to_compute,
+                                            density_fit=density_fit,
+                                            Jdiag_only=Jdiag_only,
+                                            df_basis=df_basis)
     
-    #"""
-    out = get_lowrank_en_with_grad_and_NAC(mol, continuation_object.one_rdm, 
-                                           continuation_object.overlap,
-                                           vecs_lr, diags, 
-                                           sao_diag=sao_diag,
-                                           nroots=nroots_to_compute,
-                                           density_fit=density_fit,
-                                           Jdiag_only=Jdiag_only,
-                                           df_basis=df_basis)
-    #"""
+        cont_lowrank_en[i,:] = out[1]
+
     lr_tot += (time.time()-start); lr_n_eval += 1
     
     print('   low rank - finish - %.1f sec'%(time.time()-start))
-
-    #cont_lowrank_en[i,:] += en_continuation_ms
-    cont_lowrank_en[i,:] = out[1] #en_continuation_ms
     
-    grad_num = numerical_gradients(mol, lowrank_en)
-    num_lr_grad[i,:] = grad_num
+    if compare_to_numerical:
+        grad_num = numerical_gradients(mol, lowrank_en)
+        num_lr_grad[i,:] = grad_num
     
     ## HF and FCI
     mf = scf.RHF(mol).density_fit(auxbasis=df_basis)
@@ -491,25 +496,26 @@ for i, test_dist in enumerate(test_range):
     # Use the same metric as before
     deriv_cderi = np.einsum('PQ,xijP -> xijQ', metric, ints_3c2e_ip1)
     """
-    # To reconstruct the full 4c derivative integrals, we need to contract with the previous cderi integrals
-    df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, Lpq_ao)
-    
-    h2_ao_deriv = df_grad_4c_ints
-    h2_ao = lib.einsum('Pij,Pkl->ijkl', Lpq_ao, Lpq_ao)
-    
-    h2_ao_nondf = mol.intor("int2e")
-    h2_ao_deriv_nondf = mol.intor("int2e_ip1", comp=3)
-    
-    print("Max error in 4c ERI derivative:", np.max(np.abs(h2_ao_deriv - h2_ao_deriv_nondf)))
-    
-    grad_nuc = df.grad.RHF(mf).grad_nuc()    
-    #grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
+    if compare_gradients:
+        # To reconstruct the full 4c derivative integrals, we need to contract with the previous cderi integrals
+        df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, Lpq_ao)
+        
+        h2_ao_deriv = df_grad_4c_ints
+        h2_ao = lib.einsum('Pij,Pkl->ijkl', Lpq_ao, Lpq_ao)
+        
+        h2_ao_nondf = mol.intor("int2e")
+        h2_ao_deriv_nondf = mol.intor("int2e_ip1", comp=3)
+        
+        print("Max error in 4c ERI derivative:", np.max(np.abs(h2_ao_deriv - h2_ao_deriv_nondf)))
+        
+        grad_nuc = df.grad.RHF(mf).grad_nuc()    
+        #grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
 
-    #cont_lr_grad[i] = out[2]
-    if remove_nuclear_grad:
-        cont_lr_grad[i] = out[2] - grad_nuc
-    else:
-        cont_lr_grad[i] = out[2]
+        #cont_lr_grad[i] = out[2]
+        if remove_nuclear_grad:
+            cont_lr_grad[i] = out[2] - grad_nuc
+        else:
+            cont_lr_grad[i] = out[2]
 
     # Only do FCI if number of orbitals is less than 16
     if mol.nao < 16 and (cont_solver == 'FCI' or fci_done):
@@ -517,25 +523,26 @@ for i, test_dist in enumerate(test_range):
         e_fci += mol.energy_nuc()
         fci_en[i,:] = e_fci
         
-        # Gradients
-        mc = mcscf.CASCI(mf, ncas=mf.mo_coeff.shape[0], nelecas=natom)
-        out_mc = mc.kernel()
-        e_fci = out_mc[0]
-        
-        assert mc.converged
-        
-        grad_method = mc.Gradients()
-        
-        grad_ref_l = []
-        for refi in range(nroots_evcont):
-            grad_ref_l.append(grad_method.kernel(state=refi))# - grad_method.grad_nuc())
+        if compare_gradients:
+            # Gradients
+            mc = mcscf.CASCI(mf, ncas=mf.mo_coeff.shape[0], nelecas=natom)
+            out_mc = mc.kernel()
+            e_fci = out_mc[0]
             
-        ref_grad[i] = np.array(grad_ref_l)
-        
-        if remove_nuclear_grad:
-            grad_ref = grad_method.kernel(state=0) - grad_method.grad_nuc()
-        else:
-            grad_ref = grad_method.kernel(state=0) #- grad_method.grad_nuc()
+            assert mc.converged
+
+            grad_method = mc.Gradients()
+            
+            grad_ref_l = []
+            for refi in range(nroots_evcont):
+                grad_ref_l.append(grad_method.kernel(state=refi))# - grad_method.grad_nuc())
+                
+            ref_grad[i] = np.array(grad_ref_l)
+            
+            if remove_nuclear_grad:
+                grad_ref = grad_method.kernel(state=0) - grad_method.grad_nuc()
+            else:
+                grad_ref = grad_method.kernel(state=0) #- grad_method.grad_nuc()
 
     else:
         fci_done = False
@@ -547,16 +554,16 @@ for i, test_dist in enumerate(test_range):
         if cassolver == 'CASCI':
             mc = mcscf.CASCI(mf2, ncas, neleca)
             mc.fcisolver.nroots = nroots_evcont
-            e_cas = mc.kernel()[1]
-            ref_en[i,:] = e_cas + mol.energy_nuc()
+            mc.kernel()
+            ref_en[i,:] = mc.e_tot
         elif cassolver == 'SA-CASSCF':
-            mc_sa = mcscf.CASSCF(mf2, ncas, neleca)#.state_average_([1/nroots_evcont]*nroots_evcont)
+            mc_sa = mcscf.CASSCF(mf2, ncas, neleca).state_average_([1/nroots_evcont]*nroots_evcont)
             mc_sa.kernel()
-            mc = mcscf.CASCI(mf2, ncas, neleca)
-            mc.casci(mc_sa.mo_coeff)
-            mc.fcisolver.nroots = nroots_evcont
-            e_cas = mc.kernel()[1]
-            ref_en[i,:] = e_cas + mol.energy_nuc()
+            #mc = mcscf.CASCI(mf2, ncas, neleca)
+            #mc.casci(mc_sa.mo_coeff)
+            #mc.fcisolver.nroots = nroots_evcont
+            #e_cas = mc.kernel()[1]
+            ref_en[i,:] = mc_sa.e_states
         elif cassolver == 'SS-CASSCF':
             e_cas = []
             for istate in range(nroots_evcont):
@@ -582,62 +589,64 @@ for i, test_dist in enumerate(test_range):
     Lpq_sao = lib.unpack_tril(Lpq_sao)
     df_eri_sao = lib.einsum('Pij,Pkl->ijkl', Lpq_sao, Lpq_sao)
     
-    en_continuation_ms, vec = approximate_multistate(
-        h1e_sao,
-        df_eri_sao,
-        continuation_object_full.one_rdm,
-        two_rdm_to_comp,#continuation_object_full.two_rdm, 
-        continuation_object_full.overlap,
-        nroots=nroots_to_compute
-    )
-    
-    # Get grad
-    grad_cont = []
-    for i_state in range(nroots_to_compute):
-        vec_i = vec[i_state,:]
-        vec_j = vec_i
-        
-        one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), continuation_object_full.one_rdm, axes=2)
-        two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), 
-                                         two_rdm_to_comp,#continuation_object_full.two_rdm, 
-                                         axes=2)
-            
-        grad_i = get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, 
-                                    one_rdm_predicted,
-                                    two_rdm_predicted)
-        grad_cont.append(grad_i + grad_nuc)
-    
-    if remove_nuclear_grad:
-        cont_grad[i] = np.array(grad_cont) - grad_nuc
-    else:
-        cont_grad[i] = np.array(grad_cont) #- grad_nuc
+    if not compare_gradients:
+        en_continuation_ms, vec = approximate_multistate(
+            h1e_sao,
+            df_eri_sao,
+            continuation_object_full.one_rdm,
+            two_rdm_to_comp,#continuation_object_full.two_rdm, 
+            continuation_object_full.overlap,
+            nroots=nroots_to_compute
+        )
+        cont_en[i,:] = en_continuation_ms + mol.energy_nuc()
 
-    out_full = get_multistate_energy_with_grad_and_NAC(mol,
-                                                       continuation_object_full.one_rdm,
-                                                       two_rdm_to_comp, #continuation_object_full.two_rdm,
-                                                       continuation_object_full.overlap,
-                                                       nroots=nroots_to_compute, savemem=True)
-    
-    cont_en[i,:] = en_continuation_ms + mol.energy_nuc()
-    
+    else:
+        # Get grad
+        grad_cont = []
+        for i_state in range(nroots_to_compute):
+            vec_i = vec[i_state,:]
+            vec_j = vec_i
+            
+            one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), continuation_object_full.one_rdm, axes=2)
+            two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), 
+                                            two_rdm_to_comp,#continuation_object_full.two_rdm, 
+                                            axes=2)
+                
+            grad_i = get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, 
+                                        one_rdm_predicted,
+                                        two_rdm_predicted)
+            grad_cont.append(grad_i + grad_nuc)
+        
+        if remove_nuclear_grad:
+            cont_grad[i] = np.array(grad_cont) - grad_nuc
+        else:
+            cont_grad[i] = np.array(grad_cont) #- grad_nuc
+
+        out_full = get_multistate_energy_with_grad_and_NAC(mol,
+                                                        continuation_object_full.one_rdm,
+                                                        two_rdm_to_comp, #continuation_object_full.two_rdm,
+                                                        continuation_object_full.overlap,
+                                                        nroots=nroots_to_compute, savemem=True)
+        
+        cont_en[i,:] = out_full[1]
+        
     if cont_solver == 'CAS':
         if fci_done:
-            print(ehf, e_fci, ref_en[i], cont_en[i], cont_lowrank_en[i], mol.energy_nuc())
+            print(ehf, e_fci, ref_en[i], cont_en[i], cont_lowrank_en[i])
         else:
-            print(ehf, ref_en[i], cont_en[i], cont_lowrank_en[i], mol.energy_nuc())
+            print(ehf, ref_en[i], cont_en[i], cont_lowrank_en[i])
 
     else:
         print(ehf, ref_en[i,:], cont_en[i], cont_lowrank_en[i])
-        print('grad', np.linalg.norm(grad_ref-out[2][0]),
-              np.linalg.norm(grad_cont[0]-out[2][0]), 
-              np.linalg.norm(out_full[2][0]-out[2][0]), 
-              np.linalg.norm(grad_num[0]-out[2][0]),
-              )
-        #print('nac','\n', out[4],'\n', out_full[4])
-        #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
+        if compare_gradients:
+            print('grad', np.linalg.norm(grad_ref-out[2][0]),
+                np.linalg.norm(grad_cont[0]-out[2][0]), 
+                np.linalg.norm(out_full[2][0]-out[2][0]), 
+                np.linalg.norm(grad_num[0]-out[2][0]),
+                )
+            #print('nac','\n', out[4],'\n', out_full[4])
+            #print(' \n', grad_ref, '\n', out[2][0],'\n', grad_cont[0] )
         #1/0
-
-    
 
 print('Time per low-rank (s): %.2f'%(lr_tot/lr_n_eval))
 
@@ -707,7 +716,8 @@ if nroots_evcont > 1:
     ax1.plot(test_range,cont_lowrank_en,'--r',label=['low rank evcont']+[None]*(cont_lowrank_en.shape[-1]-1))
     ax4.plot(test_range,np.linalg.norm(cont_grad,axis=(2,3)),'b',label=['full evcont']+[None]*(cont_en.shape[-1]-1))
     ax4.plot(test_range,np.linalg.norm(cont_lr_grad,axis=(2,3)),'--r',label=['low rank evcont']+[None]*(cont_lowrank_en.shape[-1]-1))
-    ax4.plot(test_range,np.linalg.norm(num_lr_grad,axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7,label=['numerical lowrank']+[None]*(cont_en.shape[-1]-1))
+    if compare_to_numerical:
+        ax4.plot(test_range,np.linalg.norm(num_lr_grad,axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7,label=['numerical lowrank']+[None]*(cont_en.shape[-1]-1))
 
 else:
     if (cont_solver == 'FCI' or fci_done):
@@ -729,7 +739,8 @@ if (cont_solver == 'FCI' or fci_done):
 
     ax5.plot(test_range,np.linalg.norm(cont_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'b')
     ax5.plot(test_range,np.linalg.norm(cont_lr_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'--r')
-    ax5.plot(test_range,np.linalg.norm(num_lr_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7)
+    if compare_to_numerical:
+        ax5.plot(test_range,np.linalg.norm(num_lr_grad[:,:nroots_evcont] - ref_grad,axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7)
 
 if cont_solver != 'FCI':
     ax3.plot(test_range,cont_en[:,:nroots_evcont] - ref_en,'b')
@@ -743,7 +754,8 @@ else:
     
     ax6.plot(test_range,np.linalg.norm(cont_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'--r')
     ax6.plot(test_range,np.linalg.norm(cont_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'--r')
-    ax6.plot(test_range,np.linalg.norm(num_lr_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7)
+    if compare_to_numerical:
+        ax6.plot(test_range,np.linalg.norm(num_lr_grad[:,:] - cont_lr_grad[:,:],axis=(2,3)),'tab:orange',ls='--',lw=2,alpha=0.7)
 
     
 ax1.set_title('Energy')

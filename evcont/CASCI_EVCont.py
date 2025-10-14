@@ -125,10 +125,17 @@ class CAS_EVCont_obj:
         self.ncas = ncas
         self.neleca = neleca
 
-        self.cascis = []
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
+
+        # OBSOLETE: Keeping for the old routines, new routines use mo_coeffs and cis
+        self.cascis = []
+
+        self.mols = []
+        self.mo_coeffs = []
+        self.cis = []
+        self.trafos = []
 
         #self.casci_solver = casci_solver
         self.nroots = nroots
@@ -903,10 +910,21 @@ class CAS_EVCont_obj:
         #casci_bra_all = self.casci_solver(mf, self.ncas, self.neleca)
         #casci_bra_all.fcisolver.nroots = self.nroots
 
-        if self.solver == 'SA-CASSCF' and state is None:
-            mc = mcscf.CASSCF(mf, self.ncas, self.neleca).state_average_([1/self.nroots]*self.nroots)
-            mc.kernel()
-            mo_sacasscf = mc.mo_coeff
+        if state is None:
+
+            if self.solver == 'SA-CASSCF':
+                cas_sa = mcscf.CASSCF(mf, self.ncas, self.neleca).state_average_([1/self.nroots]*self.nroots)
+                cas_sa.kernel()
+                #mo_sacasscf = cas_sa.mo_coeff
+                assert cas_sa.converged
+
+            elif self.solver == 'CASCI':
+                mc_casci = mcscf.CASCI(mf, self.ncas, self.neleca)
+                mc_casci.fcisolver.nroots = self.nroots
+                mc_casci.kernel()
+                
+                assert mc_casci.converged
+
 
         # Iterate over different states
         if state is None:
@@ -927,47 +945,99 @@ class CAS_EVCont_obj:
 
             if state is None:
                 if self.solver == 'CASCI':
-                    casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+                    #casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+                    mo_coeff_bra = mc_casci.mo_coeff
+                    mol_bra = mc_casci.mol
+                    ci_bra = mc_casci.ci[istate]
+
+                    e = mc_casci.e_tot[istate]
+
+                    ncas = mc_casci.ncas
+                    ncore = mc_casci.ncore
+
+                elif self.solver == 'SA-CASSCF':
+                    # casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+                    # casci_bra.casci(mo_sacasscf)
+                    mo_coeff_bra = cas_sa.mo_coeff
+                    mol_bra = cas_sa.mol
+                    ci_bra = cas_sa.ci[istate]
+
+                    e = cas_sa.e_states[istate]
+
+                    ncas = cas_sa.ncas
+                    ncore = cas_sa.ncore
+
                 elif self.solver == 'SS-CASSCF':
                     cas_ss = mcscf.CASSCF(mf, self.ncas, self.neleca).state_specific_(istate)
                     cas_ss.kernel()
-                    casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
-                    casci_bra.casci(cas_ss.mo_coeff)
-                else:
-                    casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
-                    casci_bra.casci(mo_sacasscf)
+                    #casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
+                    #casci_bra.casci(cas_ss.mo_coeff)
+
+                    mo_coeff_bra = cas_ss.mo_coeff
+                    mol_bra = cas_ss.mol
+                    ci_bra = cas_ss.ci
+            
+                    e = cas_ss.e_tot
+
+                    assert cas_ss.converged
+
+                    ncas = cas_ss.ncas
+                    ncore = cas_ss.ncore
+
+                #else:
+
+
             else:
                 casci_bra = state[istate]
 
-            self.cascis.append(casci_bra)
+                mo_coeff_bra = casci_bra.mo_coeff
+                mol_bra = casci_bra.mol
+                ci_bra = casci_bra.ci
 
-            cascis = self.cascis
-            n_cascis = len(cascis)
+                out = casci_bra.kernel()
+                e = out[0]
 
-            out = casci_bra.kernel()
-            e = out[0]
+                assert np.all(casci_bra.fcisolver.converged)
+
+                if hasattr(casci_bra, "converged"):
+                    assert casci_bra.converged
+
+                ncas = casci_bra.ncas
+                ncore = casci_bra.ncore
+                nelec = mol_bra.nelec
+
+            nelec = mol_bra.nelec
             
-            assert np.all(casci_bra.fcisolver.converged)
+            # Old version
+            #self.cascis.append(casci_bra)
 
-            if hasattr(casci_bra, "converged"):
-                assert casci_bra.converged
-
-            MPI.COMM_WORLD.Bcast(casci_bra.ci)
-            MPI.COMM_WORLD.Bcast(casci_bra.mo_coeff)
-
-            mo_coeff_bra = casci_bra.mo_coeff
-            mol_bra = casci_bra.mol
-
+            # New version: store MO coeffs and CI vectors separately
+            self.mo_coeffs.append(mo_coeff_bra)
+            self.cis.append(ci_bra)
+            self.mols.append(mol_bra)
+            
             ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
             basis_OAO_bra = get_basis(mol_bra)
             trafo_bra = basis_OAO_bra.T.dot(ovlp_bra).dot(mo_coeff_bra)
+
+            self.trafos.append(trafo_bra)
+
+            #cascis = self.cascis
+            mo_coeffs = self.mo_coeffs
+            cis = self.cis
+            mols = self.mols
+            trafos = self.trafos
+            n_cascis = len(cis)
+
+            MPI.COMM_WORLD.Bcast(ci_bra)
+            MPI.COMM_WORLD.Bcast(mo_coeff_bra)
 
             bra_ref_state = wick.reference_state[float](
                 mo_coeff_bra.shape[0],
                 mo_coeff_bra.shape[0],
                 mol_bra.nelec[0],
-                casci_bra.ncas,
-                casci_bra.ncore,
+                ncas,
+                ncore,
                 owndata(mo_coeff_bra),
             )
 
@@ -1018,26 +1088,28 @@ class CAS_EVCont_obj:
                 overlap_new = one_rdm_new = two_rdm_new = None
 
             bra_occ_strings = utils.fci_bitset_list(
-                mol_bra.nelec[0] - casci_bra.ncore, casci_bra.ncas
+                mol_bra.nelec[0] - ncore, ncas
             )
 
             for i in range(n_cascis):
-                casci_ket = cascis[i]
-                mo_coeff_ket = casci_ket.mo_coeff
-                mol_ket = casci_ket.mol
+                #casci_ket = cascis[i]
+                mo_coeff_ket = mo_coeffs[i]
+                #mol_ket = mols[i]
+                ci_ket = cis[i]
 
-                ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
-                basis_OAO_ket = get_basis(mol_ket)
-                trafo_ket = basis_OAO_ket.T.dot(ovlp_ket).dot(mo_coeff_ket)
+                #ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
+                #basis_OAO_ket = get_basis(mol_ket)
+                #trafo_ket = basis_OAO_ket.T.dot(ovlp_ket).dot(mo_coeff_ket)
+                trafo_ket = trafos[i]
 
                 trafo_ket_bra = basis_OAO_bra.dot(trafo_ket)
 
                 ket_ref_state = wick.reference_state[float](
                     mo_coeff_ket.shape[0],
                     mo_coeff_ket.shape[0],
-                    mol_ket.nelec[0],
-                    casci_ket.ncas,
-                    casci_ket.ncore,
+                    nelec[0],
+                    ncas,
+                    ncore,
                     owndata(trafo_ket_bra),
                 )
 
@@ -1048,7 +1120,7 @@ class CAS_EVCont_obj:
                 wick_mb = wick.wick_rscf[float, float, float](orbitals, 0.0)
 
                 ket_occ_strings = utils.fci_bitset_list(
-                    mol_ket.nelec[0] - casci_ket.ncore, casci_ket.ncas
+                    nelec[0] - ncore, ncas
                 )
 
                 rdm1_tmp = np.zeros((mo_coeff_ket.shape[0], mo_coeff_ket.shape[0]))
@@ -1105,16 +1177,16 @@ class CAS_EVCont_obj:
                         rdm2_tmp,
                     )
                     overlap_accumulate += (
-                        o * casci_bra.ci[iabra, ibbra] * casci_ket.ci[iaket, ibket]
+                        o * ci_bra[iabra, ibbra] * ci_ket[iaket, ibket]
                     )
 
                     rdm1 += (
-                        rdm1_tmp * casci_bra.ci[iabra, ibbra] * casci_ket.ci[iaket, ibket]
+                        rdm1_tmp * ci_bra[iabra, ibbra] * ci_ket[iaket, ibket]
                     )
                     rdm2 += (
                         rdm2_tmp.reshape(rdm2.shape)
-                        * casci_bra.ci[iabra, ibbra]
-                        * casci_ket.ci[iaket, ibket]
+                        * ci_bra[iabra, ibbra]
+                        * ci_ket[iaket, ibket]
                     )
 
                     if rank == 0:
