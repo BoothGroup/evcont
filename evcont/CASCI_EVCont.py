@@ -146,6 +146,9 @@ class CAS_EVCont_obj:
             print('Wrong solver in CAS_EVCont_obj')
             sys.exit()
 
+        # Use each determinant as a separate state
+        self.noci = False
+
         # Set flags for using add_state vs append_to_rdms
         # (to prevent double addition into self.cascis or missing states in tRDMs)
         self.use_rdm = None
@@ -1007,7 +1010,7 @@ class CAS_EVCont_obj:
                 nelec = mol_bra.nelec
 
             nelec = mol_bra.nelec
-            
+
             # Old version
             #self.cascis.append(casci_bra)
 
@@ -1092,14 +1095,9 @@ class CAS_EVCont_obj:
             )
 
             for i in range(n_cascis):
-                #casci_ket = cascis[i]
                 mo_coeff_ket = mo_coeffs[i]
-                #mol_ket = mols[i]
                 ci_ket = cis[i]
 
-                #ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
-                #basis_OAO_ket = get_basis(mol_ket)
-                #trafo_ket = basis_OAO_ket.T.dot(ovlp_ket).dot(mo_coeff_ket)
                 trafo_ket = trafos[i]
 
                 trafo_ket_bra = basis_OAO_bra.dot(trafo_ket)
@@ -1275,6 +1273,304 @@ class CAS_EVCont_obj:
             else:
                 self.diagonal_lr = diagonal_lr_new
                 self.vecs_lowrank = vecs_lowrank
+
+    def append_to_rdms_separate_determinants(self, mol, state=None, debug=False):
+        """
+        Append a new training geometry with each determinant as a separate state.
+        Modified version that creates separate states for each determinant instead of summing them.
+
+        Args:
+            mol (object): Molecular object of the training geometry.
+
+        Raises:
+            AssertionError: If the mean-field calculation is not converged.
+        """
+        # Some checks
+        if self.use_rdm is None:
+            use_rdm = True
+        elif not self.use_rdm:
+            print('Error in append_to_rdms_separate_determinants: already using add_state')
+            sys.exit()
+
+        lowrank = self.lowrank
+
+        # Run mean field calculations for the orbitals
+        mf = scf.RHF(mol.copy())
+        mf.kernel()
+
+        assert mf.converged
+
+        MPI.COMM_WORLD.Bcast(mf.mo_coeff)
+
+        if state is None:
+            if self.solver == 'SA-CASSCF':
+                cas_sa = mcscf.CASSCF(mf, self.ncas, self.neleca).state_average_([1/self.nroots]*self.nroots)
+                cas_sa.kernel()
+                assert cas_sa.converged
+
+            elif self.solver == 'CASCI':
+                mc_casci = mcscf.CASCI(mf, self.ncas, self.neleca)
+                mc_casci.fcisolver.nroots = self.nroots
+                mc_casci.kernel()
+                assert mc_casci.converged
+
+        # Iterate over different states
+        if state is None:
+            nroots = self.nroots
+        else:
+            nroots = len(state)
+
+        for istate in range(nroots):
+            # Read the DM representation from existing training states
+            overlap = self.overlap
+            one_rdm = self.one_rdm
+            if not lowrank:
+                two_rdm = self.two_rdm
+            else:
+                diagonal_lr = self.diagonal_lr
+                vecs_lowrank = self.vecs_lowrank
+
+            if state is None:
+                if self.solver == 'CASCI':
+                    mo_coeff_bra = mc_casci.mo_coeff
+                    mol_bra = mc_casci.mol
+                    ci_bra = mc_casci.ci[istate]
+                    e = mc_casci.e_tot[istate]
+                    ncas = mc_casci.ncas
+                    ncore = mc_casci.ncore
+
+                elif self.solver == 'SA-CASSCF':
+                    mo_coeff_bra = cas_sa.mo_coeff
+                    mol_bra = cas_sa.mol
+                    ci_bra = cas_sa.ci[istate]
+                    e = cas_sa.e_states[istate]
+                    ncas = cas_sa.ncas
+                    ncore = cas_sa.ncore
+
+                elif self.solver == 'SS-CASSCF':
+                    cas_ss = mcscf.CASSCF(mf, self.ncas, self.neleca).state_specific_(istate)
+                    cas_ss.kernel()
+                    mo_coeff_bra = cas_ss.mo_coeff
+                    mol_bra = cas_ss.mol
+                    ci_bra = cas_ss.ci
+                    e = cas_ss.e_tot
+                    assert cas_ss.converged
+                    ncas = cas_ss.ncas
+                    ncore = cas_ss.ncore
+            else:
+                casci_bra = state[istate]
+                mo_coeff_bra = casci_bra.mo_coeff
+                mol_bra = casci_bra.mol
+                ci_bra = casci_bra.ci
+                out = casci_bra.kernel()
+                e = out[0]
+                assert np.all(casci_bra.fcisolver.converged)
+                if hasattr(casci_bra, "converged"):
+                    assert casci_bra.converged
+                ncas = casci_bra.ncas
+                ncore = casci_bra.ncore
+
+            nelec = mol_bra.nelec
+
+            # Get determinant strings for this state
+            bra_occ_strings = utils.fci_bitset_list(mol_bra.nelec[0] - ncore, ncas)
+            
+
+            # Efficiently handle the single-determinant case: only process the nonzero element
+            nz = np.argwhere(np.abs(ci_bra) > 1e-10)
+            print(f"State {istate}: Found {len(nz)} significant determinants")
+            for det_idx, (iabra, ibbra) in enumerate(nz):
+                ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
+                basis_OAO_bra = get_basis(mol_bra)
+                trafo_bra = basis_OAO_bra.T.dot(ovlp_bra).dot(mo_coeff_bra)
+
+                self.mo_coeffs.append(mo_coeff_bra)
+                ci_single_det = np.zeros_like(ci_bra)
+                ci_single_det[iabra, ibbra] = 1.0
+                self.cis.append(ci_single_det)
+                self.mols.append(mol_bra)
+                self.trafos.append(trafo_bra)
+
+                mo_coeffs = self.mo_coeffs
+                cis = self.cis
+                mols = self.mols
+                trafos = self.trafos
+                n_cascis = len(cis)
+
+                MPI.COMM_WORLD.Bcast(ci_single_det)
+                MPI.COMM_WORLD.Bcast(mo_coeff_bra)
+
+                bra_ref_state = wick.reference_state[float](
+                    mo_coeff_bra.shape[0],
+                    mo_coeff_bra.shape[0],
+                    mol_bra.nelec[0],
+                    ncas,
+                    ncore,
+                    owndata(mo_coeff_bra),
+                )
+
+                if rank == 0:
+                    overlap_new = np.zeros((n_cascis, n_cascis))
+                    if overlap is not None:
+                        overlap_new[:-1, :-1] = overlap
+                    one_rdm_new = np.zeros(
+                        (n_cascis, n_cascis, mo_coeff_bra.shape[0], mo_coeff_bra.shape[0])
+                    )
+                    if one_rdm is not None:
+                        one_rdm_new[:-1, :-1, :, :] = one_rdm
+
+                    if not lowrank:
+                        two_rdm_new = np.zeros(
+                            (
+                                n_cascis,
+                                n_cascis,
+                                mo_coeff_bra.shape[0],
+                                mo_coeff_bra.shape[0],
+                                mo_coeff_bra.shape[0],
+                                mo_coeff_bra.shape[0],
+                            )
+                        )
+                        if two_rdm is not None:
+                            two_rdm_new[:-1, :-1, :, :, :, :] = two_rdm
+                    else:
+                        diagonal_lr_new = np.ones(
+                            (n_cascis, n_cascis, 3, mo_coeff_bra.shape[0], mo_coeff_bra.shape[0])
+                        )
+                        if diagonal_lr is not None:
+                            diagonal_lr_new[:-1, :-1, :, :, :] = diagonal_lr
+                else:
+                    overlap_new = one_rdm_new = two_rdm_new = None
+
+                # Only need to process the single nonzero determinant for bra
+                iabra_bra, ibbra_bra = iabra, ibbra
+                for i in range(n_cascis):
+                    mo_coeff_ket = mo_coeffs[i]
+                    ci_ket = cis[i]
+                    trafo_ket = trafos[i]
+
+                    trafo_ket_bra = basis_OAO_bra.dot(trafo_ket)
+
+                    ket_ref_state = wick.reference_state[float](
+                        mo_coeff_ket.shape[0],
+                        mo_coeff_ket.shape[0],
+                        nelec[0],
+                        ncas,
+                        ncore,
+                        owndata(trafo_ket_bra),
+                    )
+
+                    orbitals = wick.wick_orbitals[float, float](
+                        bra_ref_state, ket_ref_state, owndata(ovlp_bra)
+                    )
+
+                    wick_mb = wick.wick_rscf[float, float, float](orbitals, 0.0)
+
+                    ket_occ_strings = utils.fci_bitset_list(nelec[0] - ncore, ncas)
+
+                    rdm1_tmp = np.zeros((mo_coeff_ket.shape[0], mo_coeff_ket.shape[0]))
+                    rdm1 = np.zeros((mo_coeff_ket.shape[0], mo_coeff_ket.shape[0]))
+                    rdm2_tmp = np.zeros(
+                        (
+                            mo_coeff_ket.shape[0] * mo_coeff_ket.shape[0],
+                            mo_coeff_ket.shape[0] * mo_coeff_ket.shape[0],
+                        )
+                    )
+                    rdm2 = np.zeros(
+                        (
+                            mo_coeff_ket.shape[0],
+                            mo_coeff_ket.shape[0],
+                            mo_coeff_ket.shape[0],
+                            mo_coeff_ket.shape[0],
+                        )
+                    )
+                    overlap_accumulate = 0.0
+
+                    # Only process the nonzero element in ci_ket
+                    nz_ket = np.argwhere(np.abs(ci_ket) > 1e-10)
+                    for iabra_ket, ibbra_ket in nz_ket:
+                        stringabra = bra_occ_strings[iabra_bra]
+                        stringbbra = bra_occ_strings[ibbra_bra]
+                        stringaket = ket_occ_strings[iabra_ket]
+                        stringbket = ket_occ_strings[ibbra_ket]
+
+                        rdm1_tmp.fill(0.0)
+                        rdm2_tmp.fill(0.0)
+                        o = wick_mb.evaluate_rdm12(
+                            stringabra,
+                            stringbbra,
+                            stringaket,
+                            stringbket,
+                            1.0,
+                            rdm1_tmp,
+                            rdm2_tmp,
+                        )
+                        overlap_accumulate += o * ci_ket[iabra_ket, ibbra_ket]
+                        rdm1 += rdm1_tmp * ci_ket[iabra_ket, ibbra_ket]
+                        rdm2 += rdm2_tmp.reshape(rdm2.shape) * ci_ket[iabra_ket, ibbra_ket]
+
+                    overlap_accumulate = MPI.COMM_WORLD.allreduce(overlap_accumulate, op=MPI.SUM)
+                    MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, rdm1, op=MPI.SUM)
+                    MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, rdm2, op=MPI.SUM)
+
+                    if rank == 0:
+                        overlap_new[-1, i] = overlap_accumulate
+                        overlap_new[i, -1] = overlap_accumulate.conj()
+                        rdm1 = np.einsum(
+                            "...ij,ai,bj->...ab", rdm1, trafo_ket, trafo_bra, optimize="optimal"
+                        )
+                        rdm2 = np.einsum(
+                            "...ijkl,ai,bj,ck,dl->...abcd",
+                            rdm2,
+                            trafo_bra,
+                            trafo_ket,
+                            trafo_bra,
+                            trafo_ket,
+                            optimize="optimal",
+                        )
+
+                        if debug:
+                            np.save('rdm2_det_%i_%i_%i.npy'%(istate, det_idx, i), rdm2)
+                        
+                        one_rdm_new[-1, i, :, :] = rdm1
+                        one_rdm_new[i, -1, :, :] = rdm1.conj().T
+
+                        if not lowrank:
+                            two_rdm_new[-1, i, :, :, :, :] = rdm2
+                            two_rdm_new[i, -1, :, :, :, :] = np.einsum('ijkl->klij', rdm2.conj())
+                        else:
+                            print(f"Determinant {det_idx} of state {istate}, overlap with state {i}: {overlap_accumulate}")
+                            lowrank_vecs, diagonals, use_joint = reduce_2rdm(
+                                rdm1, rdm2, overlap_accumulate, 
+                                mol=mol, train_en=e,
+                                **self.kwargs
+                            )
+
+                            diagonal_lr_new[-1, i, :, :, :] = diagonals
+                            try:
+                                diagonal_lr_new[i, -1, :, :, :] = diagonals.conj()
+                            except:
+                                diagonal_lr_new[i, -1, :, :, :] = diagonals
+
+                            vecs_lowrank[(n_cascis-1, i)] = lowrank_vecs[0], lowrank_vecs[1], lowrank_vecs[2], use_joint
+                            vecs_lowrank[(i, n_cascis-1)] = lowrank_vecs[0].conj(), lowrank_vecs[1].conj(), lowrank_vecs[2].conj(), use_joint
+
+                self.overlap = overlap_new
+                self.one_rdm = one_rdm_new
+                if not lowrank:
+                    self.two_rdm = two_rdm_new
+                else:
+                    if getattr(self, 'kwargs', {}).get('save_diag', True):
+                        self.diagonal_lr = diagonal_lr_new
+                    else:
+                        self.diagonal_lr = None
+                    self.vecs_lowrank = vecs_lowrank
+
+                overlap = overlap_new
+                one_rdm = one_rdm_new
+                if not lowrank:
+                    two_rdm = two_rdm_new
+                else:
+                    diagonal_lr = diagonal_lr_new
 
     def append_to_rdms_nolowrank(self, mol):
         """
