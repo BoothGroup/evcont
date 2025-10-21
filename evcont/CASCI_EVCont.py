@@ -1,4 +1,5 @@
 import numpy as np
+import pickle
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
@@ -147,7 +148,7 @@ class CAS_EVCont_obj:
             sys.exit()
 
         # Use each determinant as a separate state
-        self.noci = False
+        self.uncontracted = False
 
         # Set flags for using add_state vs append_to_rdms
         # (to prevent double addition into self.cascis or missing states in tRDMs)
@@ -2075,3 +2076,112 @@ class CAS_EVCont_obj:
         if self.two_rdm is not None:
             self.two_rdm = self.two_rdm[np.ix_(keep_ids, keep_ids)]
         self.cascis = [self.cascis[i] for i in keep_ids]
+
+    def save(self, filename):
+        """
+        Save the attributes of this CAS_EVCont_obj to a file.
+        
+        Args:
+            filename (str): Path to the output file (will be saved as pickle)
+        
+        Returns:
+            None
+        """
+        # Collect all the essential attributes
+        cas_data = {
+            # Basic parameters
+            'ncas': self.ncas,
+            'neleca': self.neleca,
+            'nroots': self.nroots,
+            'solver': self.solver,
+            'lowrank': self.lowrank,
+            
+            # RDM and overlap data
+            'overlap': self.overlap,
+            'one_rdm': self.one_rdm,
+            'two_rdm': self.two_rdm,
+            
+            # Low-rank specific data (if applicable)
+            'diagonal_lr': self.diagonal_lr if self.lowrank else None,
+            'vecs_lowrank': self.vecs_lowrank if self.lowrank else None,
+            'kwargs': self.kwargs if self.lowrank else None,
+            
+            # State information
+            'mo_coeffs': self.mo_coeffs,
+            'cis': self.cis,
+            'trafos': self.trafos,
+            
+            # Additional flags
+            'uncontracted': self.uncontracted,
+            'use_rdm': self.use_rdm,
+            'precompute': self.precompute,
+        }
+        
+        # Save to pickle file
+        with open(filename, 'wb') as f:
+            pickle.dump(cas_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        if rank == 0:
+            print(f"CAS object saved to {filename}")
+
+    @classmethod
+    def load(cls, filename):
+        """
+        Load CAS_EVCont_obj attributes from a file and reinitialize the object.
+        
+        Args:
+            filename (str): Path to the input file (pickle format)
+        
+        Returns:
+            CAS_EVCont_obj: Reinitialized CAS_EVCont_obj instance
+        """
+        # Load the saved data
+        with open(filename, 'rb') as f:
+            cas_data = pickle.load(f)
+        
+        # Reinitialize the CAS object with basic parameters
+        if cas_data['lowrank']:
+            cas_obj = cls(
+                cas_data['ncas'], 
+                cas_data['neleca'],
+                nroots=cas_data['nroots'],
+                solver=cas_data['solver'],
+                lowrank=True,
+                **cas_data['kwargs']
+            )
+        else:
+            cas_obj = cls(
+                cas_data['ncas'], 
+                cas_data['neleca'],
+                nroots=cas_data['nroots'],
+                solver=cas_data['solver'],
+                lowrank=False
+            )
+        
+        # Restore RDM and overlap data
+        cas_obj.overlap = cas_data['overlap']
+        cas_obj.one_rdm = cas_data['one_rdm']
+        cas_obj.two_rdm = cas_data['two_rdm']
+        
+        # Restore low-rank data if applicable
+        if cas_data['lowrank']:
+            cas_obj.diagonal_lr = cas_data['diagonal_lr']
+            cas_obj.vecs_lowrank = cas_data['vecs_lowrank']
+        
+        # Restore state information
+        cas_obj.mo_coeffs = cas_data['mo_coeffs']
+        cas_obj.cis = cas_data['cis']
+        cas_obj.trafos = cas_data['trafos']
+        
+        # Restore additional flags
+        cas_obj.uncontracted = cas_data['uncontracted']
+        cas_obj.use_rdm = cas_data['use_rdm']
+        cas_obj.precompute = cas_data['precompute']
+        
+        if rank == 0:
+            print(f"CAS object loaded from {filename}")
+            print(f"  ncas={cas_obj.ncas}, neleca={cas_obj.neleca}, nroots={cas_obj.nroots}")
+            print(f"  solver={cas_obj.solver}, lowrank={cas_obj.lowrank}")
+            print(f"  Number of states: {len(cas_obj.cis)}")
+        
+        return cas_obj
