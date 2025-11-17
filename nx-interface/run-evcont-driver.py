@@ -468,6 +468,7 @@ def evcont_feed_nx(mode, adjustphase=True):
                 print('Low-rank inference - with density fitting (%s basis)'%inputs['df_basis'])
             else:
                	print('Low-rank inference - w/out density fitting')
+                   
             vec_cont, en_cont, grad_cont, nac_cont, _ = get_lowrank_en_with_grad_and_NAC(
                 mol,
                 cont_1rdm,

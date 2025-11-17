@@ -411,9 +411,9 @@ def reconstruct_subspace(lowrank_vecs, h2, ntrain=3):
 @timeit         
 def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                         sao_basis=None, density_fit=True, df_basis=None, 
-                        Jdiag_only=True, sao_diag=True,
+                        Jdiag_only=True, sao_diag=False,
                         hermitian=True,
-                        debug=True):
+                        debug=False):
     """
     Construct subspace Hamiltonian using the low-rank decomposition of 
     2-transition-cumulant
@@ -675,7 +675,7 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
 ###############################################################################
 @timeit
 def get_jk_builds(mol, lowrank_vecs,
-                  diagonals=None, Jdiag_only=True, sao_diag=True,
+                  diagonals=None, Jdiag_only=True, sao_diag=False,
                   ao_mo_trafo=None,
                   density_fit=False, df_basis=None,
                   df_response=False):
@@ -745,18 +745,18 @@ def get_jk_builds(mol, lowrank_vecs,
             
         # JK build
         with log_time("JK Builds (1)"):
-            #vj_list, vk_list = get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
-            vj_list, vk_list = parallel_get_jk(lr_vecs_ao.transpose(0,2,1), get_jk, hermi=0)
+            vj_list, vk_list = get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
+            #vj_list, vk_list = parallel_get_jk(lr_vecs_ao.transpose(0,2,1), get_jk, hermi=0)
 
         vhf = vj_list - 0.5*vk_list
         
         # Grad JK builds
         # TODO: Add auxbasis_response in the future, for now ignore it
         with log_time("JK Grad Builds (2)"):
-            #vj_grad_list_t, vk_grad_list_t = grad_obj.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
-            #vj_grad_list, vk_grad_list = grad_obj.get_jk(dm=lr_vecs_ao, hermi=0) 
-            vj_grad_list, vk_grad_list = parallel_get_jk(lr_vecs_ao, grad_obj.get_jk, hermi=0)
-            vj_grad_list_t, vk_grad_list_t = parallel_get_jk(lr_vecs_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0)
+            vj_grad_list_t, vk_grad_list_t = grad_obj.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
+            vj_grad_list, vk_grad_list = grad_obj.get_jk(dm=lr_vecs_ao, hermi=0) 
+            #vj_grad_list, vk_grad_list = parallel_get_jk(lr_vecs_ao, grad_obj.get_jk, hermi=0)
+            #vj_grad_list_t, vk_grad_list_t = parallel_get_jk(lr_vecs_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0)
 
         vhf_grad = vj_grad_list - 0.5*vk_grad_list
         vhf_grad_t = vj_grad_list_t - 0.5*vk_grad_list_t
@@ -807,19 +807,19 @@ def get_jk_builds(mol, lowrank_vecs,
             
         # J builds
         with log_time("J Builds (2)"):
-            #vj_r_list, _ = get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
-            #vj_l_list, _ = get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
-            vj_r_list, _ = parallel_get_jk(svd_rightvecs_ao, get_jk, hermi=0,with_k=False)
-            vj_l_list, _ = parallel_get_jk(svd_vecs_ao, get_jk, hermi=0,with_k=False)
+            vj_r_list, _ = get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
+            vj_l_list, _ = get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
+            #vj_r_list, _ = parallel_get_jk(svd_rightvecs_ao, get_jk, hermi=0,with_k=False)
+            #vj_l_list, _ = parallel_get_jk(svd_vecs_ao, get_jk, hermi=0,with_k=False)
 
         # Grad JK builds
         # TODO: Add auxbasis_response in the future, for now ignore it
         with log_time("J Grad Builds (2)"):
-            #vj_lgrad_list, _ = grad_obj.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False) 
-            #vj_rgrad_list, _ = grad_obj.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False) 
+            vj_lgrad_list, _ = grad_obj.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False) 
+            vj_rgrad_list, _ = grad_obj.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False) 
             # gradient JK builds 
-            vj_lgrad_list = parallel_get_jk(svd_vecs_ao, grad_obj.get_j, hermi=0)
-            vj_rgrad_list = parallel_get_jk(svd_rightvecs_ao, grad_obj.get_j, hermi=0)
+            #vj_lgrad_list = parallel_get_jk(svd_vecs_ao, grad_obj.get_j, hermi=0)
+            #vj_rgrad_list = parallel_get_jk(svd_rightvecs_ao, grad_obj.get_j, hermi=0)
 
         # Reindex to separate bra, ket, nvec indices
         vj_right = unpack_vec(vj_r_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian, nbra=ntrain)
@@ -1472,7 +1472,7 @@ def vectorize_lowrank(self, hermitian=True):
     
     # Vectorize diagonal corrections: store both the packed J and the packed K-sum
     # for compatibility, but also keep packed components of diag[1] and diag[2]
-    if getattr(self, 'diagonal_lr', None) is not None:
+    if ( getattr(self, 'diagonal_lr', None) is not None ) and ( not np.isnan(self.diagonal_lr).all() ):
         diagJ = self.diagonal_lr[:, :, 0]
         diagK1 = self.diagonal_lr[:, :, 1]
         diagK2 = self.diagonal_lr[:, :, 2]

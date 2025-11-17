@@ -123,47 +123,71 @@ def read_NX(path,pos='TEMP'):
     
     return natm, nstat, en, [randi, substep, step, tprob], [tim, pes], populations, pos_all
 
-def write_model(overlap, one_rdm, two_rdm):
+def write_model(overlap, one_rdm, two_rdm=None, vecs_lowrank=None, diagonal_lr=None):
     """
     Write the intermediate data that will be used for predictions, namely:
         - Overlap of training wavefunctions, S
         - 1-el reduced transition density matrices of training wavefunctions
         - 2-el reduced transition density matrices of training wavefunctions
+          OR low-rank vectors if using low-rank approximation
 
     Args:
         overlap (ndarray)
         one_rdm (ndarray)
-        two_rdm (ndarray)
+        two_rdm (ndarray, optional): Full 2-RDM if not using low-rank
+        vecs_lowrank (dict, optional): Low-rank vectors if using low-rank
+        diagonal_lr (ndarray, optional): Diagonal components if using low-rank
     """
+    import pickle
     
     path = 'sample/JOB_NAD'
     
     np.save(os.path.join(path,'overlap_final.npy'),overlap)
     np.save(os.path.join(path,'one_rdm_final.npy'),one_rdm)
-    np.save(os.path.join(path,'two_rdm_final.npy'),two_rdm)
+    
+    if two_rdm is not None:
+        # Full 2-RDM case
+        np.save(os.path.join(path,'two_rdm_final.npy'),two_rdm)
+    
+    if vecs_lowrank is not None:
+        # Low-rank case - save as pickle
+        with open(os.path.join(path,'lowrank_vecs.pkl'), 'wb') as f:
+            pickle.dump(vecs_lowrank, f, protocol=pickle.HIGHEST_PROTOCOL)
+    
+    if diagonal_lr is not None:
+        np.save(os.path.join(path,'diagonal_lr.npy'), diagonal_lr)
     
 def read_model(path):
     """
     Read the intermediate data that will be used for predictions, namely:
         - Overlap of training wavefunctions, S
         - 1-el reduced transition density matrices of training wavefunctions
-        - 2-el reduced transition density matrices of training wavefunctions
+        - 2-el reduced transition density matrices of training wavefunctions,
+          either as a full tensor (two_rdm_final.npy) or low-rank vectors (lowrank_vecs.pkl)
 
     Args:
-        path (str): 
-            path to the model files - for now it is in the JOB_NAD drc
-            (assumes a single directory containing files: 
-                 overlap_final.npy, one_rdm_final.npy, two_rdm_final.npy)
+        path (str): path to the model files
         
     Returns:
         overlap (ndarray)
         one_rdm (ndarray)
-        two_rdm (ndarray)
+        two_rdm (ndarray or dict): Full 2-RDM or low-rank vectors
     """
+    import pickle
     
     overlap = np.load(os.path.join(path,'overlap_final.npy'))
     one_rdm = np.load(os.path.join(path,'one_rdm_final.npy'))
-    two_rdm = np.load(os.path.join(path,'two_rdm_final.npy'))
+    
+    two_rdm_npy = os.path.join(path, 'two_rdm_final.npy')
+    two_rdm_pkl = os.path.join(path, 'lowrank_vecs.pkl')
+
+    if os.path.exists(two_rdm_npy):
+        two_rdm = np.load(two_rdm_npy)
+    elif os.path.exists(two_rdm_pkl):
+        with open(two_rdm_pkl, 'rb') as f:
+            two_rdm = pickle.load(f)
+    else:
+        raise FileNotFoundError("Neither 'two_rdm_final.npy' nor 'lowrank_vecs.pkl' was found in the specified path.")
     
     return overlap, one_rdm, two_rdm
 
@@ -176,8 +200,20 @@ def remove_model(path):
     if os.path.isfile(ov_path):
         os.remove(ov_path)
         os.remove(os.path.join(path,'one_rdm_final.npy'))
-        os.remove(os.path.join(path,'two_rdm_final.npy'))
-    
+        
+        # Remove two_rdm if exists
+        two_rdm_path = os.path.join(path,'two_rdm_final.npy')
+        if os.path.isfile(two_rdm_path):
+            os.remove(two_rdm_path)
+        
+        # Remove low-rank files if they exist
+        lowrank_path = os.path.join(path,'lowrank_vecs.pkl')
+        if os.path.isfile(lowrank_path):
+            os.remove(lowrank_path)
+        
+        diagonal_path = os.path.join(path,'diagonal_lr.npy')
+        if os.path.isfile(diagonal_path):
+            os.remove(diagonal_path)
     
 def clean_traj():
     """
@@ -294,33 +330,74 @@ def converge_NAMD_traj(
     # Set Newton-X path
     if nx_path is not None:
         os.system('export NX={}'.format(nx_path))
-    
+
     # Check if it is a restart calculation or a new calculation
-    #existing_ind = [int(i.split('_')[-1]) for i in glob.glob('TRAJ*')]
     existing_ind = [int(i.split('_')[-1].split('.')[0]) for i in glob.glob('ham_dist*')]
-    
+
+    # Optionally recover the continuation object if possible
+    CONT_OBJ_FILENAME = 'continuation_object.pkl'
+    """
+    # DO THIS BEFORE CALLING THE FUNCTION for restart
+    if hasattr(EVCont_obj, 'load') and os.path.isfile(CONT_OBJ_FILENAME):
+        try:
+            print(f"Recovering continuation object from {CONT_OBJ_FILENAME}")
+            EVCont_obj_new = EVCont_obj.load(CONT_OBJ_FILENAME)
+            # Only update if load returns a new object
+            if EVCont_obj_new is not None:
+                EVCont_obj = EVCont_obj_new
+        except Exception as e:
+            print(f"Warning: Could not load continuation object: {e}")
+    """
     # Current iteration of the convergence
     if len(existing_ind) > 0:
         nit = max(existing_ind) + 1
     else:
         nit = 0
-        
+
+    # Setup models directory - if it doesn't exist
+    OBJECT_CAN_BE_SAVED = False
+    if hasattr(EVCont_obj, 'load'):
+        OBJECT_CAN_BE_SAVED = True
+
+        if not os.path.exists('iterative-models'):
+            os.mkdir('iterative-models')
+
+        CONT_OBJ_FILENAME = f'iterative-models/continuation_object-{nit}.pkl'
+
     print('NAMD convergence - Starting iteration {}'.format(nit))
-    
+
     # Update the model from the last iteration or initialize one if it doesn't exist
     if EVCont_obj.overlap is None:
         EVCont_obj.append_to_rdms(init_mol.copy())
-        
         trn_geometries = [init_mol.atom_coords()]
         np.save('trn_geometries.npy', trn_geometries)
+
+        # Optionally save the continuation object if possible
+        if OBJECT_CAN_BE_SAVED:
+            try:
+                print(f"Saving continuation object to {CONT_OBJ_FILENAME}")
+                EVCont_obj.save(CONT_OBJ_FILENAME)
+            except Exception as e:
+                print(f"Warning: Could not save continuation object: {e}")
+
     else:
         # Read initial training geometries
         trn_geometries = np.load('trn_geometries.npy')
-        
+
     # Save to sample/JOB_NAD directory
-    write_model(EVCont_obj.overlap,
-                EVCont_obj.one_rdm,
-                EVCont_obj.two_rdm)
+    if EVCont_obj.lowrank:
+        EVCont_obj.vectorize_lowrank()
+        write_model(EVCont_obj.overlap,
+                    EVCont_obj.one_rdm,
+                    two_rdm=None,
+                    vecs_lowrank=EVCont_obj.lowrank_vectorized,
+                    diagonal_lr=EVCont_obj.diagonal_vectorized)
+    else:
+        write_model(EVCont_obj.overlap,
+                    EVCont_obj.one_rdm,
+                    two_rdm=EVCont_obj.two_rdm)
+
+
     
     ###########################################################################
     # Setup and run NAMD trajectory
@@ -330,7 +407,7 @@ def converge_NAMD_traj(
     # Read output of current and previous trajectory
     out_n = read_NX('TRAJ_%i'%nit)
     trajectory = out_n[-1]
-    
+
     # Check convergence
     # Write en_diff (or other convergence) to file
     # TODO 
@@ -398,17 +475,23 @@ def converge_NAMD_traj(
         hamiltonian_distance_all = hamiltonian_similarity(init_mol, trajectory, trn_geometries)
         np.savetxt('ham_dist_{}.txt'.format(nit),hamiltonian_distance_all)
         
+        # Disregards peaks with hamdist less than this threshold
+        # (make this a parameter later on, also depends on norb)
+        threshold = 0.01
+        
+        # Find the index of the geometry with maximum H_dist
+        addgeom_ind = np.argmax(hamiltonian_distance_all)
+        
         # Find which new geometry to add to the training set
+        # Select the geometry that's the furtherst in hamiltonian distance
         if data_addition == "farthest_point_ham":
             
             # Find the index of the geometry with maximum H_dist
             addgeom_ind = np.argmax(hamiltonian_distance_all)
-            
+
+        # Select the temporally first peak in the hamiltonian distance
         elif data_addition == "first_peak_ham":
-            # Disregards peaks with hamdist less than this threshold
-            # (make this a parameter later on, also depends on norb)
-            threshold = 0.01 
-            
+
             # If no peak is found, choose the index with largest ham distance
             addgeom_ind = np.argmax(hamiltonian_distance_all)
                 
@@ -421,50 +504,17 @@ def converge_NAMD_traj(
                 if len(ind_above_thr[0]) > 0:
                     addgeom_ind = peaks[ind_above_thr][0]
                
-        elif data_addition == "weighted_highest_peak_ham":
-            # Disregards peaks with hamdist less than this threshold
-            # (make this a parameter later on, also depends on norb)
-            threshold = 0.01
-            
-            # Exponent of the time penalty function
-            exponent = 1.
-
-            # If no peak is found, choose the index with largest ham distance
-            addgeom_ind = np.argmax(hamiltonian_distance_all)
-                
-            # Find all peaks
-            peaks = find_peaks(hamiltonian_distance_all)[0]
-            
-            # Add the max point to the peaks as a possible selection geometry
-            if addgeom_ind not in peaks:
-                peaks = np.append(peaks, addgeom_ind)
-                
-            # If peaks above a threshold exist, choose that over farthest
-            ind_above_thr = np.where((hamiltonian_distance_all[peaks] > threshold) & (peaks > 0)) 
-            
-            if len(ind_above_thr[0]) > 0:
-                # Peaks above threshold
-                peaks_above_thr = peaks[ind_above_thr]
-                
-                # penalty function ranging from 0 (favourable) to 1 (unfavourable)
-                penalty = (peaks_above_thr/len(hamiltonian_distance_all))**exponent
-                
-                step_weighted_hamdist = hamiltonian_distance_all[peaks_above_thr]/penalty
-                
-                addgeom_ind = peaks_above_thr[np.argmax(step_weighted_hamdist)]
-                
-        elif data_addition == "variable_weight_peak_ham":
-            # Disregards peaks with hamdist less than this threshold
-            # (make this a parameter later on, also depends on norb)
-            threshold = 0.01
-            
+        elif data_addition in ["weighted_highest_peak_ham", "variable_weight_peak_ham"]:
             # Exponent of the time penalty function 
             # (0 - chooses max, -->inf chooses 1st peak)
-            #exponent = 2.
-            scaling = 0.01
-            scaled_exp = scaling * en_diff.max()/convergence_thresh
-            exponent = min(max(scaled_exp, 0.), 5.) # Limit between 0 and 5
-                
+            if data_addition == "weighted_highest_peak_ham":
+                exponent = 3.
+            else:
+                # Variable exponent based on current convergence (still experimental)
+                scaling = 0.01
+                scaled_exp = scaling * en_diff.max()/convergence_thresh
+                exponent = min(max(scaled_exp, 0.), 5.) # Limit between 0 and 5
+
             # If no peak is found, choose the index with largest ham distance
             addgeom_ind = np.argmax(hamiltonian_distance_all)
                 
@@ -507,22 +557,31 @@ def converge_NAMD_traj(
         # Add to continuation
         EVCont_obj.append_to_rdms(init_mol.copy().set_geom_(new_geom))
         
+        # Save the continuation object if possible
+        if OBJECT_CAN_BE_SAVED:
+            CONT_OBJ_FILENAME = f'iterative-models/continuation_object-{nit+1}.pkl'
+            try:
+                print(f"Saving continuation object to {CONT_OBJ_FILENAME}")
+                EVCont_obj.save(CONT_OBJ_FILENAME)
+            except Exception as e:
+                print(f"Warning: Could not save continuation object: {e}")
+
         # Go to next iteration
         converge_NAMD_traj(
-                EVCont_obj,
-                init_mol,
-                steps=steps,
-                dt=dt,
-                nstat=nstat,
-                nstatdyn=nstatdyn,
-                iseed=iseed,
-                convergence_thresh=convergence_thresh,
-                nconv=nconv,
-                max_iter=max_iter,
-                data_addition=data_addition,
-                nx_path=nx_path,
-                run_command=run_command
-                )
+            EVCont_obj,
+            init_mol,
+            steps=steps,
+            dt=dt,
+            nstat=nstat,
+            nstatdyn=nstatdyn,
+            iseed=iseed,
+            convergence_thresh=convergence_thresh,
+            nconv=nconv,
+            max_iter=max_iter,
+            data_addition=data_addition,
+            nx_path=nx_path,
+            run_command=run_command
+        )
         
 
 def run_trajectory(traj_ind, inp_par, run_command):
@@ -536,6 +595,8 @@ def run_trajectory(traj_ind, inp_par, run_command):
     # Clean scratch data from other trajectories
     os.system('sleep 10')
     clean_traj()
+
+    print(run_command)
     
     # Record current working directory and change it to TRAJ_ind
     cwd = os.getcwd()
@@ -546,10 +607,11 @@ def run_trajectory(traj_ind, inp_par, run_command):
     
     # Run
     os.system(run_command)
+    os.system('sleep 100')
     
     # Wait until calculation finishes or crashes
     while True:
-        os.system('sleep 10')
+        os.system('sleep 100')
 
         status = check_status()
         
