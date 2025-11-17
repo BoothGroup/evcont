@@ -51,13 +51,15 @@ def get_overlap_grad(mol):
     return np.transpose(deriv, (2, 3, 1, 0))
 
 @timeit
-def loewdin_trafo_grad(overlap_mat):
+def loewdin_trafo_grad(overlap_mat, degeneracy_precision=7):
     """
     Calculate the gradient of the Loewdin transformation. This also takes care of
     degeneracies by resorting to degenerate perturbation theory.
 
     Parameters:
     overlap_mat (np.ndarray): Matrix representing the overlap between atomic orbitals.
+    degeneracy_precision (int): repurposed to set an absolute tolerance tol = 10**(-degeneracy_precision)
+        for treating eigenvalues as degenerate. Lower values make the tolerance smaller.
 
     Returns:
     np.ndarray: Gradient of the Loewdin transformation.
@@ -65,15 +67,23 @@ def loewdin_trafo_grad(overlap_mat):
 
     vals, vecs = np.linalg.eigh(overlap_mat)
 
-    rounded_vals = np.round(vals, decimals=5)
-    degenerate_vals = np.unique(rounded_vals)
+    # Determine degeneracy by small differences in eigenvalues rather than rounding
+    tol = 10.0 ** (-degeneracy_precision)
+    n = vals.shape[0]
+    assigned = np.zeros(n, dtype=bool)
+    degenerate_groups = []
+    for i in range(n):
+        if assigned[i]:
+            continue
+        same = np.where(np.abs(vals - vals[i]) <= tol)[0]
+        assigned[same] = True
+        degenerate_groups.append(same)
 
     U_full = np.zeros((*overlap_mat.shape, *overlap_mat.shape))
     degenerate_subspace = np.zeros(overlap_mat.shape, dtype=bool)
 
     # Take care of degeneracies
-    for val in degenerate_vals:
-        degenerate_ids = (np.argwhere(rounded_vals == val)).flatten()
+    for degenerate_ids in degenerate_groups:
         subspace = vecs[:, degenerate_ids]
 
         V_projected = 0.5 * lib.einsum(
@@ -1379,7 +1389,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
 def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs, 
                                      diagonals=None, Jdiag_only=True, sao_diag=False,
                                      nroots=1, 
-                                     density_fit=False, df_basis=None,
+                                     density_fit=True, df_basis=None,
                                      ao_mo_trafo=None, ao_mo_trafo_grad=None,
                                      df_response=False,
                                      hermitian=True,):
@@ -1425,7 +1435,7 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
         mol, lowrank_vecs,
         diagonals=diagonals, 
         Jdiag_only=Jdiag_only, 
-        sao_diag=False, # TODO: Need to change this once sao diag is fully implemented - for now always computes the JK builds for diags
+        sao_diag=sao_diag, 
         ao_mo_trafo=ao_mo_trafo,
         density_fit=density_fit, 
         df_basis=df_basis,

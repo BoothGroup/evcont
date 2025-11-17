@@ -124,7 +124,7 @@ def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-4):
 
 def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
                                    nroots=1, Jdiag_only=True, sao_diag=True, 
-                                   hermitian=True, df_basis='weigend',
+                                   hermitian=True, density_fit=True, df_basis=None,
                                    lindep=1e-4):
     """
     Returns multiple approximate electronic states from solving the generalised
@@ -145,7 +145,8 @@ def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S,
     """
 
     # Calculate the Hamiltonian matrix
-    H = lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, cum_diagonal, df_basis=df_basis,
+    H = lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, cum_diagonal, 
+                            density_fit=density_fit, df_basis=df_basis,
                             Jdiag_only=Jdiag_only, sao_diag=sao_diag)
 
     #print('  Hamiltonian')
@@ -360,7 +361,7 @@ def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=Tru
 
 def approximate_multistate_lowrank_OAO(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
                                        nroots=1, Jdiag_only=True, sao_diag=True,
-                                       hermitian=True, df_basis='weigend',
+                                       hermitian=True, density_fit=True, df_basis=None,
                                        lindep=1e-4):
     """
     This function approximates multiple state energies and wavefunctions of a given
@@ -387,7 +388,8 @@ def approximate_multistate_lowrank_OAO(mol, one_RDM, lowrank_vecs, cum_diagonal,
     # Approximate the ground state energy and wavefunction in projected subspace
     #en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
     en, vec = approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
-                                             nroots=nroots, hermitian=hermitian, df_basis=df_basis, 
+                                             nroots=nroots, hermitian=hermitian, 
+                                             density_fit=density_fit, df_basis=df_basis, 
                                              Jdiag_only=Jdiag_only, sao_diag=sao_diag, lindep=lindep)
     # Calculate the total energy by adding the nuclear repulsion energy
     total_energy = en.real + mol.energy_nuc()
