@@ -8,12 +8,24 @@ from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
 from pygnme import wick, utils
 
 #from pyscf.mcscf.casci import CASCI
-from pyscf import scf, mcscf
+from pyscf import scf, mcscf, gto
 
 from mpi4py import MPI
 
 from tqdm import tqdm
 import sys
+
+###########################################################################
+# Load Quantel if available
+try:
+    from quantel.ints.pyscf_integrals import PySCFMolecule, PySCFIntegrals
+    from quantel.wfn.ss_casscf import SS_CASSCF
+    from quantel.opt.mode_controlling import ModeControl
+
+    QUANTEL_FOUND = True
+except:
+    QUANTEL_FOUND = False
+###########################################################################
 
 rank = MPI.COMM_WORLD.Get_rank()
 
@@ -101,8 +113,9 @@ class CAS_EVCont_obj:
     CAS_EVCont_obj holds the data structure for the continuation from CAS states.
     """
 
-    def __init__(self, ncas, neleca, #casci_solver=CASCI, 
+    def __init__(self, ncas, neleca, 
                 nroots=1, solver='SS-CASSCF',
+                software='pyscf', quantel_path=None, solutions_to_reconverge=None,
                 lowrank=False,
                 **kwargs):
         """
@@ -111,16 +124,29 @@ class CAS_EVCont_obj:
         Args:
             ncas (int): Number of CAS orbitals.
             neleca (int): Number of active space electrons.
-            casci_solver (object): CASCI solver object from PySCF (can also be CASSCF).
+            nroots (int): Number of states to be continued.
+            solver (object): CAS solver type.
+            software (str): Software backend to use ('pyscf' or 'quantel').
+            quantel_path (str): Path to Quantel solution to continue from.
+            solutions_to_reconverge (list): List of solutions to reconverge in the Quantel path.
+            lowrank (bool): Whether to use low-rank approximation for 2-body t-RDMs.
+            **kwargs: Additional keyword arguments for low-rank settings.
 
         Attributes:
             ncas (int): Number of CAS orbitals.
             neleca (int): Number of alpha electrons.
-            cascis (list): List to store CASCI objects.
+
             overlap (ndarray): Overlap matrix.
             one_rdm (ndarray): One-electron t-RDM.
-            two_rdm (ndarray): Two-electron t-RDM.
-            casci_solver (object): CASCI solver object.
+            two_rdm (ndarray): Two-electron t-RDM. (if not using low-rank)
+            vecs_lowrank (dict): Low-rank decomposition of 2-body t-RDMs. (if using low-rank)
+
+            mols (list): List of molecule objects for each state.
+            mo_coeffs (list): List of MO coefficient matrices for each state.
+            cis (list): List of CI vectors for each state.
+            trafos (list): List of transformation matrices for each state.
+
+            
         """
 
         self.ncas = ncas
@@ -146,6 +172,22 @@ class CAS_EVCont_obj:
         else:
             print('Wrong solver in CAS_EVCont_obj')
             sys.exit()
+
+        # Check for the software
+        if software in ['pyscf']:
+            self.software = software
+        elif software in ['quantel']:
+            if QUANTEL_FOUND:
+                if solver in ['SS-CASSCF']:
+                    self.software = software
+                    self.quantel_path = quantel_path
+                    self.solutions_to_reconverge = solutions_to_reconverge
+                else:
+                    print('Unsupported solver for Quantel backend.')
+                    sys.exit()
+            else:
+                print('Quantel package not found. Install Quantel or use pyscf as software backend.')
+                sys.exit()
 
         # Use each determinant as a separate state
         self.uncontracted = False
@@ -898,24 +940,20 @@ class CAS_EVCont_obj:
 
         lowrank = self.lowrank
 
-        # Run mean field calculations for the orbitals
-        #mf = mol.copy().RHF()
-        mf = scf.RHF(mol.copy())
-        #mf.level_shift = 0.5
-        #mf.damp = 0.2
-        #mf.diis_space = 12
-        mf.kernel()
+        ## Preliminaries before state iterations
+        if self.software == 'pyscf' and state is None:
+            # Run mean field calculations for the orbitals
+            #mf = mol.copy().RHF()
+            mf = scf.RHF(mol.copy())
+            #mf.level_shift = 0.5
+            #mf.damp = 0.2
+            #mf.diis_space = 12
+            mf.kernel()
 
-        assert mf.converged
+            assert mf.converged
 
-        MPI.COMM_WORLD.Bcast(mf.mo_coeff)
-
-        # Specificy the CAS solver for the current state
-        #casci_bra_all = self.casci_solver(mf, self.ncas, self.neleca)
-        #casci_bra_all.fcisolver.nroots = self.nroots
-
-        if state is None:
-
+            #MPI.COMM_WORLD.Bcast(mf.mo_coeff)
+            
             if self.solver == 'SA-CASSCF':
                 cas_sa = mcscf.CASSCF(mf, self.ncas, self.neleca).state_average_([1/self.nroots]*self.nroots)
                 cas_sa.kernel()
@@ -929,10 +967,25 @@ class CAS_EVCont_obj:
                 
                 assert mc_casci.converged
 
+        elif self.software == 'quantel' and state is None:
+            # Quantel molecule object
+            mol_q = PySCFMolecule(mol.atom, mol.basis, mol.unit)
+            ints = PySCFIntegrals(mol_q)
+            #metric = ints.overlap_matrix()
+            #hcore  = ints.oei_matrix()
+
+            def convert_to_mcscf(mol,wfn, ncas, neleca):
+                mc = mcscf.CASCI(mol, ncas, neleca) 
+                mc.fcisolver.max_cycle = 1
+                mc.casci(wfn.mo_coeff,ci0=wfn.mat_ci[:,0])
+                return mc
 
         # Iterate over different states
         if state is None:
-            nroots = self.nroots
+            if self.software == 'quantel':
+                nroots = len(self.solutions_to_reconverge)
+            else:   
+                nroots = self.nroots
         else:
             nroots = len(state)
 
@@ -947,7 +1000,7 @@ class CAS_EVCont_obj:
                 diagonal_lr = self.diagonal_lr
                 vecs_lowrank = self.vecs_lowrank
 
-            if state is None:
+            if state is None and self.software == 'pyscf':
                 if self.solver == 'CASCI':
                     #casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
                     mo_coeff_bra = mc_casci.mo_coeff
@@ -991,6 +1044,28 @@ class CAS_EVCont_obj:
                 #else:
 
 
+            elif self.software == 'quantel' and state is None:
+                # Quantel molecule object
+                wfn = SS_CASSCF(ints, (self.ncas,self.neleca))
+                wfn.initialise(np.genfromtxt(f'{self.quantel_path}/{self.solutions_to_reconverge[istate]+1:04d}.mo_coeff'),\
+                               np.genfromtxt(f'{self.quantel_path}/{self.solutions_to_reconverge[istate]+1:04d}.mat_ci'))
+                
+                # Reconverge solution at the new geometry
+                ModeControl().run(wfn)
+
+                casci_bra = convert_to_mcscf(mol,wfn, self.ncas, self.neleca)
+                mo_coeff_bra = casci_bra.mo_coeff
+                mol_bra = casci_bra.mol
+                ci_bra = casci_bra.ci
+
+                #e = wfn.energy
+                out = casci_bra.kernel()
+                e = out[0]
+
+                ncas = casci_bra.ncas
+                ncore = casci_bra.ncore
+                nelec = mol_bra.nelec
+
             else:
                 casci_bra = state[istate]
 
@@ -1014,6 +1089,23 @@ class CAS_EVCont_obj:
 
             # Old version
             #self.cascis.append(casci_bra)
+
+            # Check if this new state is already stored (mo_coeff_bra and ci_bra are within a threshold of any element of self.mo_coeffs and self.cis)
+            state_exists = False
+            for i in range(len(self.cis)):
+                mo_coeff_existing = self.mo_coeffs[i]
+                ci_existing = self.cis[i]
+
+                mo_diff = np.linalg.norm(mo_coeff_existing - mo_coeff_bra)
+                ci_diff = np.linalg.norm(ci_existing - ci_bra)
+
+                if mo_diff < 1e-6 and ci_diff < 1e-6:
+                    print('Warning: The appended state is already stored in the training set. Skipping addition.')
+                    state_exists = True
+                    break
+
+            if state_exists:
+                continue
 
             # New version: store MO coeffs and CI vectors separately
             self.mo_coeffs.append(mo_coeff_bra)
@@ -2075,7 +2167,25 @@ class CAS_EVCont_obj:
             self.one_rdm = self.one_rdm[np.ix_(keep_ids, keep_ids)]
         if self.two_rdm is not None:
             self.two_rdm = self.two_rdm[np.ix_(keep_ids, keep_ids)]
-        self.cascis = [self.cascis[i] for i in keep_ids]
+        
+        # OBSOLETE
+        #self.cascis = [self.cascis[i] for i in keep_ids]
+
+        self.mo_coeffs = [self.mo_coeffs[i] for i in keep_ids]
+        self.cis = [self.cis[i] for i in keep_ids]
+        self.trafos = [self.trafos[i] for i in keep_ids]
+        # Need to sort how the molecules are stored
+        #self.mols = [self.mols[i] for i in keep_ids]
+
+        if self.lowrank:
+            if self.diagonal_lr is not None:
+                self.diagonal_lr = self.diagonal_lr[np.ix_(keep_ids, keep_ids)]
+            if self.vecs_lowrank is not None:
+                vecs_lowrank_new = {}
+                for ind, i in enumerate(keep_ids):
+                    for indj, j in enumerate(keep_ids):
+                        vecs_lowrank_new[(ind, indj)] = self.vecs_lowrank[(i, j)]
+                self.vecs_lowrank = vecs_lowrank_new
 
     def save(self, filename):
         """
@@ -2115,7 +2225,13 @@ class CAS_EVCont_obj:
             'uncontracted': self.uncontracted,
             'use_rdm': self.use_rdm,
             'precompute': self.precompute,
+
+            # Save pyscf Molecule object geometries (not the full mols since it's not pickleable)
+            'molecule_geometries': [mol.atom for mol in self.mols],
+            'molecule_basis': [mol.basis for mol in self.mols],
+            'molecule_unit': [mol.unit for mol in self.mols],
         }
+        
         
         # Save to pickle file
         with open(filename, 'wb') as f:
@@ -2177,6 +2293,14 @@ class CAS_EVCont_obj:
         cas_obj.uncontracted = cas_data['uncontracted']
         cas_obj.use_rdm = cas_data['use_rdm']
         cas_obj.precompute = cas_data['precompute']
+
+        # Restore molecule objects if geometries were saved
+        if 'molecule_geometries' in cas_data:
+            cas_obj.mols = []
+            for geom, basis, unit in zip(cas_data['molecule_geometries'], cas_data['molecule_basis'], cas_data['molecule_unit']):
+                mol = gto.Mole()
+                mol.build(atom=geom, basis=basis, unit=unit, verbose=0)
+                cas_obj.mols.append(mol)
         
         if rank == 0:
             print(f"CAS object loaded from {filename}")
