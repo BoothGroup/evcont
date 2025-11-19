@@ -275,6 +275,7 @@ def converge_NAMD_traj(
         max_iter=100,
         data_addition='weighted_highest_peak_ham',
         nx_path=None,
+        reconverge_from_closest_hdist=False,
         run_command='sbatch $NX/moldyn.pl'
         ):
     """
@@ -550,12 +551,44 @@ def converge_NAMD_traj(
         # Add the new geometry to the training set
         new_geom = trajectory[addgeom_ind]
         new_trn_geometries = np.concatenate((trn_geometries,[new_geom]))
-        
+        mol_new = init_mol.copy().set_geom_(new_geom)
+
         # Write
         np.save('trn_geometries.npy',new_trn_geometries)
         
-        # Add to continuation
-        EVCont_obj.append_to_rdms(init_mol.copy().set_geom_(new_geom))
+        ### Add to continuation
+        if reconverge_from_closest_hdist:
+            if hasattr(EVCont_obj, 'software') and EVCont_obj.software == 'quantel':
+                # Integrals of the new_geom
+                oei_new, tei_new = get_integrals(mol_new, get_basis(mol_new))
+
+                # Read in integrals from training geometries to prevent recomputation
+                files = glob.glob(os.path.join(EVCont_obj.quantel_path, 'geom*'))
+                oei_trn = []
+                tei_trn = []
+                for f in files:
+                    ind = int(f.split('geom')[-1])
+                    oei_trn.append(np.loadtxt(os.path.join(f,'oei.dat')))
+                    tei_trn.append(np.load(os.path.join(f,'tei.npy')))
+
+                # Find the training geometry closest in ham distance to the new geometry
+                hamiltonian_distance_to_new = hamiltonian_distance(
+                    oei_new,
+                    tei_new,
+                    np.array(oei_trn),
+                    np.array(tei_trn)
+                )
+                closest_ind = np.argmin(hamiltonian_distance_to_new)
+                closest_geom_tag = f'geom{files[closest_ind].split("geom")[-1]}'
+                
+                print('Re-converging from geometry closest in ham distance to the new geometry ({})'.format(closest_geom_tag))
+                EVCont_obj.append_to_rdms(mol_new, quantel_tag=closest_geom_tag)
+
+            else:
+                print('Re-converging from closest ham distance is only implemented for Quantel software.')
+                sys.exit()
+        else:
+            EVCont_obj.append_to_rdms(mol_new)
         
         # Save the continuation object if possible
         if OBJECT_CAN_BE_SAVED:
@@ -583,7 +616,6 @@ def converge_NAMD_traj(
             run_command=run_command
         )
         
-
 def run_trajectory(traj_ind, inp_par, run_command):
     """
     Run a Newton-X calculation with sample input files from the 'sample' directory
@@ -652,6 +684,33 @@ def check_status():
     else:
         return 'Running'
     
+def hamiltonian_distance(oei1, tei1, oei2, tei2):
+    """
+    Calculate a distance metric between two sets of one-electron and two-electron integrals.
+    
+    Parameters:
+    oei1, tei1 : numpy.ndarray
+        One- and two-electron integrals for a geometry.
+    oei2, tei2 : numpy.ndarray
+        One- and two-electron integrals for a different geometry 
+        (can be an array for different geometries in which case an array of distances is returned).
+
+    Returns:
+    float
+        A scalar distance metric quantifying the difference between the two Hamiltonians.
+    """
+    nbasis = oei1.shape[-1]
+
+    N1 = nbasis**2        # number of 1e integral elements
+    N2 = nbasis**4        # number of 2e integral elements
+
+    distance = (
+        np.sum(abs(oei1 - oei2)**2, axis=(-1, -2)) / N1
+        + 0.5 * np.sum(abs(tei1 - tei2)**2, axis=(-1, -2, -3, -4)) / N2
+    )
+    # Rescale for the following heuristics (e.g. peak detection, etc.)
+    return distance*1000
+
 def hamiltonian_similarity(init_mol, trajectory, trn_geometries):
     """
     Compute the minimum Hamiltonian distance of a trajectory to a set
@@ -682,9 +741,7 @@ def hamiltonian_similarity(init_mol, trajectory, trn_geometries):
         mol = init_mol.copy().set_geom_(geometry)
         h1, h2 = get_integrals(mol, get_basis(mol))
 
-        distance = np.sum(
-            abs(h1 - h1_trn) ** 2, axis=(-1, -2)
-        ) + 0.5 * np.sum(abs(h2 - h2_trn) ** 2, axis=(-1, -2, -3, -4))
+        distance = hamiltonian_distance(h1, h2, h1_trn, h2_trn)
         min_dist = np.min(distance)
         min_dist_l += [min_dist]
         
