@@ -14,6 +14,7 @@ from mpi4py import MPI
 
 from tqdm import tqdm
 import sys
+import os, re
 
 ###########################################################################
 # Load Quantel if available
@@ -920,13 +921,16 @@ class CAS_EVCont_obj:
 
             self.cascis.append(casci_bra)
 
-    def append_to_rdms(self, mol, state=None, debug=False):
+    def append_to_rdms(self, mol, state=None, quantel_tag='ref', debug=False):
         """
         Append a new training geometry. See pygnme examples for more information about
         the evaluation of the t-RDMs.
 
         Args:
             mol (object): Molecular object of the training geometry.
+            state (list, optional): List of precomputed states to be added. If None, new states will be computed.
+            quantel_tag (str, optional): Tag for quantel states if using quantel software. Default is 'ref' folder in self.quantel_path
+            debug (bool, optional): If True, print debug information. Defaults to False.
 
         Raises:
             AssertionError: If the mean-field calculation is not converged.
@@ -941,6 +945,10 @@ class CAS_EVCont_obj:
         lowrank = self.lowrank
 
         ## Preliminaries before state iterations
+        # AO-SAO transformation
+        ovlp_bra = mol.intor_symmetric("int1e_ovlp")
+        basis_OAO_bra = get_basis(mol)
+    
         if self.software == 'pyscf' and state is None:
             # Run mean field calculations for the orbitals
             #mf = mol.copy().RHF()
@@ -979,6 +987,19 @@ class CAS_EVCont_obj:
                 mc.fcisolver.max_cycle = 1
                 mc.casci(wfn.mo_coeff,ci0=wfn.mat_ci[:,0])
                 return mc
+            
+            # Save the new tag path
+            # Create new geometry directory
+            new_tag = create_next_geom_dir(self.quantel_path)
+
+            # Save the geometry and integrals
+            mol_q.tofile(os.path.join(self.quantel_path, new_tag, 'molecule.xyz'))
+
+            h1_q = ints.oei_ao_to_mo(basis_OAO_bra, basis_OAO_bra)
+            h2_q = np.einsum('pi,qj,pqrs,rk,sl->ijkl', basis_OAO_bra, basis_OAO_bra, ints.tei_array(), basis_OAO_bra, basis_OAO_bra,optimize=True)
+
+            np.savetxt(os.path.join(self.quantel_path, new_tag, 'oei.dat'), h1_q)
+            np.save(os.path.join(self.quantel_path, new_tag, 'tei.npy'), h2_q)
 
         # Iterate over different states
         if state is None:
@@ -1046,12 +1067,18 @@ class CAS_EVCont_obj:
 
             elif self.software == 'quantel' and state is None:
                 # Quantel molecule object
+                state_ind = self.solutions_to_reconverge[istate]+1
                 wfn = SS_CASSCF(ints, (self.ncas,self.neleca))
-                wfn.initialise(np.genfromtxt(f'{self.quantel_path}/{self.solutions_to_reconverge[istate]+1:04d}.mo_coeff'),\
-                               np.genfromtxt(f'{self.quantel_path}/{self.solutions_to_reconverge[istate]+1:04d}.mat_ci'))
+                wfn.initialise(np.genfromtxt(os.path.join(self.quantel_path, quantel_tag, f'{state_ind:04d}.mo_coeff')),
+                               np.genfromtxt(os.path.join(self.quantel_path, quantel_tag, f'{state_ind:04d}.mat_ci')))
                 
                 # Reconverge solution at the new geometry
                 ModeControl().run(wfn)
+
+                # Save the reconverged wavefunction
+                state_path = os.path.join(self.quantel_path, new_tag)
+                np.savetxt(os.path.join(state_path,f'{state_ind:04d}.mo_coeff'), wfn.mo_coeff)
+                np.savetxt(os.path.join(state_path, f'{state_ind:04d}.mat_ci'), wfn.mat_ci)
 
                 casci_bra = convert_to_mcscf(mol,wfn, self.ncas, self.neleca)
                 mo_coeff_bra = casci_bra.mo_coeff
@@ -1112,8 +1139,6 @@ class CAS_EVCont_obj:
             self.cis.append(ci_bra)
             self.mols.append(mol_bra)
             
-            ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
-            basis_OAO_bra = get_basis(mol_bra)
             trafo_bra = basis_OAO_bra.T.dot(ovlp_bra).dot(mo_coeff_bra)
 
             self.trafos.append(trafo_bra)
@@ -2309,3 +2334,24 @@ class CAS_EVCont_obj:
             print(f"  Number of states: {len(cas_obj.cis)}")
         
         return cas_obj
+
+
+# Quantel specific parser functions
+def create_next_geom_dir(quantel_path):
+    """
+    Create the next geometry directory in the Quantel path.
+    Args:
+        quantel_path (str): Path to the Quantel directory.  
+    Returns:
+        str: Name of the newly created geometry directory.
+    """
+    nums = []
+    for name in os.listdir(quantel_path):
+        if os.path.isdir(os.path.join(quantel_path, name)):
+            m = re.fullmatch(r'geom(\d+)', name)
+            if m:
+                nums.append(int(m.group(1)))
+    next_n = (max(nums) + 1) if nums else 1
+    new_name = f"geom{next_n}"
+    os.makedirs(os.path.join(quantel_path, new_name))
+    return new_name
