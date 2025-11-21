@@ -2230,6 +2230,9 @@ class CAS_EVCont_obj:
             'nroots': self.nroots,
             'solver': self.solver,
             'lowrank': self.lowrank,
+            'software': self.software,
+            'quantel_path': getattr(self, 'quantel_path', None),
+            'solutions_to_reconverge': getattr(self, 'solutions_to_reconverge', None),
             
             # RDM and overlap data
             'overlap': self.overlap,
@@ -2281,12 +2284,20 @@ class CAS_EVCont_obj:
             cas_data = pickle.load(f)
         
         # Reinitialize the CAS object with basic parameters
+        # Extract optional parameters with defaults for backward compatibility
+        software = cas_data.get('software', 'pyscf')
+        quantel_path = cas_data.get('quantel_path', None)
+        solutions_to_reconverge = cas_data.get('solutions_to_reconverge', None)
+        
         if cas_data['lowrank']:
             cas_obj = cls(
                 cas_data['ncas'], 
                 cas_data['neleca'],
                 nroots=cas_data['nroots'],
                 solver=cas_data['solver'],
+                software=software,
+                quantel_path=quantel_path,
+                solutions_to_reconverge=solutions_to_reconverge,
                 lowrank=True,
                 **cas_data['kwargs']
             )
@@ -2296,6 +2307,9 @@ class CAS_EVCont_obj:
                 cas_data['neleca'],
                 nroots=cas_data['nroots'],
                 solver=cas_data['solver'],
+                software=software,
+                quantel_path=quantel_path,
+                solutions_to_reconverge=solutions_to_reconverge,
                 lowrank=False
             )
         
@@ -2330,8 +2344,11 @@ class CAS_EVCont_obj:
         if rank == 0:
             print(f"CAS object loaded from {filename}")
             print(f"  ncas={cas_obj.ncas}, neleca={cas_obj.neleca}, nroots={cas_obj.nroots}")
-            print(f"  solver={cas_obj.solver}, lowrank={cas_obj.lowrank}")
+            print(f"  solver={cas_obj.solver}, lowrank={cas_obj.lowrank}, software={cas_obj.software}")
             print(f"  Number of states: {len(cas_obj.cis)}")
+            if cas_obj.software == 'quantel':
+                print(f"  quantel_path={cas_obj.quantel_path}")
+                print(f"  solutions_to_reconverge={cas_obj.solutions_to_reconverge}")
         
         return cas_obj
 
