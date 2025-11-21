@@ -276,7 +276,10 @@ def converge_NAMD_traj(
         data_addition='weighted_highest_peak_ham',
         nx_path=None,
         reconverge_from_closest_hdist=False,
-        run_command='sbatch $NX/moldyn.pl'
+        append_as_HPC_job=True,
+        run_command='sbatch $NX/moldyn.pl',
+        run_append_command='qsub append_states.sh',
+        solver='CAS'
         ):
     """
     Converging eigenvector continuation training set for Newton-X nonadiabatic 
@@ -284,7 +287,7 @@ def converge_NAMD_traj(
     converging the trajectory.
     
     Call and run from a separate directory that contains a directory 
-    called 'sample' with sample NX input files. Otherwise, the calculation will be stuck
+    called 'sample' with sample NX input files. Otherwise, the calculation will be stuck        
     
     Args:
         EVCont_obj: 
@@ -319,9 +322,17 @@ def converge_NAMD_traj(
             Path for the 'bin' folder of the installed Newton-X code. If not defined,
             the $NX environment variable will be expected to be predefined in the terminal.
             Otherwise, the calculation will crash.
+        reconverge_from_closest_hdist (bool):
+            Whether to reconverge from the closest geometry based on Hamiltonian distance. Default is False.
         run_command (str):
             Terminal command to use for running NX. Based on the HPC, different
             commands may be required.
+        run_append_command (str):
+            Terminal command to use for appending new states to the continuation object.
+            Based on the HPC, different commands may be required.
+        solver (str):
+            The type of solver used for the continuation object. Used to determine continuation object type
+            when appending new states as a HPC job. Default is 'CAS'.
     
     Returns:
         1
@@ -369,17 +380,28 @@ def converge_NAMD_traj(
 
     # Update the model from the last iteration or initialize one if it doesn't exist
     if EVCont_obj.overlap is None:
-        EVCont_obj.append_to_rdms(init_mol.copy())
-        trn_geometries = [init_mol.atom_coords()]
-        np.save('trn_geometries.npy', trn_geometries)
 
-        # Optionally save the continuation object if possible
-        if OBJECT_CAN_BE_SAVED:
-            try:
-                print(f"Saving continuation object to {CONT_OBJ_FILENAME}")
-                EVCont_obj.save(CONT_OBJ_FILENAME)
-            except Exception as e:
-                print(f"Warning: Could not save continuation object: {e}")
+        if append_as_HPC_job and OBJECT_CAN_BE_SAVED:
+            # Create an empty object and append the first geometry as an HPC job
+            EMPTY_OBJ_FILENAME = f'iterative-models/continuation_object-empty.pkl'
+            EVCont_obj.save(EMPTY_OBJ_FILENAME)
+
+            EVCont_obj = run_append_states(init_mol.copy(), EMPTY_OBJ_FILENAME, CONT_OBJ_FILENAME, solver, run_append_command, quantel_tag='ref')
+            trn_geometries = [init_mol.atom_coords()]
+            np.save('trn_geometries.npy', trn_geometries)
+
+        else:
+            EVCont_obj.append_to_rdms(init_mol.copy())
+            trn_geometries = [init_mol.atom_coords()]
+            np.save('trn_geometries.npy', trn_geometries)
+
+            # Optionally save the continuation object if possible
+            if OBJECT_CAN_BE_SAVED:
+                try:
+                    print(f"Saving continuation object to {CONT_OBJ_FILENAME}")
+                    EVCont_obj.save(CONT_OBJ_FILENAME)
+                except Exception as e:
+                    print(f"Warning: Could not save continuation object: {e}")
 
     else:
         # Read initial training geometries
@@ -398,8 +420,6 @@ def converge_NAMD_traj(
                     EVCont_obj.one_rdm,
                     two_rdm=EVCont_obj.two_rdm)
 
-
-    
     ###########################################################################
     # Setup and run NAMD trajectory
     inp_par = [steps, dt, nstat, nstatdyn, iseed]
@@ -476,74 +496,7 @@ def converge_NAMD_traj(
         hamiltonian_distance_all = hamiltonian_similarity(init_mol, trajectory, trn_geometries)
         np.savetxt('ham_dist_{}.txt'.format(nit),hamiltonian_distance_all)
         
-        # Disregards peaks with hamdist less than this threshold
-        # (make this a parameter later on, also depends on norb)
-        threshold = 0.01
-        
-        # Find the index of the geometry with maximum H_dist
-        addgeom_ind = np.argmax(hamiltonian_distance_all)
-        
-        # Find which new geometry to add to the training set
-        # Select the geometry that's the furtherst in hamiltonian distance
-        if data_addition == "farthest_point_ham":
-            
-            # Find the index of the geometry with maximum H_dist
-            addgeom_ind = np.argmax(hamiltonian_distance_all)
-
-        # Select the temporally first peak in the hamiltonian distance
-        elif data_addition == "first_peak_ham":
-
-            # If no peak is found, choose the index with largest ham distance
-            addgeom_ind = np.argmax(hamiltonian_distance_all)
-                
-            # Find all peaks
-            peaks = find_peaks(hamiltonian_distance_all)[0]
-            
-            # If peaks above a threshold exist, choose that over farthest
-            if len(peaks) > 0:
-                ind_above_thr = np.where(hamiltonian_distance_all[peaks] > threshold)
-                if len(ind_above_thr[0]) > 0:
-                    addgeom_ind = peaks[ind_above_thr][0]
-               
-        elif data_addition in ["weighted_highest_peak_ham", "variable_weight_peak_ham"]:
-            # Exponent of the time penalty function 
-            # (0 - chooses max, -->inf chooses 1st peak)
-            if data_addition == "weighted_highest_peak_ham":
-                exponent = 3.
-            else:
-                # Variable exponent based on current convergence (still experimental)
-                scaling = 0.01
-                scaled_exp = scaling * en_diff.max()/convergence_thresh
-                exponent = min(max(scaled_exp, 0.), 5.) # Limit between 0 and 5
-
-            # If no peak is found, choose the index with largest ham distance
-            addgeom_ind = np.argmax(hamiltonian_distance_all)
-                
-            # Find all peaks
-            peaks = find_peaks(hamiltonian_distance_all)[0]
-            
-            # Add the max point to the peaks as a possible selection geometry
-            if addgeom_ind not in peaks:
-                peaks = np.append(peaks, addgeom_ind)
-                
-            # If peaks above a threshold exist, choose that over farthest
-            ind_above_thr = np.where((hamiltonian_distance_all[peaks] > threshold) & (peaks > 0)) 
-            
-            if len(ind_above_thr[0]) > 0:
-                # Peaks above threshold
-                peaks_above_thr = peaks[ind_above_thr]
-                
-                # penalty function ranging from 0 (favourable) to 1 (unfavourable)
-                penalty = (peaks_above_thr/len(hamiltonian_distance_all))**exponent
-                
-                step_weighted_hamdist = hamiltonian_distance_all[peaks_above_thr]/penalty
-                
-                addgeom_ind = peaks_above_thr[np.argmax(step_weighted_hamdist)]
-                
-        else:
-            print('The data_addition method {} is not implemented.'.format(data_addition))
-            sys.exit()
-            
+        addgeom_ind = select_active_learning_geometry(hamiltonian_distance_all, data_addition, en_diff, convergence_thresh)    
             
         ######################################################################
         ##### AFTER SELECTION
@@ -582,16 +535,25 @@ def converge_NAMD_traj(
                 closest_geom_tag = f'geom{files[closest_ind].split("geom")[-1]}'
                 
                 print('Re-converging from geometry closest in ham distance to the new geometry ({})'.format(closest_geom_tag))
-                EVCont_obj.append_to_rdms(mol_new, quantel_tag=closest_geom_tag)
+                if append_as_HPC_job and OBJECT_CAN_BE_SAVED:
+                    NEW_OBJ_FILENAME = f'iterative-models/continuation_object-{nit+1}.pkl'
+                    EVCont_obj = run_append_states(init_mol.copy(), CONT_OBJ_FILENAME, NEW_OBJ_FILENAME, solver, run_append_command, quantel_tag=closest_geom_tag)
+
+                else:
+                    EVCont_obj.append_to_rdms(mol_new, quantel_tag=closest_geom_tag)
 
             else:
                 print('Re-converging from closest ham distance is only implemented for Quantel software.')
                 sys.exit()
         else:
-            EVCont_obj.append_to_rdms(mol_new)
+            if append_as_HPC_job and OBJECT_CAN_BE_SAVED:
+                NEW_OBJ_FILENAME = f'iterative-models/continuation_object-{nit+1}.pkl'
+                EVCont_obj = run_append_states(mol_new, CONT_OBJ_FILENAME, NEW_OBJ_FILENAME, solver, run_append_command, quantel_tag='ref')
+            else:
+                EVCont_obj.append_to_rdms(mol_new)
         
         # Save the continuation object if possible
-        if OBJECT_CAN_BE_SAVED:
+        if OBJECT_CAN_BE_SAVED and not append_as_HPC_job:
             CONT_OBJ_FILENAME = f'iterative-models/continuation_object-{nit+1}.pkl'
             try:
                 print(f"Saving continuation object to {CONT_OBJ_FILENAME}")
@@ -613,9 +575,48 @@ def converge_NAMD_traj(
             max_iter=max_iter,
             data_addition=data_addition,
             nx_path=nx_path,
-            run_command=run_command
+            reconverge_from_closest_hdist=reconverge_from_closest_hdist,
+            append_as_HPC_job=append_as_HPC_job,
+            run_command=run_command,
+            run_append_command=run_append_command,
+            solver=solver
         )
         
+def run_append_states(mol, cont_obj_path, newcont_obj_path, solver, run_append_command, quantel_tag='None'):
+    """
+    Run a job to append new geometries to the continuation object
+    """
+
+    # Save geometry
+    # Check if file exists and change name if necessary
+    geomfname = 'iterative-models/geom_0.xyz'    
+    count = 0
+    while os.path.isfile(geomfname):
+        count += 1
+        geomfname = f'iterative-models/geom_{count}.xyz'
+    mol.tofile(geomfname)
+
+    # Submit job with the correct arguments
+    os.system(f'{run_append_command} {cont_obj_path} {newcont_obj_path} {solver} {geomfname} {mol.basis} {quantel_tag}')
+
+    # Check until the job finishes
+    poll_seconds = 20  # minimal polling interval
+    print(f"Waiting for appended continuation object file: {newcont_obj_path}")
+    while not os.path.isfile(newcont_obj_path):
+        os.system(f'sleep {poll_seconds}')
+    print(f"Detected file {newcont_obj_path}. Loading updated continuation object.")
+
+    # Read in the appended continuation object
+    if solver == 'CAS':
+        try:
+            from evcont.CASCI_EVCont import CAS_EVCont_obj
+            cont_obj = CAS_EVCont_obj.load(newcont_obj_path)
+        except Exception as e:
+            print(f"Error loading appended continuation object: {e}")
+            sys.exit(1)
+
+    return cont_obj
+
 def run_trajectory(traj_ind, inp_par, run_command):
     """
     Run a Newton-X calculation with sample input files from the 'sample' directory
@@ -684,6 +685,101 @@ def check_status():
     else:
         return 'Running'
     
+def select_active_learning_geometry(hamiltonian_distance_all, data_addition, en_diff, convergence_thresh):
+    """
+    Select which geometry to add to the training set based on the hamiltonian 
+    distance metric and specified data addition method.
+
+    Args:
+        hamiltonian_distance_all (ndarray):
+            Array of Hamiltonian distances for all geometries in the trajectory.
+        data_addition (str):
+            Criterion for adding new data points. Can be 
+                "farthest_point_ham": in which case geometry that is furthest away from the training set is added,
+                "first_peak_ham": in which case data is added based on the first peak in Hamiltonian distance,
+                "weighted_highest_peak_ham": in which case data is added based on a weighted peak selection in 
+                    Hamiltonian distance,
+                "variable_weight_peak_ham": in which case the exponent of the weighting function is varied 
+                    based on current convergence.
+        en_diff (ndarray):
+            Array of energy differences for all geometries between the two previous trajectory iterations.
+        convergence_thresh (float):
+            Energy convergence threshold to terminate the training.
+
+    Returns:
+        addgeom_ind (int):
+            Index of the geometry to be added to the training set.
+    """
+    # Disregards peaks with hamdist less than this threshold
+    # (make this a parameter later on, also depends on norb)
+    threshold = 0.01
+    
+    # Find the index of the geometry with maximum H_dist
+    addgeom_ind = np.argmax(hamiltonian_distance_all)
+    
+    # Find which new geometry to add to the training set
+    # Select the geometry that's the furtherst in hamiltonian distance
+    if data_addition == "farthest_point_ham":
+        
+        # Find the index of the geometry with maximum H_dist
+        addgeom_ind = np.argmax(hamiltonian_distance_all)
+
+    # Select the temporally first peak in the hamiltonian distance
+    elif data_addition == "first_peak_ham":
+
+        # If no peak is found, choose the index with largest ham distance
+        addgeom_ind = np.argmax(hamiltonian_distance_all)
+            
+        # Find all peaks
+        peaks = find_peaks(hamiltonian_distance_all)[0]
+        
+        # If peaks above a threshold exist, choose that over farthest
+        if len(peaks) > 0:
+            ind_above_thr = np.where(hamiltonian_distance_all[peaks] > threshold)
+            if len(ind_above_thr[0]) > 0:
+                addgeom_ind = peaks[ind_above_thr][0]
+            
+    elif data_addition in ["weighted_highest_peak_ham", "variable_weight_peak_ham"]:
+        # Exponent of the time penalty function 
+        # (0 - chooses max, -->inf chooses 1st peak)
+        if data_addition == "weighted_highest_peak_ham":
+            exponent = 3.
+        else:
+            # Variable exponent based on current convergence (still experimental)
+            scaling = 0.01
+            scaled_exp = scaling * en_diff.max()/convergence_thresh
+            exponent = min(max(scaled_exp, 0.), 5.) # Limit between 0 and 5
+
+        # If no peak is found, choose the index with largest ham distance
+        addgeom_ind = np.argmax(hamiltonian_distance_all)
+            
+        # Find all peaks
+        peaks = find_peaks(hamiltonian_distance_all)[0]
+        
+        # Add the max point to the peaks as a possible selection geometry
+        if addgeom_ind not in peaks:
+            peaks = np.append(peaks, addgeom_ind)
+            
+        # If peaks above a threshold exist, choose that over farthest
+        ind_above_thr = np.where((hamiltonian_distance_all[peaks] > threshold) & (peaks > 0)) 
+        
+        if len(ind_above_thr[0]) > 0:
+            # Peaks above threshold
+            peaks_above_thr = peaks[ind_above_thr]
+            
+            # penalty function ranging from 0 (favourable) to 1 (unfavourable)
+            penalty = (peaks_above_thr/len(hamiltonian_distance_all))**exponent
+            
+            step_weighted_hamdist = hamiltonian_distance_all[peaks_above_thr]/penalty
+            
+            addgeom_ind = peaks_above_thr[np.argmax(step_weighted_hamdist)]
+            
+    else:
+        print('The data_addition method {} is not implemented.'.format(data_addition))
+        sys.exit()
+
+    return addgeom_ind
+
 def hamiltonian_distance(oei1, tei1, oei2, tei2):
     """
     Calculate a distance metric between two sets of one-electron and two-electron integrals.
@@ -708,8 +804,8 @@ def hamiltonian_distance(oei1, tei1, oei2, tei2):
         np.sum(abs(oei1 - oei2)**2, axis=(-1, -2)) / N1
         + 0.5 * np.sum(abs(tei1 - tei2)**2, axis=(-1, -2, -3, -4)) / N2
     )
-    # Rescale for the following heuristics (e.g. peak detection, etc.)
-    return distance*1000
+    # Rescale for the upcoming heuristics (e.g. peak detection, etc.)
+    return distance*100
 
 def hamiltonian_similarity(init_mol, trajectory, trn_geometries):
     """
