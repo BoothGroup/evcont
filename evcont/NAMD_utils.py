@@ -537,7 +537,7 @@ def converge_NAMD_traj(
                 print('Re-converging from geometry closest in ham distance to the new geometry ({})'.format(closest_geom_tag))
                 if append_as_HPC_job and OBJECT_CAN_BE_SAVED:
                     NEW_OBJ_FILENAME = f'iterative-models/continuation_object-{nit+1}.pkl'
-                    EVCont_obj = run_append_states(init_mol.copy(), CONT_OBJ_FILENAME, NEW_OBJ_FILENAME, solver, run_append_command, quantel_tag=closest_geom_tag)
+                    EVCont_obj = run_append_states(mol_new, CONT_OBJ_FILENAME, NEW_OBJ_FILENAME, solver, run_append_command, quantel_tag=closest_geom_tag)
 
                 else:
                     EVCont_obj.append_to_rdms(mol_new, quantel_tag=closest_geom_tag)
@@ -805,7 +805,7 @@ def hamiltonian_distance(oei1, tei1, oei2, tei2):
         + 0.5 * np.sum(abs(tei1 - tei2)**2, axis=(-1, -2, -3, -4)) / N2
     )
     # Rescale for the upcoming heuristics (e.g. peak detection, etc.)
-    return distance*100
+    return distance*1000
 
 def hamiltonian_similarity(init_mol, trajectory, trn_geometries):
     """
