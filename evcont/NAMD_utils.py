@@ -276,9 +276,12 @@ def converge_NAMD_traj(
         data_addition='weighted_highest_peak_ham',
         nx_path=None,
         reconverge_from_closest_hdist=False,
-        append_as_HPC_job=True,
+        append_as_HPC_job=False,
         run_command='sbatch $NX/moldyn.pl',
         run_append_command='qsub append_states.sh',
+        compute_hamdist_during_traj=False,
+        compute_hamdist_as_HPC_job=False,
+        run_hamdist_command='qsub compute_hamdist.sh',
         solver='CAS'
         ):
     """
@@ -330,6 +333,12 @@ def converge_NAMD_traj(
         run_append_command (str):
             Terminal command to use for appending new states to the continuation object.
             Based on the HPC, different commands may be required.
+        compute_hamdist_during_traj (bool):
+            Whether to compute Hamiltonian distances locally while the trajectory is running.
+        compute_hamdist_as_HPC_job (bool):
+            Whether to offload Hamiltonian distance computation to a separate HPC job.
+        run_hamdist_command (str):
+            Command used to submit/run the Hamiltonian distance job.
         solver (str):
             The type of solver used for the continuation object. Used to determine continuation object type
             when appending new states as a HPC job. Default is 'CAS'.
@@ -346,20 +355,6 @@ def converge_NAMD_traj(
     # Check if it is a restart calculation or a new calculation
     existing_ind = [int(i.split('_')[-1].split('.')[0]) for i in glob.glob('ham_dist*')]
 
-    # Optionally recover the continuation object if possible
-    CONT_OBJ_FILENAME = 'continuation_object.pkl'
-    """
-    # DO THIS BEFORE CALLING THE FUNCTION for restart
-    if hasattr(EVCont_obj, 'load') and os.path.isfile(CONT_OBJ_FILENAME):
-        try:
-            print(f"Recovering continuation object from {CONT_OBJ_FILENAME}")
-            EVCont_obj_new = EVCont_obj.load(CONT_OBJ_FILENAME)
-            # Only update if load returns a new object
-            if EVCont_obj_new is not None:
-                EVCont_obj = EVCont_obj_new
-        except Exception as e:
-            print(f"Warning: Could not load continuation object: {e}")
-    """
     # Current iteration of the convergence
     if len(existing_ind) > 0:
         nit = max(existing_ind) + 1
@@ -423,15 +418,16 @@ def converge_NAMD_traj(
     ###########################################################################
     # Setup and run NAMD trajectory
     inp_par = [steps, dt, nstat, nstatdyn, iseed]
-    run_trajectory(nit, inp_par, run_command)
+    run_trajectory(nit, inp_par, run_command, 
+                   init_mol=init_mol, 
+                   trn_geometries=trn_geometries,
+                   compute_hamdist_during_traj=compute_hamdist_during_traj)
     
     # Read output of current and previous trajectory
     out_n = read_NX('TRAJ_%i'%nit)
     trajectory = out_n[-1]
-
+    ########################################################################### 
     # Check convergence
-    # Write en_diff (or other convergence) to file
-    # TODO 
     converged = False
     
     # Only check convergence after 0th iteration
@@ -487,15 +483,35 @@ def converge_NAMD_traj(
         return 1
     
     else:
-    
         ######################################################################
         ##### SELECTION OF NEW TRAINING GEOMETRY
         ######################################################################
+        hamdist_file = f'ham_dist_{nit}.txt'
         
-        # Compute hamiltonian distance to training set
-        hamiltonian_distance_all = hamiltonian_similarity(init_mol, trajectory, trn_geometries)
-        np.savetxt('ham_dist_{}.txt'.format(nit),hamiltonian_distance_all)
+        # Check if distances were already computed during trajectory
+        if os.path.isfile(hamdist_file):
+            print(f"Loading Hamiltonian distances computed during trajectory from {hamdist_file}")
+            hamiltonian_distance_all = np.loadtxt(hamdist_file)
         
+        # Compute via HPC job submission
+        elif compute_hamdist_as_HPC_job and append_as_HPC_job:
+            hamiltonian_distance_all = run_hamdist_job(
+                nit,
+                init_mol,
+                run_hamdist_command
+            )
+
+        # Compute locally after trajectory completes
+        else:
+            if compute_hamdist_as_HPC_job and not append_as_HPC_job:
+                print("Warning: When compute_hamdist_as_HPC_job is True, append_as_HPC_job must also be True. Continuing to local hamdist computation.")
+            # Compute locally
+            hamiltonian_distance_all = hamiltonian_similarity(init_mol, trajectory, trn_geometries)
+            np.savetxt(hamdist_file, hamiltonian_distance_all)
+
+        ######################################################################
+        ##### SELECTION OF NEW TRAINING GEOMETRY
+        ######################################################################
         addgeom_ind = select_active_learning_geometry(hamiltonian_distance_all, data_addition, en_diff, convergence_thresh)    
             
         ######################################################################
@@ -579,6 +595,9 @@ def converge_NAMD_traj(
             append_as_HPC_job=append_as_HPC_job,
             run_command=run_command,
             run_append_command=run_append_command,
+            compute_hamdist_during_traj=compute_hamdist_during_traj,
+            compute_hamdist_as_HPC_job=compute_hamdist_as_HPC_job,
+            run_hamdist_command=run_hamdist_command,
             solver=solver
         )
         
@@ -617,9 +636,68 @@ def run_append_states(mol, cont_obj_path, newcont_obj_path, solver, run_append_c
 
     return cont_obj
 
-def run_trajectory(traj_ind, inp_par, run_command):
+def run_hamdist_job(nit, init_mol, run_hamdist_command):
+    """Submit a job to compute Hamiltonian distances for a trajectory.
+
+    Uses the geometry file already created for append_to_rdms and the
+    trajectory file TRAJ_<nit>/TEMP/traj_geom.npy that's already written.
+    Submits job via run_hamdist_command (expects command like 'qsub compute_hamdist.sh').
+    Polls for ham_dist_<nit>.txt file and returns loaded distances array.
+    
+    Arguments passed to the script:
+      geom_file basis trajectory_npy trn_geometries_npy output_file [cache_prefix]
     """
-    Run a Newton-X calculation with sample input files from the 'sample' directory
+
+    # Any geometry file to initialize the molecule - this file must exist at this stage
+    geom_file = 'iterative-models/geom_0.xyz'    
+    
+    # Trajectory file already exists in TRAJ_<nit>/TEMP/traj_geom.npy
+    traj_fname = f'TRAJ_{nit}/TEMP/traj_geom.npy'
+    if not os.path.isfile(traj_fname):
+        print(f"Error: Trajectory file {traj_fname} not found")
+        sys.exit(1)
+
+    # Training geometries and hamdist output file
+    trn_fname = 'trn_geometries.npy'
+    hamdist_outfile = f'ham_dist_{nit}.txt'
+
+    # Build command with positional arguments (compatible with HPC script like append_states.sh)
+    # Format: geom_file basis trajectory_npy trn_geometries_npy output_file [cache_prefix]
+    basis = init_mol.basis
+    cache_prefix = 'training_integrals'
+    
+    cmd = f"{run_hamdist_command} {geom_file} {basis} {traj_fname} {trn_fname} {hamdist_outfile} {cache_prefix}"
+    
+    print(f"Submitting Hamiltonian distance job: {cmd}")
+    os.system(cmd)
+
+    # Poll for output file
+    poll_seconds = 20
+    print(f"Waiting for Hamiltonian distance output file: {hamdist_outfile}")
+    while not os.path.isfile(hamdist_outfile):
+        os.system(f'sleep {poll_seconds}')
+
+    try:
+        distances = np.loadtxt(hamdist_outfile)
+        print(f"Loaded Hamiltonian distances from {hamdist_outfile}")
+    except Exception as e:
+        print(f"Error reading Hamiltonian distance output {hamdist_outfile}: {e}")
+        sys.exit(1)
+    return distances
+
+def run_trajectory(traj_ind, inp_par, run_command, init_mol=None, trn_geometries=None, compute_hamdist_during_traj=False):
+    """
+    Run a Newton-X calculation with sample input files from the 'sample' directory.
+    
+    Optionally compute Hamiltonian distances on-the-fly during the trajectory.
+    
+    Args:
+        traj_ind (int): Trajectory index
+        inp_par (list): Input parameters [steps, dt, nstat, nstatdyn, iseed]
+        run_command (str): Command to run NX
+        init_mol (Mole, optional): Initial molecule object for hamdist computation
+        trn_geometries (ndarray, optional): Training geometries for hamdist computation
+        compute_hamdist_during_traj (bool): Whether to compute hamdist during trajectory
     """
     # Copy sample files into a separate directory - named TRAJ_ind
     new_path = 'TRAJ_%i'%traj_ind
@@ -635,6 +713,13 @@ def run_trajectory(traj_ind, inp_par, run_command):
     cwd = os.getcwd()
     os.chdir(new_path)
     
+    # Check if the calculation has already finished
+    status = check_status()
+    if status == 'Success':
+        print(f"Trajectory {traj_ind} has already finished. Skipping run.")
+        os.chdir(cwd)
+        return
+    
     # Setup input files
     # TODO - for now, they remain the same as sample
     
@@ -643,6 +728,15 @@ def run_trajectory(traj_ind, inp_par, run_command):
     os.system('sleep 100')
     
     # Wait until calculation finishes or crashes
+    # Optionally compute Hamiltonian distances during the trajectory
+    hamdist_outfile = None
+    prev_traj_length = 0
+    hamiltonian_distances = []
+    
+    if compute_hamdist_during_traj and init_mol is not None and trn_geometries is not None:
+        hamdist_outfile = os.path.join(cwd, f'ham_dist_{traj_ind}.txt')
+        print(f"Will compute Hamiltonian distances on-the-fly and save to {hamdist_outfile}")
+    
     while True:
         os.system('sleep 100')
 
@@ -654,10 +748,55 @@ def run_trajectory(traj_ind, inp_par, run_command):
         elif status == 'Success':
             break
         
-        # TODO - check ham distance, and if a peak is found; kill the job,
-        # add the geometry, and force it to the next iteration
-        # Need to check if a shorter initial trajectories would cause consistency
-        # issues
+        # Compute Hamiltonian distances for new trajectory points
+        if compute_hamdist_during_traj and status == 'Running':
+            traj_file = 'TEMP/traj_geom.npy'
+            if os.path.isfile(traj_file):
+                try:
+                    current_traj = np.load(traj_file)
+                    current_length = len(current_traj)
+                    
+                    # Only compute if new geometries have been added
+                    if current_length > prev_traj_length:
+                        print(f"Computing Hamiltonian distances for new geometries (total: {current_length})...")
+                        
+                        # Compute distances for new geometries only
+                        new_geoms = current_traj[prev_traj_length:current_length]
+                        new_distances = hamiltonian_similarity(init_mol, new_geoms, trn_geometries)
+                        hamiltonian_distances.extend(new_distances.tolist())
+                        
+                        # Save updated distances to file
+                        np.savetxt(hamdist_outfile, np.array(hamiltonian_distances))
+                        print(f"  Computed distances for geometries {prev_traj_length} to {current_length-1}")
+                        
+                        prev_traj_length = current_length
+                        
+                except Exception as e:
+                    print(f"Warning: Could not compute Hamiltonian distances during trajectory: {e}")
+
+        # TODO: Add an early exit condition for an early peak detection and killing the trajectory 
+        # e.g. if a peak in hamdist is detected, and that peak is higher than previous hamdist peaks
+        # Need to add a function to kill the NX job; copy bits of addgeom_ind from convergence loop; etc.
+        # Need to iteratively check for convergence as well since if max(en_diff) < convergence_thresh early on,
+        # the trajectory needs to continue.
+            
+    # Final computation if any geometries were missed
+    if compute_hamdist_during_traj and hamdist_outfile is not None:
+        traj_file = 'TEMP/traj_geom.npy'
+        if os.path.isfile(traj_file):
+            try:
+                final_traj = np.load(traj_file)
+                final_length = len(final_traj)
+                
+                if final_length > prev_traj_length:
+                    print(f"Computing final Hamiltonian distances (total: {final_length})...")
+                    new_geoms = final_traj[prev_traj_length:final_length]
+                    new_distances = hamiltonian_similarity(init_mol, new_geoms, trn_geometries)
+                    hamiltonian_distances.extend(new_distances.tolist())
+                    np.savetxt(hamdist_outfile, np.array(hamiltonian_distances))
+                    print(f"  Final distances computed for geometries {prev_traj_length} to {final_length-1}")
+            except Exception as e:
+                print(f"Warning: Could not compute final Hamiltonian distances: {e}")
             
     # Return to original directory for next iteration
     os.chdir(cwd)
