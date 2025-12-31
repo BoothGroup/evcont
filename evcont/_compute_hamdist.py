@@ -140,15 +140,22 @@ def compute_training_integrals(init_mol, trn_geometries, cache_prefix, force):
 
 
 def compute_distances(init_mol, trajectory, h1_trn, h2_trn):
-    """Compute minimum Hamiltonian distance for each trajectory geometry."""
+    """Compute minimum Hamiltonian distance and argmin training index for each trajectory geometry.
+
+    Returns:
+        distances (ndarray): min distance per traj geometry
+        argmins (ndarray[int]): index of closest training geometry per traj geometry
+    """
     distances = []
+    argmins = []
     print(f"Computing Hamiltonian distances for {len(trajectory)} trajectory geometries...")
     for geom in trajectory:
         mol = init_mol.copy().set_geom_(geom)
         h1, h2 = get_integrals(mol, get_basis(mol))
         d_all = hamiltonian_distance(h1, h2, h1_trn, h2_trn)
         distances.append(np.min(d_all))
-    return np.array(distances)
+        argmins.append(int(np.argmin(d_all)))
+    return np.array(distances), np.array(argmins, dtype=int)
 
 
 def main():
@@ -180,10 +187,19 @@ def main():
         trn_geometries = np.load(trn_geometries_npy)
 
         h1_trn, h2_trn = compute_training_integrals(init_mol, trn_geometries, cache_prefix, force_recompute)
-        distances = compute_distances(init_mol, trajectory, h1_trn, h2_trn)
+        distances, argmins = compute_distances(init_mol, trajectory, h1_trn, h2_trn)
 
+        # Write distances
         np.savetxt(output_file, distances)
         print(f"Hamiltonian distances written to {output_file}")
+
+        # Also write argmin indices to a sibling file for downstream use
+        argmin_file = output_file.replace('ham_dist', 'ham_argmin')
+        try:
+            np.savetxt(argmin_file, argmins, fmt='%d')
+            print(f"Closest training indices written to {argmin_file}")
+        except Exception as e:
+            print(f"Warning: could not write argmin indices to {argmin_file}: {e}")
         print("DONE")
         return 0
     except Exception as e:

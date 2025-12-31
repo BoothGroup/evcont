@@ -123,7 +123,7 @@ def read_NX(path,pos='TEMP'):
     
     return natm, nstat, en, [randi, substep, step, tprob], [tim, pes], populations, pos_all
 
-def write_model(overlap, one_rdm, two_rdm=None, vecs_lowrank=None, diagonal_lr=None):
+def write_model(overlap, one_rdm, two_rdm=None, vecs_lowrank=None, diagonal_lr=None, model_path=None):
     """
     Write the intermediate data that will be used for predictions, namely:
         - Overlap of training wavefunctions, S
@@ -139,23 +139,27 @@ def write_model(overlap, one_rdm, two_rdm=None, vecs_lowrank=None, diagonal_lr=N
         diagonal_lr (ndarray, optional): Diagonal components if using low-rank
     """
     import pickle
-    
-    path = 'sample/JOB_NAD'
-    
-    np.save(os.path.join(path,'overlap_final.npy'),overlap)
-    np.save(os.path.join(path,'one_rdm_final.npy'),one_rdm)
-    
+
+    # Allow caller to specify a custom model path; fall back to original location if not provided
+    if model_path is None:
+        model_path = 'sample/JOB_NAD'
+
+    os.makedirs(model_path, exist_ok=True)
+
+    np.save(os.path.join(model_path,'overlap_final.npy'),overlap)
+    np.save(os.path.join(model_path,'one_rdm_final.npy'),one_rdm)
+
     if two_rdm is not None:
         # Full 2-RDM case
-        np.save(os.path.join(path,'two_rdm_final.npy'),two_rdm)
-    
+        np.save(os.path.join(model_path,'two_rdm_final.npy'),two_rdm)
+
     if vecs_lowrank is not None:
         # Low-rank case - save as pickle
-        with open(os.path.join(path,'lowrank_vecs.pkl'), 'wb') as f:
+        with open(os.path.join(model_path,'lowrank_vecs.pkl'), 'wb') as f:
             pickle.dump(vecs_lowrank, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
+
     if diagonal_lr is not None:
-        np.save(os.path.join(path,'diagonal_lr.npy'), diagonal_lr)
+        np.save(os.path.join(model_path,'diagonal_lr.npy'), diagonal_lr)
     
 def read_model(path):
     """
@@ -402,18 +406,46 @@ def converge_NAMD_traj(
         # Read initial training geometries
         trn_geometries = np.load('trn_geometries.npy')
 
-    # Save to sample/JOB_NAD directory
+    # Write model to iteration-specific directory and point evcont.in to it
+    model_dir = os.path.join('iterative-models', f'model_{nit}')  # user-requested path pattern
+    abs_model_dir = os.path.abspath(model_dir)
+    os.makedirs(model_dir, exist_ok=True)
+
+    # Update sample/JOB_NAD/evcont.in to reference this model directory via trdm_path
+    evcont_in_path = os.path.join('sample', 'JOB_NAD', 'evcont.in')
+    try:
+        if os.path.isfile(evcont_in_path):
+            with open(evcont_in_path, 'r') as f:
+                lines = f.readlines()
+            found = False
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith('trdm_path') or stripped.startswith('#trdm_path'):
+                    lines[i] = f'trdm_path = {abs_model_dir}\n'
+                    found = True
+            if not found:
+                # Prepend if no existing trdm_path directive
+                lines.insert(0, f'trdm_path = {abs_model_dir}\n')
+            with open(evcont_in_path, 'w') as f:
+                f.writelines(lines)
+        else:
+            print(f"Warning: evcont.in not found at {evcont_in_path}; cannot set trdm_path.")
+    except Exception as e:
+        print(f"Warning: could not modify evcont.in to set trdm_path: {e}")
+
     if EVCont_obj.lowrank:
         EVCont_obj.vectorize_lowrank()
         write_model(EVCont_obj.overlap,
                     EVCont_obj.one_rdm,
                     two_rdm=None,
                     vecs_lowrank=EVCont_obj.lowrank_vectorized,
-                    diagonal_lr=EVCont_obj.diagonal_vectorized)
+                    diagonal_lr=EVCont_obj.diagonal_vectorized,
+                    model_path=model_dir)
     else:
         write_model(EVCont_obj.overlap,
                     EVCont_obj.one_rdm,
-                    two_rdm=EVCont_obj.two_rdm)
+                    two_rdm=EVCont_obj.two_rdm,
+                    model_path=model_dir)
 
     ###########################################################################
     # Setup and run NAMD trajectory
@@ -424,7 +456,7 @@ def converge_NAMD_traj(
                    compute_hamdist_during_traj=compute_hamdist_during_traj)
     
     # Read output of current and previous trajectory
-    out_n = read_NX('TRAJ_%i'%nit)
+    out_n = read_NX('TRAJ_%i'%nit,pos='dyn')
     trajectory = out_n[-1]
     ########################################################################### 
     # Check convergence
@@ -495,19 +527,25 @@ def converge_NAMD_traj(
         
         # Compute via HPC job submission
         elif compute_hamdist_as_HPC_job and append_as_HPC_job:
+            # Use in-memory trajectory instead of relying on TEMP/traj_geom.npy
             hamiltonian_distance_all = run_hamdist_job(
                 nit,
                 init_mol,
-                run_hamdist_command
+                run_hamdist_command,
+                trajectory
             )
 
         # Compute locally after trajectory completes
         else:
             if compute_hamdist_as_HPC_job and not append_as_HPC_job:
                 print("Warning: When compute_hamdist_as_HPC_job is True, append_as_HPC_job must also be True. Continuing to local hamdist computation.")
-            # Compute locally
-            hamiltonian_distance_all = hamiltonian_similarity(init_mol, trajectory, trn_geometries)
+            # Compute locally (also produce argmin indices for reuse)
+            hamiltonian_distance_all, argmins_all = hamiltonian_similarity_argmin(init_mol, trajectory, trn_geometries)
             np.savetxt(hamdist_file, hamiltonian_distance_all)
+            try:
+                np.savetxt(f"ham_argmin_{nit}.txt", argmins_all, fmt='%d')
+            except Exception as e:
+                print(f"Warning: could not write argmin indices ham_argmin_{nit}.txt: {e}")
 
         ######################################################################
         ##### SELECTION OF NEW TRAINING GEOMETRY
@@ -528,33 +566,35 @@ def converge_NAMD_traj(
         ### Add to continuation
         if reconverge_from_closest_hdist:
             if hasattr(EVCont_obj, 'software') and EVCont_obj.software == 'quantel':
-                # Integrals of the new_geom
-                oei_new, tei_new = get_integrals(mol_new, get_basis(mol_new))
+                # Prefer using precomputed closest training indices to avoid recomputation
+                argmin_file = f"ham_argmin_{nit}.txt"
+                if os.path.isfile(argmin_file):
+                    argmins_all = np.loadtxt(argmin_file, dtype=int)
+                    closest_ind = int(argmins_all[addgeom_ind])+1
+                    closest_geom_tag = f'geom{closest_ind}'
+                else:
+                    # No argmin file; fallback to original integral-based computation
+                    oei_new, tei_new = get_integrals(mol_new, get_basis(mol_new))
+                    files = glob.glob(os.path.join(EVCont_obj.quantel_path, 'geom*'))
+                    oei_trn = []
+                    tei_trn = []
+                    for f in files:
+                        ind = int(f.split('geom')[-1])
+                        oei_trn.append(np.loadtxt(os.path.join(f,'oei.dat')))
+                        tei_trn.append(np.load(os.path.join(f,'tei.npy')))
+                    hamiltonian_distance_to_new = hamiltonian_distance(
+                        oei_new,
+                        tei_new,
+                        np.array(oei_trn),
+                        np.array(tei_trn)
+                    )
+                    closest_ind = np.argmin(hamiltonian_distance_to_new)
+                    closest_geom_tag = f'geom{files[closest_ind].split("geom")[-1]}'
 
-                # Read in integrals from training geometries to prevent recomputation
-                files = glob.glob(os.path.join(EVCont_obj.quantel_path, 'geom*'))
-                oei_trn = []
-                tei_trn = []
-                for f in files:
-                    ind = int(f.split('geom')[-1])
-                    oei_trn.append(np.loadtxt(os.path.join(f,'oei.dat')))
-                    tei_trn.append(np.load(os.path.join(f,'tei.npy')))
-
-                # Find the training geometry closest in ham distance to the new geometry
-                hamiltonian_distance_to_new = hamiltonian_distance(
-                    oei_new,
-                    tei_new,
-                    np.array(oei_trn),
-                    np.array(tei_trn)
-                )
-                closest_ind = np.argmin(hamiltonian_distance_to_new)
-                closest_geom_tag = f'geom{files[closest_ind].split("geom")[-1]}'
-                
                 print('Re-converging from geometry closest in ham distance to the new geometry ({})'.format(closest_geom_tag))
                 if append_as_HPC_job and OBJECT_CAN_BE_SAVED:
                     NEW_OBJ_FILENAME = f'iterative-models/continuation_object-{nit+1}.pkl'
                     EVCont_obj = run_append_states(mol_new, CONT_OBJ_FILENAME, NEW_OBJ_FILENAME, solver, run_append_command, quantel_tag=closest_geom_tag)
-
                 else:
                     EVCont_obj.append_to_rdms(mol_new, quantel_tag=closest_geom_tag)
 
@@ -636,46 +676,69 @@ def run_append_states(mol, cont_obj_path, newcont_obj_path, solver, run_append_c
 
     return cont_obj
 
-def run_hamdist_job(nit, init_mol, run_hamdist_command):
+def run_hamdist_job(nit, init_mol, run_hamdist_command, trajectory):
     """Submit a job to compute Hamiltonian distances for a trajectory.
 
-    Uses the geometry file already created for append_to_rdms and the
-    trajectory file TRAJ_<nit>/TEMP/traj_geom.npy that's already written.
-    Submits job via run_hamdist_command (expects command like 'qsub compute_hamdist.sh').
-    Polls for ham_dist_<nit>.txt file and returns loaded distances array.
-    
-    Arguments passed to the script:
-      geom_file basis trajectory_npy trn_geometries_npy output_file [cache_prefix]
+    Instead of relying on an existing TEMP/traj_geom.npy file, this function
+    receives the in-memory `trajectory` array, writes it to
+    TRAJ_<nit>/traj_geom.npy, and passes that path to the job script.
+
+    Arguments passed to the external script (compute_hamdist.sh):
+        geom_file basis trajectory_npy trn_geometries_npy output_file [cache_prefix]
+
+    Parameters:
+        nit (int): iteration / trajectory index
+        init_mol: Mole object (used for basis retrieval)
+        run_hamdist_command (str): submission command (e.g. 'qsub compute_hamdist.sh')
+        trajectory (ndarray): geometries from the just-completed NX trajectory
+    Returns:
+        distances (ndarray): Hamiltonian distances (loaded from ham_dist_<nit>.txt)
     """
 
-    # Any geometry file to initialize the molecule - this file must exist at this stage
-    geom_file = 'iterative-models/geom_0.xyz'    
-    
-    # Trajectory file already exists in TRAJ_<nit>/TEMP/traj_geom.npy
-    traj_fname = f'TRAJ_{nit}/TEMP/traj_geom.npy'
-    if not os.path.isfile(traj_fname):
-        print(f"Error: Trajectory file {traj_fname} not found")
+    # Any geometry file to initialize the molecule - should already exist
+    geom_file = 'iterative-models/geom_0.xyz'
+
+    # Write provided trajectory to a new file at top-level of TRAJ_<nit>
+    traj_dir = f'TRAJ_{nit}'
+    if not os.path.isdir(traj_dir):
+        print(f"Error: trajectory directory {traj_dir} not found")
+        sys.exit(1)
+    traj_fname = os.path.join(traj_dir, 'traj_geom.npy')
+    try:
+        np.save(traj_fname, trajectory)
+    except Exception as e:
+        print(f"Error writing trajectory to {traj_fname}: {e}")
         sys.exit(1)
 
     # Training geometries and hamdist output file
     trn_fname = 'trn_geometries.npy'
     hamdist_outfile = f'ham_dist_{nit}.txt'
 
-    # Build command with positional arguments (compatible with HPC script like append_states.sh)
-    # Format: geom_file basis trajectory_npy trn_geometries_npy output_file [cache_prefix]
     basis = init_mol.basis
     cache_prefix = 'training_integrals'
-    
+
+    # Build command with positional arguments (compatible with HPC script)
     cmd = f"{run_hamdist_command} {geom_file} {basis} {traj_fname} {trn_fname} {hamdist_outfile} {cache_prefix}"
-    
+
     print(f"Submitting Hamiltonian distance job: {cmd}")
     os.system(cmd)
 
-    # Poll for output file
+    # Poll for output files
     poll_seconds = 20
     print(f"Waiting for Hamiltonian distance output file: {hamdist_outfile}")
     while not os.path.isfile(hamdist_outfile):
         os.system(f'sleep {poll_seconds}')
+
+    # Also wait (with a timeout) for the argmin file written by the job script
+    argmin_outfile = f'ham_argmin_{nit}.txt'
+    print(f"Waiting for closest training indices file: {argmin_outfile}")
+    max_polls = 30  # ~10 minutes
+    polls = 0
+    while not os.path.isfile(argmin_outfile) and polls < max_polls:
+        os.system(f'sleep {poll_seconds}')
+        polls += 1
+    if not os.path.isfile(argmin_outfile):
+        print(f"Warning: {argmin_outfile} not detected after waiting. Will proceed without it and fall back later if needed.")
 
     try:
         distances = np.loadtxt(hamdist_outfile)
@@ -824,7 +887,7 @@ def check_status():
     else:
         return 'Running'
     
-def select_active_learning_geometry(hamiltonian_distance_all, data_addition, en_diff, convergence_thresh):
+def select_active_learning_geometry(hamiltonian_distance_all, data_addition, en_diff=None, convergence_thresh=None, exponent=0.5):
     """
     Select which geometry to add to the training set based on the hamiltonian 
     distance metric and specified data addition method.
@@ -882,7 +945,7 @@ def select_active_learning_geometry(hamiltonian_distance_all, data_addition, en_
         # Exponent of the time penalty function 
         # (0 - chooses max, -->inf chooses 1st peak)
         if data_addition == "weighted_highest_peak_ham":
-            exponent = 3.
+            exponent = exponent
         else:
             # Variable exponent based on current convergence (still experimental)
             scaling = 0.01
@@ -981,6 +1044,48 @@ def hamiltonian_similarity(init_mol, trajectory, trn_geometries):
         min_dist_l += [min_dist]
         
     return np.array(min_dist_l)
+
+def hamiltonian_similarity_argmin(init_mol, trajectory, trn_geometries):
+    """
+    Compute the minimum Hamiltonian distance and the argmin training index
+    of a trajectory to a set of training geometries.
+
+    Returns:
+        min_distances (ndarray)
+        argmins (ndarray[int])
+    """
+    # Initialize hamiltonians of the training set
+    h1_trn = np.zeros((len(trn_geometries), init_mol.nao, init_mol.nao))
+    h2_trn = np.zeros(
+        (
+            len(trn_geometries),
+            init_mol.nao,
+            init_mol.nao,
+            init_mol.nao,
+            init_mol.nao,
+        )
+    )
+
+    # Compute 1- and 2-electron integrals for all training geometries
+    for j, trn_geom in enumerate(trn_geometries):
+        mol = init_mol.copy().set_geom_(trn_geom)
+        h1, h2 = get_integrals(mol, get_basis(mol))
+        h1_trn[j] = h1
+        h2_trn[j] = h2
+
+    # Compute min Hamiltonian distance and argmin training index
+    min_dist_l = []
+    argmin_l = []
+    for j, geometry in enumerate(trajectory):
+        mol = init_mol.copy().set_geom_(geometry)
+        h1, h2 = get_integrals(mol, get_basis(mol))
+
+        distance = hamiltonian_distance(h1, h2, h1_trn, h2_trn)
+        min_dist = np.min(distance)
+        min_dist_l.append(min_dist)
+        argmin_l.append(int(np.argmin(distance)))
+        
+    return np.array(min_dist_l), np.array(argmin_l, dtype=int)
 
 
 if __name__ == '__main__':
