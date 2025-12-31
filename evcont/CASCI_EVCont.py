@@ -1171,16 +1171,6 @@ class CAS_EVCont_obj:
                 )
                 if one_rdm is not None:
                     one_rdm_new[:-1, :-1, :, :] = one_rdm
-                two_rdm_new = np.zeros(
-                    (
-                        n_cascis,
-                        n_cascis,
-                        mo_coeff_bra.shape[0],
-                        mo_coeff_bra.shape[0],
-                        mo_coeff_bra.shape[0],
-                        mo_coeff_bra.shape[0],
-                    )
-                )
                 
                 # Only define two_rdm if not lowrank
                 if not lowrank:
@@ -2178,39 +2168,83 @@ class CAS_EVCont_obj:
 
     def prune_datapoints(self, keep_ids):
         """
-        Prunes training points from the continuation object based on the given keep_ids.
+        Prune training points (states/geometries) from the continuation object.
 
-        Args:
-            keep_ids (list): List of indices to keep.
+        This adapts to the newer storage model where individual state data are
+        held in parallel lists (mo_coeffs, cis, trafos, mols) and low-rank data
+        are stored in dictionaries keyed by (i,j) pairs.
 
-        Returns:
-            None
+        Parameters
+        ----------
+        keep_ids : sequence[int] or sequence[bool]
+            Indices to keep (integer list) or a boolean mask of length n_states.
+            Order is preserved as given.
         """
+        # Normalize keep_ids: allow boolean mask
+        import numpy as _np
+        if isinstance(keep_ids, (list, tuple)) and len(keep_ids) > 0 and isinstance(keep_ids[0], (bool, _np.bool_)):
+            keep_ids = [i for i, flag in enumerate(keep_ids) if flag]
+        else:
+            keep_ids = list(keep_ids)
+
+        if len(keep_ids) == 0:
+            raise ValueError("prune_datapoints: keep_ids is empty; refusing to drop all datapoints.")
+
+        # Ensure indices are within range
+        n_states = len(self.mo_coeffs)
+        if any((i < 0 or i >= n_states) for i in keep_ids):
+            raise IndexError("prune_datapoints: keep_ids contains out-of-range indices.")
+
+        # Deduplicate while preserving order
+        seen = set(); ordered_keep = []
+        for i in keep_ids:
+            if i not in seen:
+                ordered_keep.append(i); seen.add(i)
+        keep_ids = ordered_keep
+
+        # Core square matrices/tensors
         if self.overlap is not None:
-            self.overlap = self.overlap[np.ix_(keep_ids, keep_ids)]
+            self.overlap = self.overlap[_np.ix_(keep_ids, keep_ids)]
         if self.one_rdm is not None:
-            self.one_rdm = self.one_rdm[np.ix_(keep_ids, keep_ids)]
+            # shape (n,n,nao,nao)
+            self.one_rdm = self.one_rdm[_np.ix_(keep_ids, keep_ids)]
         if self.two_rdm is not None:
-            self.two_rdm = self.two_rdm[np.ix_(keep_ids, keep_ids)]
-        
-        # OBSOLETE
-        #self.cascis = [self.cascis[i] for i in keep_ids]
+            self.two_rdm = self.two_rdm[_np.ix_(keep_ids, keep_ids)]
+        if self.lowrank and self.diagonal_lr is not None:
+            self.diagonal_lr = self.diagonal_lr[_np.ix_(keep_ids, keep_ids)]
 
+        # Parallel lists of per-state data
         self.mo_coeffs = [self.mo_coeffs[i] for i in keep_ids]
-        self.cis = [self.cis[i] for i in keep_ids]
-        self.trafos = [self.trafos[i] for i in keep_ids]
-        # Need to sort how the molecules are stored
-        #self.mols = [self.mols[i] for i in keep_ids]
+        self.cis       = [self.cis[i] for i in keep_ids]
+        self.trafos    = [self.trafos[i] for i in keep_ids]
+        if hasattr(self, 'mols') and self.mols is not None and len(self.mols) == n_states:
+            self.mols = [self.mols[i] for i in keep_ids]
 
-        if self.lowrank:
-            if self.diagonal_lr is not None:
-                self.diagonal_lr = self.diagonal_lr[np.ix_(keep_ids, keep_ids)]
-            if self.vecs_lowrank is not None:
-                vecs_lowrank_new = {}
-                for ind, i in enumerate(keep_ids):
-                    for indj, j in enumerate(keep_ids):
-                        vecs_lowrank_new[(ind, indj)] = self.vecs_lowrank[(i, j)]
-                self.vecs_lowrank = vecs_lowrank_new
+        # Precompute-related arrays (if present)
+        # inv_OAO_all, occ_strings_all, mb_all, orbitals_all created in precompute_for_otf
+        if getattr(self, 'precompute', False):
+            if hasattr(self, 'inv_OAO_all') and len(self.inv_OAO_all) == n_states:
+                self.inv_OAO_all = [self.inv_OAO_all[i] for i in keep_ids]
+            if hasattr(self, 'occ_strings_all') and len(self.occ_strings_all) == n_states:
+                self.occ_strings_all = [self.occ_strings_all[i] for i in keep_ids]
+            if hasattr(self, 'mb_all') and len(self.mb_all) == n_states:
+                self.mb_all = [self.mb_all[i] for i in keep_ids]
+            if hasattr(self, 'orbitals_all') and len(self.orbitals_all) == n_states:
+                self.orbitals_all = [self.orbitals_all[i] for i in keep_ids]
+
+        # Low-rank dictionary remapping
+        if self.lowrank and self.vecs_lowrank is not None:
+            vecs_lowrank_new = {}
+            for new_i, old_i in enumerate(keep_ids):
+                for new_j, old_j in enumerate(keep_ids):
+                    key_old = (old_i, old_j)
+                    if key_old in self.vecs_lowrank:
+                        vecs_lowrank_new[(new_i, new_j)] = self.vecs_lowrank[key_old]
+            self.vecs_lowrank = vecs_lowrank_new
+
+        # Sanity: update counts if stored elsewhere
+        # (No explicit n_states attribute; len(self.mo_coeffs) is authoritative.)
+        return
 
     def save(self, filename):
         """

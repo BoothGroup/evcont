@@ -125,7 +125,7 @@ def get_integrals(mol, basis):
 
     Parameters:
         mol (pyscf.gto.Mole): The molecule object.
-        basis (numpy.ndarray): The basis set.
+        basis (numpy.ndarray): The basis set (AO->MO transformation coefficients).
 
     Returns:
         h1 (numpy.ndarray): The one-electron integrals.
