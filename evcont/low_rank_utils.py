@@ -27,7 +27,7 @@ assumed to be real-valued. Can be changed in the future if necessary.
 import multiprocessing as mp
 mp.set_start_method("fork", force=True)
 
-from multiprocessing import Process, Pipe, cpu_count
+from multiprocessing import Process, Pipe
 
 import numpy as np
 import sys
@@ -96,7 +96,10 @@ from joblib import Parallel, delayed
 from pyscf import lib
 
 @timeit
-def parallel_get_jk(dm_array, jk_func, n_jobs=None, chunk_size=None, parallel=False, **jk_kwargs):
+def parallel_get_jk(dm_array, jk_func, parallel=True,
+                    n_jobs=None, chunk_size=None, threads_per_worker_target=None,
+                    backend='threading', prefer=None,
+                    verbose=False, temp_folder=None, max_nbytes='5000M', **jk_kwargs):
     """
     Parallelized wrapper for PySCF get_jk-like functions with automatic core detection.
 
@@ -125,25 +128,123 @@ def parallel_get_jk(dm_array, jk_func, n_jobs=None, chunk_size=None, parallel=Fa
     n_dm = dm_array.shape[0]
 
     # Auto-detect cores if not provided
-    if n_jobs is None and parallel:
-        n_jobs = cpu_count()
-        #n_jobs = int(os.environ.get('OMP_NUM_THREADS'))
-        #print(n_jobs, 'processes')
-            
-    if not parallel or n_jobs < 2:
+    if not parallel:
         return jk_func(dm=dm_array, **jk_kwargs)
     
     else:
-        # Determine chunking
+        # Get actual available cores from job allocation or CPU count
+        # First try SGE job slots, then multiprocessing.cpu_count()
+        env_nslots = os.environ.get('NSLOTS')
+        if env_nslots:
+            ncore = int(env_nslots)
+        else:
+            import multiprocessing
+            ncore = multiprocessing.cpu_count()
+
+        # 
+        if n_dm <= 2:
+            return jk_func(dm=dm_array, **jk_kwargs)
+
+        # Determine chunking and workers
+        if threads_per_worker_target is None:
+            threads_per_worker_target = lib.num_threads()
         if chunk_size is None:
-            chunk_size = max(n_dm // n_jobs, 1)
+            est_workers = max(ncore // threads_per_worker_target, 1)
+            chunk_size = max(n_dm // est_workers, 1)
+
+        dm_chunks = [dm_array[i:i+chunk_size] for i in range(0, n_dm, chunk_size)]
+
+        if n_jobs is None:
+            n_jobs = max(ncore // threads_per_worker_target, 1)
+
+        n_jobs = max(1, min(n_jobs, len(dm_chunks)))
+        threads_per_worker = max(ncore // n_jobs, 1)
+
+        if verbose:
+            print('nthreads, nworkers, chunk_size', ncore, n_jobs, chunk_size)
+
+        try:
+            # For threading backend, just set PySCF's thread count
+            # MKL/OpenBLAS will auto-negotiate via joblib's thread pool
+            #if backend == 'threading':
+            #    lib.num_threads(threads_per_worker)
+
+            def _compute_chunk(dm_chunk):
+                # For process-based backends, set per-worker inside spawned process
+                #if backend != 'threading':
+                #    lib.num_threads(threads_per_worker)
+                return jk_func(dm=dm_chunk, **jk_kwargs)
+
+            results = Parallel(n_jobs=n_jobs, backend=backend, prefer=prefer,
+                               temp_folder=temp_folder, max_nbytes=max_nbytes)(
+                delayed(_compute_chunk)(chunk) for chunk in dm_chunks
+            )
+
+            vj_list = [r[0] for r in results if r[0] is not None]
+            vk_list = [r[1] for r in results if r[1] is not None]
+
+            vj_combined = np.concatenate(vj_list, axis=0) if vj_list else None
+            vk_combined = np.concatenate(vk_list, axis=0) if vk_list else None
+
+        finally:
+            # Restore original thread count
+            #lib.num_threads(original_threads)
+            pass
+
+        return vj_combined, vk_combined
+
+@timeit
+def parallel_get_jk2(dm_array, jk_func, chunk_size=None, parallel=True, **jk_kwargs):
+    """
+    Parallelized wrapper for PySCF get_jk-like functions with automatic core detection.
+
+    Parameters
+    ----------
+    dm_array : np.ndarray
+        Stacked density matrices (or low-rank vectors in our case), shape (n_dm, n_orb, n_orb)
+    jk_func : callable
+        Function that computes get_jk(dm, **kwargs) and returns (vj, vk)
+    n_jobs : int or None
+        Number of parallel workers. If None, auto-detect CPU cores
+    chunk_size : int or None
+        Number of DMs per chunk. If None, splits evenly across n_jobs
+    parallel: bool
+        Whether to parallelise over low-rank vectors (for testing)
+    **jk_kwargs : dict
+        Additional kwargs passed to jk_func (hermi, with_j, with_k, etc.)
+
+    Returns
+    -------
+    vj_combined, vk_combined : np.ndarray or None
+        Concatenated results across all chunks. If with_j or with_k is False, 
+        the corresponding output may be None.
+    """
+    dm_array = np.ascontiguousarray(dm_array)
+    n_dm = dm_array.shape[0]
+
+    # Auto-detect cores if not provided
+    if not parallel:
+        return jk_func(dm=dm_array, **jk_kwargs)
+    
+    else:
+        n_jobs = lib.num_threads()
+
+        # Determine chunking: aim for 8 threads per worker
+        if chunk_size is None:
+            original_threads = n_jobs
+            threads_per_worker = 4
+            n_workers = max(original_threads // threads_per_worker, 1)
+            chunk_size = max(n_dm // n_workers, 1)
+        else:
+            original_threads = n_jobs
     
         dm_chunks = [dm_array[i:i+chunk_size] for i in range(0, n_dm, chunk_size)]
+        n_workers = len(dm_chunks)  # actual number of workers (may differ from n_jobs if fewer chunks)
     
-        # Avoid OpenMP oversubscription in PySCF
-        original_threads = lib.num_threads()
-        #print(original_threads)
-        lib.num_threads(1)
+        print('nthreads, nworkers, chunk_size', n_jobs, n_workers, chunk_size)
+        # Distribute total threads across workers to avoid oversubscription
+        threads_per_worker = max(original_threads // n_workers, 1)
+        lib.num_threads(threads_per_worker)
     
         try:
             # Worker function
@@ -151,7 +252,7 @@ def parallel_get_jk(dm_array, jk_func, n_jobs=None, chunk_size=None, parallel=Fa
                 return jk_func(dm=dm_chunk, **jk_kwargs)
         
             # Run chunks in parallel
-            results = Parallel(n_jobs=n_jobs)(
+            results = Parallel(n_jobs=n_workers)(
                 delayed(_compute_chunk)(chunk) for chunk in dm_chunks
             )
 
@@ -727,6 +828,8 @@ def get_jk_builds(mol, lowrank_vecs,
     ######################################################
     # Initiate grad object
     grad_obj = mf_grad(mf)
+    # Set verbose level for detailed timing output (6 or higher shows timer_debug1)
+    grad_obj.verbose = 6
     # TODO: Add auxbasis_response in the future, for now ignore it
     grad_obj.auxbasis_response = df_response
     
@@ -745,18 +848,20 @@ def get_jk_builds(mol, lowrank_vecs,
             
         # JK build
         with log_time("JK Builds (1)"):
-            vj_list, vk_list = get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)  # Specify hermiticity per case
-            #vj_list, vk_list = parallel_get_jk(lr_vecs_ao.transpose(0,2,1), get_jk, hermi=0)
+            # Stick to PySCF's own threading; joblib overhead slowed plain get_jk
+            vj_list, vk_list = get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0)
 
         vhf = vj_list - 0.5*vk_list
         
         # Grad JK builds
         # TODO: Add auxbasis_response in the future, for now ignore it
         with log_time("JK Grad Builds (2)"):
-            vj_grad_list_t, vk_grad_list_t = grad_obj.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
-            vj_grad_list, vk_grad_list = grad_obj.get_jk(dm=lr_vecs_ao, hermi=0) 
-            #vj_grad_list, vk_grad_list = parallel_get_jk(lr_vecs_ao, grad_obj.get_jk, hermi=0)
-            #vj_grad_list_t, vk_grad_list_t = parallel_get_jk(lr_vecs_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0)
+            lr_vecs_ao = np.ascontiguousarray(lr_vecs_ao)
+            lr_vecs_ao_T = np.ascontiguousarray(lr_vecs_ao.transpose(0,2,1))
+            #vj_grad_list_t, vk_grad_list_t = grad_obj.get_jk(dm=lr_vecs_ao.transpose(0,2,1), hermi=0) 
+            #vj_grad_list, vk_grad_list = grad_obj.get_jk(dm=lr_vecs_ao_T, hermi=0) 
+            vj_grad_list, vk_grad_list = parallel_get_jk(lr_vecs_ao, grad_obj.get_jk, hermi=0, backend='threading')
+            vj_grad_list_t, vk_grad_list_t = parallel_get_jk(lr_vecs_ao_T, grad_obj.get_jk, hermi=0, backend='threading')
 
         vhf_grad = vj_grad_list - 0.5*vk_grad_list
         vhf_grad_t = vj_grad_list_t - 0.5*vk_grad_list_t
@@ -805,21 +910,25 @@ def get_jk_builds(mol, lowrank_vecs,
             (0, norb, 0, norb), aosym='s1', mosym='s1')
             svd_vecs_ao = svd_vecs_ao.reshape((svd_vecs_grouped.shape[0],norb,norb))
             
+            svd_vecs_ao = np.ascontiguousarray(svd_vecs_ao)
+            svd_rightvecs_ao = np.ascontiguousarray(svd_rightvecs_ao)
+
         # J builds
         with log_time("J Builds (2)"):
+
+            #vj_r_list, _ = get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
+            #vj_l_list, _ = get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
             vj_r_list, _ = get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False)
             vj_l_list, _ = get_jk(dm=svd_vecs_ao, hermi=0, with_k=False)
-            #vj_r_list, _ = parallel_get_jk(svd_rightvecs_ao, get_jk, hermi=0,with_k=False)
-            #vj_l_list, _ = parallel_get_jk(svd_vecs_ao, get_jk, hermi=0,with_k=False)
 
         # Grad JK builds
         # TODO: Add auxbasis_response in the future, for now ignore it
         with log_time("J Grad Builds (2)"):
-            vj_lgrad_list, _ = grad_obj.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False) 
-            vj_rgrad_list, _ = grad_obj.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False) 
+            #vj_lgrad_list, _ = grad_obj.get_jk(dm=svd_vecs_ao, hermi=0, with_k=False) 
+            #vj_rgrad_list, _ = grad_obj.get_jk(dm=svd_rightvecs_ao, hermi=0, with_k=False) 
             # gradient JK builds 
-            #vj_lgrad_list = parallel_get_jk(svd_vecs_ao, grad_obj.get_j, hermi=0)
-            #vj_rgrad_list = parallel_get_jk(svd_rightvecs_ao, grad_obj.get_j, hermi=0)
+            vj_lgrad_list = parallel_get_jk(svd_vecs_ao, grad_obj.get_j, hermi=0)
+            vj_rgrad_list = parallel_get_jk(svd_rightvecs_ao, grad_obj.get_j, hermi=0)
 
         # Reindex to separate bra, ket, nvec indices
         vj_right = unpack_vec(vj_r_list, lowrank_vecs['pairloc_svd'],hermitian=hermitian, nbra=ntrain)
@@ -861,7 +970,7 @@ def get_jk_builds(mol, lowrank_vecs,
         # JK Builds
         with log_time("Diag J Builds (1)"):
             #vj_list = get_jk(dm = flat_diagJ_ao, hermi=0, with_k=False)[0]
-            vj_list = parallel_get_jk(flat_diagJ_ao, get_jk, hermi=0,with_k=False)[0]
+            vj_list = get_jk(dm=flat_diagJ_ao, hermi=0, with_k=False)[0]
 
         # JK grad builds
         with log_time("Diag Grad J Builds (1)"):
@@ -870,7 +979,7 @@ def get_jk_builds(mol, lowrank_vecs,
 
             # gradient JK builds for diagonals
             #vj_grad_list = parallel_get_jk(flat_diagJ_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0, with_k=False)[0]
-            vj_grad_list = parallel_get_jk(flat_diagJ_ao.transpose(0,2,1), grad_obj.get_j, hermi=0)
+            vj_grad_list = parallel_get_jk(flat_diagJ_ao.transpose(0,2,1), grad_obj.get_j, hermi=0, backend='threading')
 
         # Unflatten
         vj_unflat = vj_list.reshape(*orig_shape, *vj_list.shape[1:])
@@ -896,8 +1005,8 @@ def get_jk_builds(mol, lowrank_vecs,
             with log_time("Diag K Builds (1)"):
                 #vk_list = get_jk(dm = flat_diagK_ao, hermi=0, with_j=False)[1]
                 #vk_t_list = get_jk(dm = flat_diagK_ao_T, hermi=0, with_j=False)[1]
-                vk_list = parallel_get_jk(flat_diagK_ao, get_jk, hermi=0,with_j=False)[1]
-                vk_t_list = parallel_get_jk(flat_diagK_ao_T, get_jk, hermi=0,with_j=False)[1]
+                vk_list = get_jk(dm=flat_diagK_ao, hermi=0, with_j=False)[1]
+                vk_t_list = get_jk(dm=flat_diagK_ao_T, hermi=0, with_j=False)[1]
 
             # JK grad builds
             with log_time("Diag Grad K Builds (1)"):
@@ -905,7 +1014,7 @@ def get_jk_builds(mol, lowrank_vecs,
                 #vk_grad_t_list = grad_obj.get_jk(dm=flat_diagK_ao_T.transpose(0,2,1), hermi=0, with_j=False) [1]
                 
                 # gradient JK builds for diagonals
-                vk_grad_list = parallel_get_jk(flat_diagK_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0, with_j=False)[1]
+                #vk_grad_list = parallel_get_jk(flat_diagK_ao.transpose(0,2,1), grad_obj.get_jk, hermi=0, with_j=False)[1]
 
             # Unflatten
             vk_unflat = vk_list.reshape(*orig_shape, *flat_diagK_ao.shape[1:])  # (3, 4, 5, 6)
