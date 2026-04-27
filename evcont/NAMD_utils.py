@@ -176,6 +176,7 @@ def read_model(path):
         overlap (ndarray)
         one_rdm (ndarray)
         two_rdm (ndarray or dict): Full 2-RDM or low-rank vectors
+        diagonals (ndarray or None): Diagonals if they exist, None otherwise
     """
     import pickle
     
@@ -193,7 +194,13 @@ def read_model(path):
     else:
         raise FileNotFoundError("Neither 'two_rdm_final.npy' nor 'lowrank_vecs.pkl' was found in the specified path.")
     
-    return overlap, one_rdm, two_rdm
+    # Try to load diagonals (optional, mainly for low-rank models)
+    diag_file = os.path.join(path, 'diagonal_lr.npy')
+    diagonals = None
+    if os.path.exists(diag_file):
+        diagonals = np.load(diag_file, allow_pickle=True)
+    
+    return overlap, one_rdm, two_rdm, diagonals
 
 def remove_model(path):
     """

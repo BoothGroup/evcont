@@ -27,12 +27,13 @@ from pathlib import Path
 try:
    from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC, get_lowrank_en_with_grad_and_NAC
    from evcont.FCI_NAC import get_FCI_energy_with_grad_and_NAC, get_FCI_energy_with_grad_and_NAC_withsym
+   from evcont.NAMD_utils import read_model
 except:
    print('Error in run-evcont-driver: evcont is not installed!')
    sys.exit()
 
 try:
-    from pyscf import gto, fci, scf, mcscf, lib, grad
+    from pyscf import gto, fci, scf, mcscf, lib, grad, df
 
 except:
    print('Error in run-evcont-driver: pyscf is not installed!')
@@ -155,7 +156,8 @@ def read_input_file(filename='evcont.in'):
         'pyscf_solver' : None,
         'use_quantel' : False,
         'ncas' : None,
-        'nelec' : None
+        'nelec' : None,
+        'jdiag_only' : True
     }
 
     required_keys=[]
@@ -208,7 +210,7 @@ def read_input_file(filename='evcont.in'):
     if user_inputs['use_pyscf'] and user_inputs['pyscf_solver'] is None:
         missing.append('pyscf_solver')
 
-    if 'cas' in user_inputs['pyscf_solver']:
+    if user_inputs['pyscf_solver'] is not None and 'cas' in user_inputs['pyscf_solver']:
         if user_inputs['ncas'] is None:
             missing.append('ncas')
         if user_inputs['nelec'] is None:
@@ -228,41 +230,6 @@ def run_training(path):
 def load_pickle(filename):
     with open(filename, 'rb') as f:
         return pickle.load(f)
-
-def read_model(path):
-    """
-    Read the intermediate data that will be used for predictions, namely:
-        - Overlap of training wavefunctions, S
-        - 1-el reduced transition density matrices of training wavefunctions
-        - 2-el reduced transition density matrices of training wavefunctions,
-          either as a full tensor (two_rdm_final.npy) or low-rank vectors (lowrank_vecs.pkl)
-
-    Args:
-        path (str):
-            Path to the model files directory. Must contain:
-                - overlap_final.npy
-                - one_rdm_final.npy
-                - two_rdm_final.npy OR lowrank_vecs.pkl
-
-    Returns:
-        overlap (ndarray)
-        one_rdm (ndarray)
-        two_rdm (ndarray or any object from lowrank_vecs.pkl)
-    """
-    overlap = np.load(os.path.join(path, 'overlap_final.npy'))
-    one_rdm = np.load(os.path.join(path, 'one_rdm_final.npy'))
-
-    two_rdm_npy = os.path.join(path, 'two_rdm_final.npy')
-    two_rdm_pkl = os.path.join(path, 'lowrank_vecs.pkl')
-
-    if os.path.exists(two_rdm_npy):
-        two_rdm = np.load(two_rdm_npy)
-    elif os.path.exists(two_rdm_pkl):
-        two_rdm = load_pickle(two_rdm_pkl)
-    else:
-        raise FileNotFoundError("Neither 'two_rdm_final.npy' nor 'lowrank_vecs.pkl' was found in the specified path.")
-
-    return overlap, one_rdm, two_rdm
 
 def get_phase(old,new):
 
@@ -340,16 +307,36 @@ def write_cont(vec):
 def sacasscf_en_with_grad_and_nac(mol, cas, nroots=1, 
                                   fix_singlet=True,
                                   anneal=True,
-                                  compute_grad=True, compute_nac=True):
+                                  compute_grad=True, compute_nac=True,
+                                  density_fit=False):
     """
     Wrapper for running pyscf CASSCF calculation for each molecular geometry
     along a NAMD trajectory
+    
+    Args:
+        mol: pyscf Mole object
+        cas: tuple of (ncas, nelec)
+        nroots: number of roots
+        fix_singlet: fix spin to singlet
+        anneal: use orbital annealing
+        compute_grad: compute gradients
+        compute_nac: compute nonadiabatic couplings
+        density_fit: use density fitting for integrals
     """
     # CAS
     ncas, nelec = cas
     
+    # Validate CAS parameters
+    if ncas > mol.nao:
+        raise ValueError(f"ncas={ncas} exceeds number of orbitals ({mol.nao})")
+    if nelec > mol.nelectron:
+        raise ValueError(f"nelec={nelec} exceeds number of electrons ({mol.nelectron})")
+    
     # Setup calculation
-    mf = scf.RHF (mol).run()
+    mf = scf.RHF (mol)
+    if density_fit:
+        mf = df.density_fit(mf)
+    mf.run()
     mc = mcscf.CASSCF (mf, ncas, nelec)
     if fix_singlet:
         mc.fix_spin_(ss=0, shift=1)
@@ -371,21 +358,30 @@ def sacasscf_en_with_grad_and_nac(mol, cas, nroots=1,
     else:
         mc.run()
 
+    # Check convergence
+    if not mc.converged:
+        print(f"WARNING: SA-CASSCF calculation did not converge! (energy={mc.e_tot})")
+
     # Save orbitals for next iteration
     if anneal:
         np.save(orb_path,mc.mo_coeff)
+    
+    # Verify we have enough states
+    if len(mc.e_states) < nroots:
+        raise RuntimeError(f"CASSCF returned {len(mc.e_states)} states, but {nroots} were requested")
                 
-    # Set grad and NAC objects
-    if compute_grad: 
-        mc_grads = mc.Gradients()
-    if compute_nac:
-        mc_nacs = mc.nac_method()
-
     # Compute energy, grad and NAC
     en = mc.e_states[:nroots]
     #print(en)
     grad_all = []
     nac_all = {}
+    
+    # Set grad and NAC objects only if needed
+    if compute_grad: 
+        mc_grads = mc.Gradients()
+    if compute_nac:
+        mc_nacs = mc.nac_method()
+    
     for state in range(nroots):
         # Gradients
         if compute_grad:
@@ -457,9 +453,9 @@ def evcont_feed_nx(mode, adjustphase=True):
         # Read the intermediate state from continuation training
         cwd = os.getcwd()
         if trdm_path is None:
-            cont_ovlp, cont_1rdm, cont_2rdm = read_model(cwd)
+            cont_ovlp, cont_1rdm, cont_2rdm, cont_diag = read_model(cwd)
         else:
-            cont_ovlp, cont_1rdm, cont_2rdm = read_model(trdm_path)
+            cont_ovlp, cont_1rdm, cont_2rdm, cont_diag = read_model(trdm_path)
 
 
         # From eigenvector continuation
@@ -474,16 +470,17 @@ def evcont_feed_nx(mode, adjustphase=True):
                 cont_1rdm,
                 cont_ovlp,
                 cont_2rdm,
-                None,
-                nroots=NSTAT+1,
+                cont_diag,
+                nroots=NSTAT,
                 density_fit=inputs['density_fit'],
-                df_basis=inputs['df_basis']
+                df_basis=inputs['df_basis'],
+                Jdiag_only=inputs['jdiag_only']
                 )
         else:
             vec_cont, en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
                 mol,
                 cont_1rdm, cont_2rdm, cont_ovlp,
-                nroots=NSTAT+1
+                nroots=NSTAT
                 )
 
         write_cont(vec_cont)
@@ -500,11 +497,14 @@ def evcont_feed_nx(mode, adjustphase=True):
                 irrep_name=fix_sym
                 )
 
-        elif pyscf_solver in ['sacasscf', 'SACASSCF']:
+        elif pyscf_solver in ['sacasscf', 'SACASSCF','sa-casscf','SA-CASSCF']:
             print('Implementation: pyscf CASSCF - sym_%s'%fix_sym)
 
             cas = (int(inputs['ncas']), int(inputs['nelec']))
-            en_cont, grad_cont, nac_cont = sacasscf_en_with_grad_and_nac(mol, cas, nroots=NSTAT, fix_singlet=fix_singlet)
+            en_cont, grad_cont, nac_cont = sacasscf_en_with_grad_and_nac(
+                mol, cas, nroots=NSTAT, fix_singlet=fix_singlet,
+                density_fit=inputs['density_fit']
+            )
 
     # Checks - write to output (going into EVCont.out)
     print('geom',mol.atom_coords())
@@ -571,7 +571,7 @@ if __name__ == '__main__':
         mol = read_mol('sto-3g',False)
 
         tmpd = os.getcwd()
-        cont_ovlp, cont_1rdm, cont_2rdm = read_model(tmpd)
+        cont_ovlp, cont_1rdm, cont_2rdm, _ = read_model(tmpd)
 
         # From eigenvector continuation
         en_cont, grad_cont, nac_cont, _ = get_multistate_energy_with_grad_and_NAC(
