@@ -14,6 +14,7 @@ from evcont.electron_integral_utils import (
     get_df_integrals
 )
 
+#from evcont.low_rank_utils_mpi import (
 from evcont.low_rank_utils import (
     get_jk_builds, unstack_tril
 )
@@ -1170,7 +1171,17 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
         ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
         
     # Preliminaries
-    ntrain = lowrank_vecs['vecs'].shape[0]
+    # Get ntrain from pairloc (max index + 1) - might just make ntrain an input arg to avoid this
+    if lowrank_vecs['has_ed']:
+        ntrain_ed = max([i for i, j in lowrank_vecs['pairloc'].keys()]) + 1
+    else:
+        ntrain_ed = 0
+    if lowrank_vecs['has_svd']:
+        ntrain_svd = max([i for i, j in lowrank_vecs['svd_pairloc'].keys()]) + 1
+    else:
+        ntrain_svd = 0
+    ntrain = max(ntrain_ed, ntrain_svd)
+    
     norb = ao_mo_trafo.shape[-1]
     
     # Unpack the preliminaries

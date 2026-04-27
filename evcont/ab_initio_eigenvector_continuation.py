@@ -93,7 +93,7 @@ def approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=True):
 
     return en_approx, gs_approx
 
-def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-4):
+def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-12):
     """
     Diagonalize the subspace Hamiltonian
     """
@@ -164,7 +164,7 @@ def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S,
 
     return en_approx, evec_approx
 
-def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True):
+def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True, lindep=1e-12):
     """
     Returns multiple approximate electronic states from solving the generalised
     eigenvalue problem defined via the one- and two-body transition RDMs.
@@ -224,7 +224,7 @@ def approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=1, hermitian=True
     else:
         assert False
     
-    en_approx, evec_approx = solve_subspace(H, S, nroots=nroots, hermitian=hermitian)
+    en_approx, evec_approx = solve_subspace(H, S, nroots=nroots, hermitian=hermitian, lindep=lindep)
 
     return en_approx, evec_approx
 
@@ -319,8 +319,7 @@ def approximate_ground_state_OAO(mol, one_RDM, two_RDM, S, hermitian=True):
 
     return total_energy, vec
 
-
-def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True):
+def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True, lindep=1e-12):
     """
     This function approximates multiple state energies and wavefunctions of a given
     molecule from an eigenvector continuation with t-RDMS and the overlap matrix S.
@@ -350,7 +349,7 @@ def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=Tru
 
     # Approximate the ground state energy and wavefunction in projected subspace
     en, vec = approximate_multistate(
-        h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian
+        h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian, lindep=lindep
     )
 
     # Calculate the total energy by adding the nuclear repulsion energy
