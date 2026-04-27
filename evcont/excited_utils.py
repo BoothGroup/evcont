@@ -26,63 +26,76 @@ import sys
 def make_trdm1(mol, one_rdm, vec_i, vec_j):
     """ 
     Predicted 1-body transition reduced density matrices from eigenvector continuation
-    in the AO basis (converted from OAO basis)
+    in the SAO basis (orbital basis)
     
     Input:
         mol: pyscf.gto.Mole()
             Molecule object
         one_rdm: Training one-rdm matrix ndarray(ntrain, ntrain, nao, nao)
-            One or a list of 1-body reduced density matrices
+            One or a list of 1-body reduced density matrices (in SAO basis)
         
     Returns:
-        predicted_one_trdm_ao: ndarray(nao, nao)
-            Predicted 1-body transition reduced density matrix
+        predicted_one_trdm_sao: ndarray(nao, nao)
+            Predicted 1-body transition reduced density matrix in SAO basis
     """
     
-    basis = get_basis(mol)
-
     predicted_one_trdm = np.einsum("i,ijkl,j->kl", vec_i, one_rdm, vec_j, optimize="optimal")
-    # Convert to AO basis
-    #predicted_one_trdm_ao = np.einsum("ji,jk,kl->il",basis, predicted_one_trdm, basis, optimize="optimal")
-    predicted_one_trdm_ao = basis.dot(predicted_one_trdm).dot(basis.T)
     
-    return predicted_one_trdm_ao
+    return predicted_one_trdm
 
 def make_rdm1(mol, one_rdm, vec):
     """ 
     Predicted 1-body reduced density matrices from eigenvector continuation
-    in the AO basis (converted from OAO basis)
+    in the SAO basis (orbital basis)
     """
-    
-    #basis = get_basis(mol)
-    #predicted_one_rdm = np.einsum("i,ijkl,j->kl", vec, one_rdm, vec, optimize="optimal")
-    #predicted_one_rdm = np.einsum("ji,jk,kl->il",basis, predicted_one_rdm, basis, optimize="optimal")
     
     predicted_one_rdm = make_trdm1(mol, one_rdm, vec, vec)
     
     return predicted_one_rdm
 
 
-def trans_dip_moment(mol, one_trdm_inp,ref=None):
+def trans_dip_moment(mol, one_trdm_inp, ref=None):
+    """
+    Compute transition dipole moment from 1-body transition reduced density matrices
+    in SAO basis (electronic contribution only, no nuclear dipole)
+    
+    Input:
+        mol: pyscf.gto.Mole()
+            Molecule object
+        one_trdm_inp: list of ndarray(mol.nao, mol.nao) or ndarray(mol.nao, mol.nao)
+            One or a list of 1-body transition reduced density matrices in SAO basis
+        ref: ndarray(3,), optional
+            Reference point for dipole gauge. If None, uses nuclear charge center.
+        
+    Returns:
+        mol_tdip or mol_tdip_l: ndarray(3,) or list of ndarray(3,)
+            Transition dipole moments (units A.U.)
+    """
     
     # Set gauge for dipole integrals
     if ref is None:
         charges = mol.atom_charges()
         coords = mol.atom_coords()
         nuc_charge_center = np.einsum('z,zx->x', charges, coords) / charges.sum()
-        mol.set_common_orig_(nuc_charge_center)
-    else:
-        mol.set_common_orig_(ref)
-    dip_ints = mol.intor('cint1e_r_sph', comp=3)
+        ref = nuc_charge_center
+    
+    # Get dipole integrals in AO basis and transform to SAO basis
+    basis = get_basis(mol)
+    
+    with mol.with_common_orig(ref):
+        dip_ints_ao = mol.intor_symmetric('int1e_r', comp=3)
+    
+    # Transform dipole integrals from AO to SAO: dip_ints_sao[x,i,j] = basis[a,i] * dip_ints_ao[x,a,b] * basis[b,j]
+    dip_ints = np.einsum('ai,xab,bj->xij', basis, dip_ints_ao, basis, optimize='optimal')
     
     single = True
-    if not isinstance(one_trdm_inp,list):
+    if not isinstance(one_trdm_inp, list):
         one_trdm_l = [one_trdm_inp]
     else:
         one_trdm_l = one_trdm_inp
         single = False
     
-    # Iterate over one_rdm s
+    # Iterate over transition RDMs
     mol_tdip_l = []
     for one_trdm in one_trdm_l:
         el_tdip = np.einsum('xij,ji->x', dip_ints, one_trdm).real
@@ -92,21 +105,18 @@ def trans_dip_moment(mol, one_trdm_inp,ref=None):
         return mol_tdip_l
     else:
         return mol_tdip_l[0]
-    
-    #return dip_moment(mol, one_trdm_inp)
-    #return [hf.dip_moment(mol, nn, unit='au') for nn in one_trdm_inp]
 
 
 def dip_moment(mol, one_rdm_inp):
     """
-    Compute dipole moment from 1-body reduced density matrices
+    Compute dipole moment from 1-body reduced density matrices in SAO basis
     (Based on pyscf implementation)
     
     Input:
         mol: pyscf.gto.Mole()
             Molecule object
         one_rdm_inp: list of ndarray(mol.nao, mol.nao) or ndarray(mol.nao, mol.nao)
-            One or a list of 1-body reduced density matrices
+            One or a list of 1-body reduced density matrices in SAO basis
         
     Returns:
         mol_dip or mol_dip_l: ndarray(3,) or list of ndarray(3,)
@@ -115,10 +125,19 @@ def dip_moment(mol, one_rdm_inp):
     
     charges = mol.atom_charges()
     coords  = mol.atom_coords()
-    nucl_dip = np.einsum('i,ix->x', charges, coords)
 
-    with mol.with_common_orig((0,0,0)):
+    # Set gauge to nuclear charge center and transform integrals to SAO basis
+    nuc_charge_center = np.einsum('z,zx->x', charges, coords) / charges.sum()
+    basis = get_basis(mol)
+
+    #nucl_dip = np.einsum('i,ix->x', charges, coords)
+    nucl_dip = np.einsum('i,ix->x', charges, coords - nuc_charge_center)
+    
+    with mol.with_common_orig(nuc_charge_center):
         ao_dip = mol.intor_symmetric('int1e_r', comp=3)
+    
+    # Transform dipole integrals from AO to SAO basis
+    dip_ints = np.einsum('ai,xab,bj->xij', basis, ao_dip, basis, optimize='optimal')
         
     single = True
     if not isinstance(one_rdm_inp,list):
@@ -130,7 +149,7 @@ def dip_moment(mol, one_rdm_inp):
     # Iterate over one_rdm s
     mol_dip_l = []
     for one_rdm in one_rdm_l:
-        el_dip = np.einsum('xij,ji->x', ao_dip, one_rdm).real
+        el_dip = np.einsum('xij,ji->x', dip_ints, one_rdm).real
         mol_dip = nucl_dip - el_dip
         mol_dip_l += [mol_dip]
     
