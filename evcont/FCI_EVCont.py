@@ -199,21 +199,21 @@ class FCI_EVCont_obj:
                     rdm1, rdm2 = self.cisolver.trans_rdm12(
                         self.fcivecs[-1], self.fcivecs[i], mol.nao, mol.nelec
                     )
-                    rdm1_conj, rdm2_conj = self.cisolver.trans_rdm12(
-                        self.fcivecs[i], self.fcivecs[-1], mol.nao, mol.nelec
-                    )
+                    #rdm1_conj, rdm2_conj = self.cisolver.trans_rdm12(
+                    #    self.fcivecs[i], self.fcivecs[-1], mol.nao, mol.nelec
+                    #)
                     one_rdm_new[-1, i, :, :] = rdm1
-                    one_rdm_new[i, -1, :, :] = rdm1_conj
-                    #one_rdm_new[i, -1, :, :] = rdm1.conj()
-                    
+                    one_rdm_new[i, -1, :, :] = rdm1.conj().T
+                    #one_rdm_new[i, -1, :, :] = rdm1_conj
+
                     if not self.lowrank:
                         two_rdm_new[-1, i, :, :, :, :] = rdm2
-                        two_rdm_new[i, -1, :, :, :, :] = rdm2_conj
-                        #two_rdm_new[i, -1, :, :, :, :] = rdm2.conj()
+                        two_rdm_new[i, -1, :, :, :, :] = np.einsum('ijkl->lkji',rdm2.conj())
+                        #two_rdm_new[i, -1, :, :, :, :] = rdm2_conj
                     
                     # Low rank
                     else:
-                        print(new_ntrain-1, i, ovlp)
+                        print('States: %i %i, overlap: %f' % (new_ntrain-1, i, ovlp))
 
                         # Get low rank representation
                         lowrank_vecs, diagonals, use_joint = \
