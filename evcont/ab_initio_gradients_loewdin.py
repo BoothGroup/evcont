@@ -1177,7 +1177,7 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
     else:
         ntrain_ed = 0
     if lowrank_vecs['has_svd']:
-        ntrain_svd = max([i for i, j in lowrank_vecs['svd_pairloc'].keys()]) + 1
+        ntrain_svd = max([i for i, j in lowrank_vecs['pairloc_svd'].keys()]) + 1
     else:
         ntrain_svd = 0
     ntrain = max(ntrain_ed, ntrain_svd)
