@@ -274,6 +274,7 @@ def parallel_get_jk2(dm_array, jk_func, chunk_size=None, parallel=True, **jk_kwa
 def reduce_2rdm(rdm1, rdm2, ovlp, 
                 truncation_style='eigval',nvecs=10, eval_thr=0.1, ham_thr=0.001,
                 save_diag=False,
+                relax_amp=True, opt_no_diag=True, relax_after=True,
                 use_svd=False, svd_weight = 1.0,
                 iterative=False, nit=None, max_iter_time=10000,
                 mol=None,train_en=None,Jdiag_only=True,
@@ -299,9 +300,14 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         eval_thr (float): Threshold to choose vectors based on their eval**2
         ham_thr (float): Threshold to choose vectors based on their H matrix elements (Hartree units)
 
-        diag_mas (np.array([n,n,n,n])): Mask choosing diagonal matrices of (n,n,n,n) tensor. Computed 
-                                        OTF if not given
-                           
+        save_diag (bool): Whether to save the diagonal corrections to make low-rank 2RDM diagonal elements exact.
+        
+        # Parameters for amplitude relaxation of joint decomposition
+        relax_amp (bool): Whether to perform amplitude relaxation after selecting the low-rank vectors in the joint decomposition.
+        opt_no_diag (bool): Whether to remove diagonal elements from the relaxation. Only applicable if relax_amp is True and save_diag is True.
+        relax_after (bool): Whether to perform amplitude relaxation after selecting the low-rank vectors based on Hamiltonian error 
+                            vs relaxing during the selection process. 
+                            Only applicable if relax_amp is True and truncation_style is 'ham' or 'ham_en'.
         # Parameters relevant for Hamiltonian error truncation
         mol (pyscf Mole object): Molecule object that is used for computing the Hamiltonian error
         train_en (float):  Energy of the training geometry used for the truncation
@@ -322,6 +328,13 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     norb = rdm1.shape[0]
     norb_sq = norb * norb
 
+    # Check that it is hermitian and diagonalize the matrix
+    #assert(np.allclose(mat_decomp.reshape((norb_sq, norb_sq)), mat_decomp.reshape((norb_sq,norb_sq)).T))
+    if not np.allclose(rdm2.reshape((norb_sq, norb_sq)), rdm2.reshape((norb_sq,norb_sq)).T):
+        print('Warning: 2RDM was not Hermitian.')
+        # Hermitise
+        rdm2 = 0.5 * (rdm2 + np.einsum('...abcd->...cdab',rdm2.conj()))
+
     # Matrix to decompose
     mat_decomp = rdm2.copy()
     
@@ -334,37 +347,28 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         print('Error in reduce_rdm: nit is not given for iterative diagonalization')
         sys.exit()
         
-    # Check that it is hermitian and diagonalize the matrix
-    #assert(np.allclose(mat_decomp.reshape((norb_sq, norb_sq)), mat_decomp.reshape((norb_sq,norb_sq)).T))
-    if np.allclose(mat_decomp.reshape((norb_sq, norb_sq)), mat_decomp.reshape((norb_sq,norb_sq)).T):
-        if not iterative:
-            evals, evecs = scipy.linalg.eigh(mat_decomp.reshape((norb_sq, norb_sq)))
-        else:
-            evals, evecs = try_iterative_diag(mat_decomp.reshape((norb_sq, norb_sq)),
-                                              k=nit, 
-                                              which='LM', 
-                                              max_time=max_iter_time)
-
-        rightvecs = None
-        joint = True # Joint decomp
+    # Diagonalize
+    if not iterative:
+        evals, evecs = scipy.linalg.eigh(mat_decomp.reshape((norb_sq, norb_sq)))
     else:
-        print('**Using SVD')
-        if not iterative:
-            evecs, evals, rightvecs = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
-        else:
-            evecs, evals, rightvecs = try_iterative_diag(rdm2.reshape((norb_sq, norb_sq)),
-                                              k=nit, 
-                                              which='LM', 
-                                              use_svd=True,
-                                              max_time=max_iter_time)
-
-        joint = False
-
+        evals, evecs = try_iterative_diag(mat_decomp.reshape((norb_sq, norb_sq)),
+                                            k=nit, 
+                                            which='LM', 
+                                            max_time=max_iter_time)
+        
+    rightvecs = None
+    joint = True # Joint decomp
+    
     ########################################################################
     #### Select low rank vectors
     
     # Choose at least one vector (lower bound for dynamic truncation)
     min_nvecs = 1
+
+    # Unless the 2RDM is close to zero
+    if np.linalg.norm(rdm2) < 1e-8:
+        print("Warning in reduce_2rdm: RDM2 is close to zero; setting base_count to 0 to avoid selecting vectors based on noise.")
+        min_nvecs = 0
     
     # Make sure the mol and training energy is given for this truncation
     if truncation_style in ['ham','ham_en']:
@@ -377,109 +381,95 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         sys.exit()    
         
     # Fixed truncation based on 'nvecs' parameter
-    # Or dynamic truncation based on the eigenvalue magnitude
-        
-    # Choose the most compact decomposition between joint eigendecomp and Coulomb SVD
-    if not joint:
-        
-        if truncation_style in ['eigval','nvec']:
+    # Or dynamic truncation based on the eigenvalue magnitude / Hamiltonian error
+    if truncation_style in ['eigval','nvec']:
 
-            # If not Hermitian, just use SVD
-            lowrank_vecs = select_lowrank(evals, evecs, norb, rightvecs=rightvecs, truncation_style=truncation_style, 
-                                          nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
-        elif truncation_style in ['ham','ham_en']:
-                
-            out_ham = select_lowrank_ham(evals, evecs, joint, norb,
-                                   rdm2, rdm1, ovlp, save_diag,
-                                   mol, train_en, Jdiag_only,
-                                   rightvecs=rightvecs,
-                                   truncation_style=truncation_style,
-                                   ham_thr=ham_thr, min_nvec=min_nvecs,
-                                   min_eval=min_eval)
-            lowrank_vecs = out_ham[:-1]
-            #ham_err = out_ham[-1]
+        lowrank_vecs_joint = select_lowrank(evals, evecs, norb, rightvecs=rightvecs, 
+                                            truncation_style=truncation_style, 
+                                            nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs,
+                                            relax_amp=relax_amp, rdm2=rdm2,
+                                            remove_diagopt=(opt_no_diag and save_diag),
+                                            jdiag_only=Jdiag_only)
+        
+    elif truncation_style in ['ham','ham_en']:
+
+        ham_selector = select_lowrank_ham_relaxed if (joint and relax_amp and not relax_after) else select_lowrank_ham
+        out_ham = ham_selector(evals, evecs, joint, norb,
+                                rdm2, rdm1, ovlp,save_diag,
+                                mol, train_en, Jdiag_only,
+                                rightvecs=rightvecs,
+                                truncation_style=truncation_style,
+                                ham_thr=ham_thr, min_nvec=min_nvecs,
+                                min_eval=min_eval,
+                                relax_amp=relax_amp,
+                                remove_diagopt=(opt_no_diag and save_diag))
+        lowrank_vecs_joint = out_ham[:-1]
+        #ham_err_joint = out_ham[-1]
+        
+    # Choose between joint decomposition and SVD based on the compactness of the representation (weighted by svd_weight) and/or Hamiltonian error
+    if not use_svd:
+        lowrank_vecs = lowrank_vecs_joint
+
     else:
+
+        if not iterative:
+            evecs2, evals2, rightvecs2 = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
+        else:
+            evecs2, evals2, rightvecs2 = svds(rdm2.reshape((norb_sq, norb_sq)), k=nit, which='LM')
+
         if truncation_style in ['eigval','nvec']:
 
-            lowrank_vecs_joint = select_lowrank(evals, evecs, norb, rightvecs=rightvecs, 
-                                                truncation_style=truncation_style, 
-                                                nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
-            
+            lowrank_vecs_svd = select_lowrank(evals2, evecs2, norb, rightvecs=rightvecs2, 
+                                            truncation_style=truncation_style, 
+                                            nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs, 
+                                            relax_amp=False)
+        
         elif truncation_style in ['ham','ham_en']:
                 
-            out_ham = select_lowrank_ham(evals, evecs, joint, norb,
-                                   rdm2, rdm1, ovlp,save_diag,
-                                   mol, train_en, Jdiag_only,
-                                   rightvecs=rightvecs,
-                                   truncation_style=truncation_style,
-                                   ham_thr=ham_thr, min_nvec=min_nvecs,
-                                   min_eval=min_eval)
-            lowrank_vecs_joint = out_ham[:-1]
-            #ham_err_joint = out_ham[-1]
-            
-        if not use_svd:
-            lowrank_vecs = lowrank_vecs_joint
-
+            out_ham = select_lowrank_ham(evals2, evecs2, False, norb,
+                                    rdm2, rdm1, ovlp,save_diag,
+                                    mol, train_en, Jdiag_only,
+                                    rightvecs=rightvecs2,
+                                    truncation_style=truncation_style,
+                                    ham_thr=ham_thr, min_nvec=min_nvecs,
+                                    min_eval=min_eval, relax_amp=False)
+            lowrank_vecs_svd = out_ham[:-1]
+            #ham_err_svd = out_ham[-1]
+        
+        # Check which one is more compact
+        if truncation_style in ['ham','ham_en']:
+            if len(lowrank_vecs_joint[0])*svd_weight < len(lowrank_vecs_svd[0]):
+                lowrank_vecs = lowrank_vecs_joint
+                #ham_err = ham_err_joint
+            else:
+                print('**Using SVD')
+                lowrank_vecs = lowrank_vecs_svd
+                joint = False
+                #ham_err = ham_err_svd
+                
+        # TODO: Add considerations for norm error; not just compactness
+        # SVD as well
+        elif truncation_style in ['eigval']:
+            if len(lowrank_vecs_joint[0])*svd_weight < len(lowrank_vecs_svd[0]):
+                lowrank_vecs = lowrank_vecs_joint
+            else:
+                print('**Using SVD')
+                lowrank_vecs = lowrank_vecs_svd
+                joint = False
+                #ham_err = ham_err_svd
         else:
-
-            if not iterative:
-                evecs2, evals2, rightvecs2 = scipy.linalg.svd(rdm2.reshape((norb_sq, norb_sq)))
+            if np.abs(lowrank_vecs_joint[0]).max() < np.abs(lowrank_vecs_svd[0]).max():
+                lowrank_vecs = lowrank_vecs_joint
             else:
-                evecs2, evals2, rightvecs2 = svds(rdm2.reshape((norb_sq, norb_sq)), k=nit, which='LM')
-
-            if truncation_style in ['eigval','nvec']:
-
-                lowrank_vecs_svd = select_lowrank(evals2, evecs2, norb, rightvecs=rightvecs2, truncation_style=truncation_style, 
-                                              nvecs=nvecs, eval_thr=eval_thr, min_nvec=min_nvecs)
-            
-            elif truncation_style in ['ham','ham_en']:
-                    
-                out_ham = select_lowrank_ham(evals2, evecs2, False, norb,
-                                       rdm2, rdm1, ovlp,save_diag,
-                                       mol, train_en, Jdiag_only,
-                                       rightvecs=rightvecs2,
-                                       truncation_style=truncation_style,
-                                       ham_thr=ham_thr, min_nvec=min_nvecs,
-                                       min_eval=min_eval)
-                lowrank_vecs_svd = out_ham[:-1]
-                #ham_err_svd = out_ham[-1]
-            
-            # Check which one is more compact
-            if truncation_style in ['ham','ham_en']:
-                if len(lowrank_vecs_joint[0])*svd_weight < len(lowrank_vecs_svd[0]):
-                    lowrank_vecs = lowrank_vecs_joint
-                    #ham_err = ham_err_joint
-                else:
-                    print('**Using SVD')
-                    lowrank_vecs = lowrank_vecs_svd
-                    joint = False
-                    #ham_err = ham_err_svd
-                    
-            # TODO: Add considerations for norm error; not just compactness
-            # SVD as well
-            elif truncation_style in ['eigval']:
-                if len(lowrank_vecs_joint[0]) < len(lowrank_vecs_svd[0]):
-                    lowrank_vecs = lowrank_vecs_joint
-                else:
-                    print('**Using SVD')
-                    lowrank_vecs = lowrank_vecs_svd
-                    joint = False
-                    #ham_err = ham_err_svd
-            else:
-                if np.abs(lowrank_vecs_joint[0]).max() < np.abs(lowrank_vecs_svd[0]).max():
-                    lowrank_vecs = lowrank_vecs_joint
-                else:
-                    print('**Using SVD')
-                    lowrank_vecs = lowrank_vecs_svd
-                    joint = False
+                print('**Using SVD')
+                lowrank_vecs = lowrank_vecs_svd
+                joint = False
 
     ########################################################################
     if not save_diag:
         diagonals = None
         
     else:
-        #print('Error in reduce_2rdm: Saving diagonals not implemented yet.')
-        #sys.exit()
         
         remainder = rdm2 - reconstruct_rdm2_joint(lowrank_vecs,joint=joint)
         
@@ -487,7 +477,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         diagonals = np.zeros([3,norb,norb])
         for (i,j) in itertools.product(range(norb), range(norb)):
             diagonals[0, i, j] = remainder[ i, i, j, j]
-            if i != j:
+            if (not Jdiag_only) and i != j:
                 diagonals[1, i, j] = remainder[ i, j, i, j]
                 diagonals[2, i, j] = remainder[ i, j, j, i]
 
@@ -806,7 +796,7 @@ def get_jk_builds(mol, lowrank_vecs,
                   diagonals=None, Jdiag_only=True, sao_diag=False,
                   ao_mo_trafo=None,
                   density_fit=False, df_basis=None,
-                  df_response=False):
+                  df_response=False, verbose=False):
     """
     Precompute the J(K) builds for the low-rank vectors for fast inference
     """
@@ -859,7 +849,8 @@ def get_jk_builds(mol, lowrank_vecs,
     # Initiate grad object
     grad_obj = mf_grad(mf)
     # Set verbose level for detailed timing output (6 or higher shows timer_debug1)
-    grad_obj.verbose = 6
+    if verbose:
+        grad_obj.verbose = 6
     # TODO: Add auxbasis_response in the future, for now ignore it
     grad_obj.auxbasis_response = df_response
     
@@ -1078,9 +1069,42 @@ def get_jk_builds(mol, lowrank_vecs,
 
 
 ###############################################################################
+# Amplitude relaxation for joint decomposition
+def relax_coef(rdm2, vec, diag=False, jdiag_only=True):
+    # Basis functions
+    B = np.einsum('ija,kla->aijkl', vec, vec, optimize='optimal') \
+        - 0.5 * np.einsum('ila,kja->aijkl', vec, vec, optimize='optimal')
+
+    # Build masked tensors first (target and basis), then form normal equations.
+    if diag:
+        norb_loc = rdm2.shape[0]
+        mask = np.ones((norb_loc, norb_loc, norb_loc, norb_loc), dtype=rdm2.dtype)
+
+        for (i, j) in itertools.product(range(norb_loc), range(norb_loc)):
+            mask[i, i, j, j] = 0.0
+            if not jdiag_only and i != j:
+                mask[i, j, i, j] = 0.0
+                mask[i, j, j, i] = 0.0
+
+        rdm2_opt = rdm2 * mask
+        B_opt = B * mask[None, :, :, :, :]
+    else:
+        rdm2_opt = rdm2
+        B_opt = B
+
+    # Gram matrix and projection in the masked space
+    G = np.einsum('aijkl,bijkl->ab', B_opt, B_opt, optimize='optimal')
+    b = np.einsum('ijkl,aijkl->a', rdm2_opt, B_opt, optimize='optimal')
+
+    # Solve the linear system
+    coef, res, rank, sval = np.linalg.lstsq(G, b, rcond=None)
+
+    return coef
+
 def select_lowrank(evals, evecs, norb, 
                    rightvecs=None,
-                   truncation_style='eigval',nvecs=10, eval_thr=0.1, min_nvec=0):
+                   truncation_style='eigval',nvecs=10, eval_thr=0.1, min_nvec=0,
+                   relax_amp=True, rdm2=None, remove_diagopt=True, jdiag_only=True):
     """
     Function to select low-rank vectors from the eigendecomposition
     """
@@ -1104,6 +1128,12 @@ def select_lowrank(evals, evecs, norb,
     vecs_trunc = evecs_sort[:,:nvecs].reshape((norb, norb, nvecs))
     rightvecs_trunc = rightvecs_sort[:nvecs,:].reshape((nvecs,norb, norb))
 
+    # Relax amplitudes
+    if relax_amp:
+        vals_new = relax_coef(rdm2, vecs_trunc, diag=remove_diagopt, jdiag_only=jdiag_only)
+        print('Relaxing amplitudes; norm of change in vals:', np.linalg.norm(vals_new - vals_trunc))
+        vals_trunc = vals_new
+
     return vals_trunc, vecs_trunc, rightvecs_trunc
 
 def select_lowrank_ham(evals, evecs, joint, norb,
@@ -1113,7 +1143,9 @@ def select_lowrank_ham(evals, evecs, joint, norb,
                        density_fit=True,
                        truncation_style='ham',
                        ham_thr=0.001, 
-                       min_nvec=1, min_eval=None
+                       min_nvec=1, min_eval=None,
+                       relax_amp=True, 
+                       remove_diagopt=False,
                        ):
     """
     Select a low rank decomposition of the RDM based on the error on
@@ -1143,7 +1175,6 @@ def select_lowrank_ham(evals, evecs, joint, norb,
     ham_training = 0.5*lib.einsum('pqrs,pqrs->', rdm2, h2, optimize='optimal') + \
                    lib.einsum('pq,pq->', rdm1, h1)
     #ham_training = ovlp * training_energy
-
 
     max_nvec = min(norb * norb, evals_sort.shape[0])
     
@@ -1186,7 +1217,7 @@ def select_lowrank_ham(evals, evecs, joint, norb,
     
     # Step 4: Continue from base_count, checking convergence
     ham_err_list = [ham_err_base]
-    nvec_select = base_count  # Default to base_count if no convergence
+    nvec_select = base_count 
 
     for k in range(base_count, max_nvec):
         # Add contribution from k-th vector
@@ -1201,7 +1232,7 @@ def select_lowrank_ham(evals, evecs, joint, norb,
         if save_diag:
             for (i, j) in itertools.product(range(norb), range(norb)):
                 rdm2_cum[i, i, j, j] = rdm2[i, i, j, j]
-                if not Jdiag_only and i != j:
+                if (not Jdiag_only) and i != j:
                     rdm2_cum[i, j, i, j] = rdm2[i, j, i, j]
                     rdm2_cum[i, j, j, i] = rdm2[i, j, j, i]
 
@@ -1225,14 +1256,138 @@ def select_lowrank_ham(evals, evecs, joint, norb,
                 nvec_select = k
                 break
 
-        # Check for last iteration to set to max
+        # Check for last iteration to set to max if never converged
         if k == max_nvec - 1:
             nvec_select = max_nvec
 
+    #print(nvec_select, ham_err_list)
     # Return truncated decomposition
     vals_trunc = evals_sort[:nvec_select]
     vecs_trunc = evecs_sort[:, :nvec_select].reshape((norb, norb, nvec_select))
     rightvecs_trunc = rightvecs_sort[:nvec_select, :].reshape((nvec_select, norb, norb))
+
+    # Relax amplitudes
+    if relax_amp:
+        vals_new = relax_coef(rdm2, vecs_trunc, diag=remove_diagopt, jdiag_only=Jdiag_only)
+        print('Relaxing amplitudes; norm of change in vals:', np.linalg.norm(vals_new - vals_trunc))
+        vals_trunc = vals_new
+
+    return vals_trunc, vecs_trunc, rightvecs_trunc, ham_err_list[-1] if ham_err_list else 0.0
+
+
+def select_lowrank_ham_relaxed(evals, evecs, joint, norb,
+                               rdm2, rdm1, ovlp, save_diag,
+                               mol, training_energy, Jdiag_only,
+                               rightvecs=None,
+                               density_fit=True,
+                               truncation_style='ham',
+                               ham_thr=0.001,
+                               min_nvec=1, min_eval=None,
+                               relax_amp=True,
+                               remove_diagopt=False,
+                               ):
+    """
+    Select a joint low-rank decomposition based on Hamiltonian error while
+    re-optimizing the selected amplitudes after each truncation step.
+
+    This path is intended only for the joint-decomposition case with
+    amplitude relaxation enabled.
+    """
+    # This selector is intentionally narrow to keep behavior predictable.
+    if not joint:
+        raise ValueError('select_lowrank_ham_relaxed only supports joint=True')
+    if not relax_amp:
+        raise ValueError('select_lowrank_ham_relaxed requires relax_amp=True')
+
+    # For Hermitian ED, right vectors are the transpose if not supplied.
+    if rightvecs is None:
+        rightvecs = evecs.T
+
+    # Process candidates from largest |eigenvalue|^2 to smallest.
+    idx = (-np.power(evals, 2)).argsort()
+    evals_sort = evals[idx]
+    evecs_sort = evecs[:, idx]
+    rightvecs_sort = rightvecs[idx, :]
+
+    # Precompute one-electron and exact training Hamiltonian pieces once.
+    h1, h2 = get_integrals(mol, get_basis(mol))
+    e1 = lib.einsum('ij,ij->', h1, rdm1)
+    ham_training = 0.5 * lib.einsum('pqrs,pqrs->', rdm2, h2, optimize='optimal') + \
+                   lib.einsum('pq,pq->', rdm1, h1)
+
+    max_nvec = min(norb * norb, evals_sort.shape[0])
+
+    base_count = min_nvec
+    if min_eval is not None:
+        # Optionally force all vectors above a minimum |eigenvalue| into the base set.
+        min_eval_mag2 = np.power(min_eval, 2)
+        eval_mag2 = np.power(evals_sort, 2)
+        count_above_threshold = np.sum(eval_mag2 >= min_eval_mag2)
+        base_count = max(min_nvec, count_above_threshold)
+
+    def build_relaxed_prefix(prefix_count):
+        # Build the current prefix basis and re-fit amplitudes on the full target rdm2.
+        vecs_prefix = evecs_sort[:, :prefix_count].reshape((norb, norb, prefix_count))
+        rightvecs_prefix = rightvecs_sort[:prefix_count, :].reshape((prefix_count, norb, norb))
+        vals_prefix = relax_coef(
+            rdm2,
+            vecs_prefix,
+            diag=remove_diagopt,
+            jdiag_only=Jdiag_only,
+        )
+
+        # Reconstruct the relaxed 2RDM from fitted amplitudes.
+        rdm2_prefix = reconstruct_rdm2_joint(
+            (vals_prefix, vecs_prefix, rightvecs_prefix),
+            diagonals=None,
+            joint=True,
+        )
+
+        # If diagonal terms are saved separately in production, mirror that here
+        # so selection is based on the same Hamiltonian expression used downstream.
+        if save_diag:
+            for (i, j) in itertools.product(range(norb), range(norb)):
+                rdm2_prefix[i, i, j, j] = rdm2[i, i, j, j]
+                if not Jdiag_only and i != j:
+                    rdm2_prefix[i, j, i, j] = rdm2[i, j, i, j]
+                    rdm2_prefix[i, j, j, i] = rdm2[i, j, j, i]
+
+        # Evaluate the Hamiltonian error of this relaxed prefix.
+        ham_prefix = e1 + 0.5 * lib.einsum('ijkl,ijkl->', h2, rdm2_prefix, optimize='optimal')
+        if truncation_style == 'ham':
+            ham_err = ham_training - ham_prefix
+        elif truncation_style == 'ham_en':
+            ham_err = training_energy - ham_prefix / ovlp
+        else:
+            raise ValueError(f'Unknown truncation_style in select_lowrank_ham_relaxed: {truncation_style}')
+
+        return vals_prefix, vecs_prefix, rightvecs_prefix, ham_err
+
+    ham_err_list = []
+    vals_trunc = np.zeros((0,))
+    vecs_trunc = np.zeros((norb, norb, 0))
+    rightvecs_trunc = np.zeros((0, norb, norb))
+    nvec_select = base_count
+
+    # Grow the prefix one vector at a time, relax, then test Hamiltonian error.
+    for prefix_count in range(base_count, max_nvec + 1):
+        vals_prefix, vecs_prefix, rightvecs_prefix, ham_err = build_relaxed_prefix(prefix_count)
+        ham_err_list.append(ham_err)
+        vals_trunc = vals_prefix
+        vecs_trunc = vecs_prefix
+        rightvecs_trunc = rightvecs_prefix
+        nvec_select = prefix_count
+
+        # Two-step robustness check: require two consecutive below-threshold errors.
+        if len(ham_err_list) >= 2:
+            if abs(ham_err_list[-1]) <= ham_thr and abs(ham_err_list[-2]) <= ham_thr:
+                nvec_select = prefix_count
+                break
+
+    # Defensive slicing; arrays are already prefix-sized, but this keeps output explicit.
+    vals_trunc = vals_trunc[:nvec_select]
+    vecs_trunc = vecs_trunc[:, :, :nvec_select]
+    rightvecs_trunc = rightvecs_trunc[:nvec_select]
 
     return vals_trunc, vecs_trunc, rightvecs_trunc, ham_err_list[-1] if ham_err_list else 0.0
     
@@ -1498,22 +1653,6 @@ def unpack_grad_vec(vecs,pair_loc,hermitian=True,nbra=None):
     nvec_max = np.max([j-i for i,j in pair_loc.values()])
     
     vecs_unpacked = np.zeros([nbra, nbra, nvec_max, 3, norb, norb])
-    
-    """
-    for i in range(nbra):
-        # Only iterarte through lower triangular indices
-        if hermitian:
-            jmax = i+1
-        else:
-            jmax = nbra
-            
-        for j in range(jmax):
-            
-            # Check key
-            if (i,j) in pair_loc:
-                st, en = pair_loc[(i,j)]
-                vecs_unpacked[i,j,:(en-st)] = vecs[st:en]
-    """
     
     # Precompute index arrays for batch assignment
     for (i, j), (start, end) in pair_loc.items():
