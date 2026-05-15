@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
 Minimal working example: 
-comparing low-rank continuation with and without amplitude relaxation after eigenvalue truncation.
+comparing low-rank continuation with and without amplitude 
+relaxation after Hamiltonian error truncation for CAS states.
+
+Truncation is based on relaxed amplitude Hamiltonian error (relax_after=False).
 
 Workflow:
 1) Build CASCI training data at a few H-chain geometries.
 2) Build both full and low-rank continuation models.
 3) Predict state energies at a test geometry.
 4) Compare against a direct CASCI reference.
+
+Author: Kemal Atalar
 """
 
 import numpy as np

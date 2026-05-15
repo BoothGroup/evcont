@@ -6,9 +6,11 @@ after Hamiltonian error truncation.
 
 Workflow:
 1) Build FCI training data at a few H-chain geometries.
-2) Build both full and low-rank continuation models.
+2) Build both full, low-rank and low-rank with amplitude relaxation continuation models.
 3) Predict state energies at a test geometry.
 4) Compare against a direct FCI reference.
+
+Author: Kemal Atalar
 """
 
 import numpy as np
@@ -59,13 +61,14 @@ lowrank_kwargs = {
     "relax_amp": False,
 }
 
+# With relaxation
 lowrank_relax_kwargs = {
     "truncation_style": "ham",
     "ham_thr": 1e-3,
     "save_diag": True,
     "Jdiag_only": True,
     "relax_amp": True,
-    "opt_no_diag": True,
+    "opt_no_diag": True, # Remove diagonals from optimization since save_diag=True (default is True if save_diag=True)
 }
 
 # Low-rank and full models for side-by-side comparison.

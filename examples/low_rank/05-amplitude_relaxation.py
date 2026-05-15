@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
 Minimal working example: 
-comparing low-rank continuation with and without amplitude relaxation after eigenvalue truncation.
+comparing low-rank continuation with and without amplitude 
+relaxation after eigenvalue truncation.
 
 Workflow:
 1) Build FCI training data at a few H-chain geometries.
-2) Build both full and low-rank continuation models.
+2) Build both full, low-rank and low-rank with amplitude relaxation continuation models.
 3) Predict state energies at a test geometry.
 4) Compare against a direct FCI reference.
+
+Author: Kemal Atalar
 """
 
 import numpy as np
@@ -59,6 +62,7 @@ lowrank_kwargs = {
     "opt_no_diag": False,
 }
 
+# With amplitude relaxation after eigenvalue truncation.
 lowrank_relax_kwargs = {
     "truncation_style": "eigval",
     "eval_thr": 1e-1,

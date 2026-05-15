@@ -8,6 +8,8 @@ Workflow:
 2) Build both full and low-rank continuation models.
 3) Predict state energies at a test geometry.
 4) Compare against a direct FCI reference.
+
+Author: Kemal Atalar
 """
 
 import numpy as np

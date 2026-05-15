@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
 Minimal working example: low-rank continuation of CAS states.
-- eigenvalue truncation of joint/SVD decomposition
+- eigenvalue truncation of joint decomposition
 
 This script demonstrates the smallest end-to-end workflow:
 1) Build CAS training data at a few H-chain geometries.
 2) Build both full and low-rank continuation models.
 3) Predict state energies at a test geometry.
 4) Compare against a direct CASCI reference.
+
+Author: Kemal Atalar
 """
 
 import numpy as np

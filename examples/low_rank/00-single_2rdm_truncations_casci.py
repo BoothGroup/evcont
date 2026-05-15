@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Example: single CASCI 2RDM with two truncation styles.
+Example: single CASCI 2RDM compression with two truncation styles.
 
 This script compares:
-1) eigval truncation (eval_thr=1e-4)
+1) eigval truncation (eval_thr=1e-12)
 2) ham truncation (ham_thr=1e-5 Ha)
 
 Both are run without diagonal correction.
+
+Author: Kemal Atalar
 """
 
 import numpy as np
@@ -15,8 +17,6 @@ from pyscf import gto, mcscf, scf
 from evcont.electron_integral_utils import get_basis, get_integrals
 from evcont.logging_utils import logger as evcont_logger
 from evcont.low_rank_utils import reduce_2rdm, reconstruct_rdm2_joint
-
-
 # Keep example output focused on comparison lines.
 evcont_logger.disabled = True
 
@@ -32,7 +32,7 @@ mol = gto.M(
     H -0.513360 -0.889165 -0.363000
     H -0.513360  0.889165 -0.363000
     """,
-    basis="6-31g",
+    basis="cc-pvdz",
     unit="Angstrom",
     symmetry=False,
     verbose=0,
@@ -88,9 +88,7 @@ rdm2 = np.einsum(
 h1, h2 = get_integrals(mol, basis_oao)
 e_ref = np.einsum("pq,pq->", h1, rdm1) + 0.5 * np.einsum("pqrs,pqrs->", h2, rdm2)
 
-print(f"CASCI electronic energy:         {e_casci_elec:+.10f} Ha")
-#print(f"Electronic energy from OAO RDMs: {e_ref:+.10f} Ha")
-#print(f"Consistency check |dE|:          {abs(e_ref - e_casci_elec):.2e} Ha  (should be ~0)")
+print(f"CAS({nelecas},{ncas})CI electronic energy:         {e_casci_elec:+.10f} Ha")
 print()
 
 ovlp = 1.0
@@ -99,13 +97,13 @@ ovlp = 1.0
 # 4) Compare eigval vs ham, both without diagonal correction
 # -----------------------------------------------------------------------
 
-print("Truncation style: eigval (eval_thr=1e-4), no diagonal correction")
+print("Truncation style: eigval (eval_thr=1e-12), no diagonal correction")
 lowrank_vecs, diagonals, joint = reduce_2rdm(
     rdm1,
     rdm2,
     ovlp,
     truncation_style="eigval",
-    eval_thr=1e-4,
+    eval_thr=1e-12,
     save_diag=False,
     Jdiag_only=True,
     mol=mol,
@@ -114,7 +112,7 @@ lowrank_vecs, diagonals, joint = reduce_2rdm(
 rdm2_rec = reconstruct_rdm2_joint(lowrank_vecs, diagonals=diagonals, joint=joint)
 e_rec = np.einsum("pq,pq->", h1, rdm1) + 0.5 * np.einsum("pqrs,pqrs->", h2, rdm2_rec)
 print(
-    f"  rank = {len(lowrank_vecs[0])},"
+    f"  rank = {len(lowrank_vecs[0])} / {rdm2.shape[0]**2},"
     f"  ||dRDM2|| = {np.linalg.norm(rdm2_rec - rdm2):.4e},"
     f"  |dE| = {abs(e_rec - e_ref):.4e} Ha"
 )
@@ -135,7 +133,7 @@ lowrank_vecs, diagonals, joint = reduce_2rdm(
 rdm2_rec = reconstruct_rdm2_joint(lowrank_vecs, diagonals=diagonals, joint=joint)
 e_rec = np.einsum("pq,pq->", h1, rdm1) + 0.5 * np.einsum("pqrs,pqrs->", h2, rdm2_rec)
 print(
-    f"  rank = {len(lowrank_vecs[0])},"
+    f"  rank = {len(lowrank_vecs[0])} / {rdm2.shape[0]**2},"
     f"  ||dRDM2|| = {np.linalg.norm(rdm2_rec - rdm2):.4e},"
     f"  |dE| = {abs(e_rec - e_ref):.4e} Ha"
 )

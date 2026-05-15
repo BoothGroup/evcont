@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
-Minimal working example: 
-low-rank continuation with SVD compression in Coulomb grouping 
-in contrast to joint decomposition shown in earlier examples.
-(same script as 04-lowrank_NACs.py but with SVD-based low-rank representation)
+Minimal working example: low-rank continuation inference for NACs 
+with diagonal corrections.
 
 This script demonstrates an end-to-end workflow:
 1) Build CAS training data at a few H-chain geometries.
@@ -42,9 +40,9 @@ def pair_labels(nroots):
 
 
 # Problem setup kept intentionally small so this runs quickly.
-natom = 4
+natom = 8
 nroots = 3
-ncas = 2
+ncas = 4
 neleca = 2
 basis = "6-31g"
 df_basis = "cc-pvdz-ri" # Default is None - which reverts back to pyscf default
@@ -55,8 +53,11 @@ test_spacing = 1.5
 # Simple low-rank setting for demonstration.
 lowrank_kwargs = {
     "truncation_style": "eigval",
-    "eval_thr": 1e-12,
-    "save_diag": False,
+    "eval_thr": 1e-3,
+    "save_diag": True,
+    "Jdiag_only": True,
+    "use_svd": False, # Allow selection of SVD if more compact
+    "svd_weight": 2 # Weighting factor towards SVD vs joint decomposition
 }
 
 # Low-rank and full models for side-by-side comparison.
@@ -66,8 +67,6 @@ cont_lr = CAS_EVCont_obj(
     nroots=nroots,
     solver="CASCI",
     lowrank=True,
-    use_svd=True, # Turn on SVD
-    svd_weight=1e10, # Weigh so each RDM is decmoposed with SVD (can have a mixed representation as well with a lower weight)
     **lowrank_kwargs,
 )
 cont_full = CAS_EVCont_obj(
@@ -110,7 +109,7 @@ _, e_lr, g_lr, nac_lr, _ = get_lowrank_en_with_grad_and_NAC(
     cont_lr.overlap,
     cont_lr.lowrank_vectorized,
     diagonals=cont_lr.diagonal_vectorized,
-    Jdiag_only=True,
+    Jdiag_only=lowrank_kwargs["Jdiag_only"],
     sao_diag=False,
     df_basis=df_basis,
     nroots=nroots,

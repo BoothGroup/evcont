@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Example: single CCSD 2RDM with Hamiltonian-threshold truncation.
+Example: single CCSD 2RDM compression with Hamiltonian-error threshold truncation.
 
 This script compares three diagonal-correction choices:
 1) no diagonal correction
 2) diagonal J correction
 3) diagonal J+K correction
+
+Author: Kemal Atalar
 """
 
 import numpy as np
@@ -14,14 +16,12 @@ from pyscf import cc, gto, scf
 from evcont.electron_integral_utils import get_basis, get_integrals
 from evcont.logging_utils import logger as evcont_logger
 from evcont.low_rank_utils import reduce_2rdm, reconstruct_rdm2_joint
-
+# Keep example output focused on the comparison lines below.
+evcont_logger.disabled = True
 
 # -----------------------------------------------------------------------
 # 1) Build molecule and run RHF + CCSD
 # -----------------------------------------------------------------------
-
-# Keep example output focused on the comparison lines below.
-evcont_logger.disabled = True
 
 mol = gto.M(
     atom="""
@@ -31,7 +31,7 @@ mol = gto.M(
     H -0.513360 -0.889165 -0.363000
     H -0.513360  0.889165 -0.363000
     """,
-    basis="sto-3g",
+    basis="cc-pvdz",
     unit="Angstrom",
     symmetry=False,
     verbose=0,
@@ -107,7 +107,7 @@ e_rec = (
     + 0.5 * np.einsum('pqrs,pqrs->', h2, rdm2_rec)
 )
 print(
-    f"  rank = {len(lowrank_vecs[0])},"
+    f"  rank = {len(lowrank_vecs[0])} / {rdm2.shape[0]**2},"
     f"  ||dRDM2|| = {np.linalg.norm(rdm2_rec - rdm2):.4e},"
     f"  |dE| = {abs(e_rec - e_ref):.4e} Ha"
 )
@@ -129,7 +129,7 @@ e_rec = (
     + 0.5 * np.einsum('pqrs,pqrs->', h2, rdm2_rec)
 )
 print(
-    f"  rank = {len(lowrank_vecs[0])},"
+    f"  rank = {len(lowrank_vecs[0])} / {rdm2.shape[0]**2},"
     f"  ||dRDM2|| = {np.linalg.norm(rdm2_rec - rdm2):.4e},"
     f"  |dE| = {abs(e_rec - e_ref):.4e} Ha"
 )
@@ -151,7 +151,7 @@ e_rec = (
     + 0.5 * np.einsum('pqrs,pqrs->', h2, rdm2_rec)
 )
 print(
-    f"  rank = {len(lowrank_vecs[0])},"
+    f"  rank = {len(lowrank_vecs[0])} / {rdm2.shape[0]**2},"
     f"  ||dRDM2|| = {np.linalg.norm(rdm2_rec - rdm2):.4e},"
     f"  |dE| = {abs(e_rec - e_ref):.4e} Ha"
 )

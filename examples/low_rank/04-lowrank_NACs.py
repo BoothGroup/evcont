@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-Minimal working example: low-rank continuation of CAS NAC vectors.
+Minimal working example: low-rank CAS continuation inference of 
+nonadiabatic coupling vectors and energy gradients.
 
 This script demonstrates an end-to-end workflow:
 1) Build CAS training data at a few H-chain geometries.
 2) Build both full and low-rank continuation models.
 3) Predict energies/gradients/NACs at a test geometry.
 4) Compare low-rank vs full continuation results.
+
+Author: Kemal Atalar
 """
 
 import numpy as np
@@ -17,7 +20,9 @@ from evcont.ab_initio_gradients_loewdin import (
     get_lowrank_en_with_grad_and_NAC,
     get_multistate_energy_with_grad_and_NAC,
 )
-
+# Keep example output focused on the comparison lines below.
+from evcont.logging_utils import logger as evcont_logger
+evcont_logger.disabled = True
 
 def build_h_chain(natom, spacing_bohr, basis="sto-3g"):
     """Create a linear hydrogen chain with fixed spacing in Bohr."""
@@ -101,8 +106,6 @@ _, e_lr, g_lr, nac_lr, _ = get_lowrank_en_with_grad_and_NAC(
     cont_lr.overlap,
     cont_lr.lowrank_vectorized,
     diagonals=cont_lr.diagonal_vectorized,
-    Jdiag_only=True,
-    sao_diag=False,
     df_basis=df_basis,
     nroots=nroots,
 )
@@ -154,3 +157,4 @@ for label in labels:
     )
 
 print("=" * 80)
+print("Note: Difference purely due to low-rank inference using density fitting")
