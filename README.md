@@ -34,8 +34,9 @@ The [nx-interface](./nx-interface/) folder contains the driver script used to ca
 
 ## Code
 
-This repository is merely a collection of utility functions and scripts for the eigenvector continuation (in particular, interfacing different codes).
-The [evcont](./evcont) folder contains common helper functions and bundles the main utilities (which can be installed).
+This repository is a collection of utility functions and scripts for the eigenvector continuation (in particular, interfacing different codes).
+
+The [evcont](./evcont) folder contains various classes for training with different wavefunction solvers, common helper functions and bundles the main utilities (which can be installed).
 
 The [examples](./examples) folder contains example scripts for demonstrating the general functionality of the codebase.
 
@@ -52,7 +53,7 @@ The following scripts are included:
 
 
 ## Contact
-Questions? Feel free to contact us via [kemal.atalar@kcl.ac.uk](mailto:kemal.atalar@kcl.ac.uk) or [yannic.rath@npl.co.uk](mailto:yannic.rath@npl.co.uk).
+Questions? Feel free to contact us via [kemal.atalar@kcl.ac.uk](mailto:kemal.atalar@kcl.ac.uk), [yannic.rath@npl.co.uk](mailto:yannic.rath@npl.co.uk) or [george.booth@kcl.ac.uk](mailto:george.booth@kcl.ac.uk).
 
 ## Manuscripts
 [1] Rath, Y., & Booth, G. H. (2025). Interpolating numerically exact many-body wave functions for accelerated molecular dynamics. *Nature Communications*, 16(1), 2005.
