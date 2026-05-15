@@ -3,9 +3,9 @@
 Minimal working example: CAS eigenvector continuation.
 
 Workflow:
-1) Build CASCI training data at a few H-chain geometries.
+1) Build CASSCF training data at a few H-chain geometries.
 2) Predict state energies at a test geometry via EVCont.
-3) Compare against a direct CASCI reference.
+3) Compare against a direct CASSCF reference.
 
 Author: Kemal Atalar
 """
@@ -23,18 +23,23 @@ def build_h_chain(natom, spacing_bohr, basis="sto-3g"):
     return gto.M(atom=atom, basis=basis, unit="Bohr", symmetry=False, verbose=0)
 
 
-def casci_reference_energies(mol, ncas, neleca, nroots):
-    """Direct CASCI reference energies (total energies, including E_nuc)."""
+def casscf_reference_energies(mol, ncas, neleca, nroots):
+    """Direct CASSCF reference energies (total energies, including E_nuc)."""
     mf = scf.RHF(mol)
     mf.kernel()
     if not mf.converged:
         raise RuntimeError("RHF did not converge for reference calculation.")
 
-    mc = mcscf.CASCI(mf, ncas, neleca)
-    mc.fcisolver.nroots = nroots
+    mc = mcscf.CASSCF(mf, ncas, neleca)
+    # Optimize a common orbital set for all roots.
+    weights = [1.0 / nroots] * nroots
+    mc = mc.state_average_(weights)
     mc.kernel()
 
-    return np.array(mc.e_tot, dtype=float)
+    if nroots == 1:
+        return np.array([mc.e_tot], dtype=float)
+
+    return np.array(mc.e_states, dtype=float)
 
 
 # Problem setup kept intentionally small so this runs quickly.
@@ -65,16 +70,16 @@ e_cont, _ = approximate_multistate_OAO(
     nroots=nroots,
 )
 
-e_ref = casci_reference_energies(test_mol, ncas=ncas, neleca=neleca, nroots=nroots)
+e_ref = casscf_reference_energies(test_mol, ncas=ncas, neleca=neleca, nroots=nroots)
 
 print("=" * 60)
-print("Minimal CASCI Eigenvector Continuation Example")
+print("Minimal CASSCF Eigenvector Continuation Example")
 print("=" * 60)
 print(f"System: H{natom}, basis={basis}, CAS({ncas}, {neleca}), nroots={nroots}")
 print(f"Training spacings (Bohr): {train_spacings}")
 print(f"Test spacing (Bohr):      {test_spacing}")
 print("-" * 60)
-print("state    CASCI ref (Ha)    EVCont (Ha)    Error (mHa)")
+print("state    CASSCF ref (Ha)    EVCont (Ha)    Error (mHa)")
 print("-" * 60)
 
 for i in range(nroots):

@@ -214,7 +214,7 @@ def read_input_file(filename='evcont.in'):
         if user_inputs['ncas'] is None:
             missing.append('ncas')
         if user_inputs['nelec'] is None:
-            missing.append('ncas')
+            missing.append('nelec')
 
     if missing:
         raise ValueError(f"Missing required input(s): {', '.join(missing)}")
