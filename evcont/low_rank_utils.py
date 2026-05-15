@@ -171,6 +171,7 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
         print('Warning: 2RDM was not Hermitian.')
         # Hermitise
         rdm2 = 0.5 * (rdm2 + np.einsum('...abcd->...cdab',rdm2.conj()))
+        mat_decomp = rdm2
 
     # Matrix to decompose in the joint decomposition
     # Refactor the 2(t)RDM such that its eigenvectors solely correponds to Coulomb grouping

@@ -1403,7 +1403,8 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
                                      density_fit=True, df_basis=None,
                                      ao_mo_trafo=None, ao_mo_trafo_grad=None,
                                      df_response=False,
-                                     hermitian=True,):
+                                     hermitian=True,
+                                     lindep=1e-6):
     """
     Construct subspace Hamiltonian using the low-rank decomposition of 
     2-transition-cumulant
@@ -1541,7 +1542,7 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
             subspace_h[np.triu_indices(ntrain)] = subspace_h.T[np.triu_indices(ntrain)].conj()
 
         # Diagonalize
-        en, vec = solve_subspace(subspace_h, S, hermitian=hermitian, nroots=nroots)
+        en, vec = solve_subspace(subspace_h, S, hermitian=hermitian, nroots=nroots, lindep=lindep)
         fix_gauge(vec)
 
     ######################################################
