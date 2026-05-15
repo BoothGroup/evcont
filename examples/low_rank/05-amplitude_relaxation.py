@@ -126,7 +126,7 @@ e_full, _ = approximate_multistate_OAO(
 e_ref = fci_reference_energies(test_mol, nroots=nroots)
 
 print("=" * 72)
-print("Minimal FCI Low-Rank Continuation Example (Hamiltonian Threshold)")
+print("Minimal FCI Low-Rank Continuation Example (Eigenvalue Truncation)")
 print("=" * 72)
 print(f"System: H{natom}, basis={basis}, nroots={nroots}")
 print(f"Training spacings (Bohr): {train_spacings}")

@@ -361,7 +361,7 @@ def converge_NAMD_traj(
     
     # Set Newton-X path
     if nx_path is not None:
-        os.system('export NX={}'.format(nx_path))
+        os.environ['NX'] = nx_path
 
     # Check if it is a restart calculation or a new calculation
     existing_ind = [int(i.split('_')[-1].split('.')[0]) for i in glob.glob('ham_dist*')]
