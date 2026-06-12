@@ -31,9 +31,10 @@ def casscf_reference_energies(mol, ncas, neleca, nroots):
         raise RuntimeError("RHF did not converge for reference calculation.")
 
     mc = mcscf.CASSCF(mf, ncas, neleca)
-    # Optimize a common orbital set for all roots.
-    weights = [1.0 / nroots] * nroots
-    mc = mc.state_average_(weights)
+    if nroots > 1:
+        # Optimize a common orbital set for all roots.
+        weights = [1.0 / nroots] * nroots
+        mc = mc.state_average_(weights)
     mc.kernel()
 
     if nroots == 1:
@@ -52,7 +53,7 @@ basis = "6-31g"
 train_spacings = [1.2, 1.8]
 test_spacing = 1.5
 
-cont = CAS_EVCont_obj(ncas, neleca, nroots=nroots, solver="SA-CASSCF")
+cont = CAS_EVCont_obj(ncas, neleca, nroots=nroots, solver="sa-casscf")
 
 # Build training set.
 for spacing in train_spacings:

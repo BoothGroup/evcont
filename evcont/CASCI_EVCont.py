@@ -126,7 +126,7 @@ class CAS_EVCont_obj:
             ncas (int): Number of CAS orbitals.
             neleca (int): Number of active space electrons.
             nroots (int): Number of states to be continued.
-            solver (object): CAS solver type.
+            solver (object): CAS solver type. Options: CASCI, SA-CASSCF, SS-CASSCF.
             software (str): Software backend to use ('pyscf' or 'quantel').
             quantel_path (str): Path to Quantel solution to continue from.
             solutions_to_reconverge (list): List of solutions to reconverge in the Quantel path.
@@ -168,10 +168,49 @@ class CAS_EVCont_obj:
         #self.casci_solver = casci_solver
         self.nroots = nroots
 
-        if solver in ['CASCI','SS-CASSCF','SA-CASSCF']:
+        # Checks and sets solver/software related attributes
+        self._input_checks(solver, software, nroots, quantel_path, solutions_to_reconverge)
+
+        # Use each determinant as a separate state
+        # EXPERIMENTAL: will turn into an input in the future
+        self.uncontracted = False
+
+        # Internal: Set flags for using add_state vs append_to_rdms
+        # (to prevent double addition into self.cascis or missing states in tRDMs)
+        self.use_rdm = None
+        
+        ### Initialize low-rank attributes
+        ### Initialize low-rank attributes
+        self.lowrank = lowrank
+        if lowrank:
+            #self.truncation_style = kwargs['truncation_style']
+            self.kwargs = kwargs
+            
+        # Diagonals of 2-cumulants ([nbra, nket, 3, norb, norb])
+        self.diagonal_lr = None 
+        # Low rank eigendecomposition of the rest of 2-rdm
+        # Old version: dictionary[(nbra, nket)] = (vals_trunc, vecs_trunc)
+        # New version: dictionary['vals': np.array([nbra, nket, nvec]),
+        #                         'vecs': np.array([nbra, nket, nvec, nao, nao])]
+        self.vecs_lowrank = {}
+
+        # Precomputation for OTF Hamiltonian
+        self.precompute = False
+        self.inv_OAO_all = []
+        self.mb_all = None
+        self.occ_strings_all = []
+
+    def _input_checks(self, solver, software, nroots, quantel_path, solutions_to_reconverge):
+        if solver in ['CASCI','SS-CASSCF','SA-CASSCF', 'casci','ss-casscf','sa-casscf']:
             self.solver = solver
+        elif solver in ['CASSCF', 'casscf']:
+            if nroots == 1:
+                self.solver = 'SS-CASSCF'
+            else:
+                print('Warning: Solver should specificy state-averaged vs state-specific. Defaulting to state-averaged solver.')
+                self.solver = 'SA-CASSCF'
         else:
-            print('Wrong solver in CAS_EVCont_obj')
+            print(f'Unknown solver "{solver}" in CAS_EVCont_obj')
             sys.exit()
 
         # Check for the software
@@ -189,35 +228,6 @@ class CAS_EVCont_obj:
             else:
                 print('Quantel package not found. Install Quantel or use pyscf as software backend.')
                 sys.exit()
-
-        # Use each determinant as a separate state
-        # EXPERIMENTAL: will turn into an input in the future
-        self.uncontracted = False
-
-        # Set flags for using add_state vs append_to_rdms
-        # (to prevent double addition into self.cascis or missing states in tRDMs)
-        self.use_rdm = None
-        
-        ### Initialize low-rank attributes
-        ### Initialize low-rank attributes
-        self.lowrank = lowrank
-        if lowrank:
-            #self.truncation_style = kwargs['truncation_style']
-            self.kwargs = kwargs
-            
-        # Diagonals of 2-cumulants ([nbra, nket, 3, norb, norb])
-        self.diagonal_lr = None 
-        # Low rank eigendecomposition of the rest of 2-cumulant
-        # Old version: dictionary[(nbra, nket)] = (vals_trunc, vecs_trunc)
-        # New version: dictionary['vals': np.array([nbra, nket, nvec]),
-        #                         'vecs': np.array([nbra, nket, nvec, nao, nao])]
-        self.vecs_lowrank = {}
-
-        # Precomputation for OTF Hamiltonian
-        self.precompute = False
-        self.inv_OAO_all = []
-        self.mb_all = None
-        self.occ_strings_all = []
 
     def vectorize_lowrank(self,hermitian=True):        
         vectorize_lowrank(self,hermitian=hermitian)
@@ -264,7 +274,9 @@ class CAS_EVCont_obj:
             #MPI.COMM_WORLD.Bcast(mf.mo_coeff)
             
             if self.solver == 'SA-CASSCF':
-                cas_sa = mcscf.CASSCF(mf, self.ncas, self.neleca).state_average_([1/self.nroots]*self.nroots)
+                cas_sa = mcscf.CASSCF(mf, self.ncas, self.neleca)
+                if self.nroots > 1:
+                    cas_sa = cas_sa.state_average_([1/self.nroots]*self.nroots)
                 cas_sa.kernel()
                 #mo_sacasscf = cas_sa.mo_coeff
                 assert cas_sa.converged
@@ -327,9 +339,13 @@ class CAS_EVCont_obj:
                     #casci_bra = mcscf.CASCI(mf, self.ncas, self.neleca).state_specific_(istate)
                     mo_coeff_bra = mc_casci.mo_coeff
                     mol_bra = mc_casci.mol
-                    ci_bra = mc_casci.ci[istate]
 
-                    e = mc_casci.e_tot[istate]
+                    if self.nroots > 1:
+                        ci_bra = mc_casci.ci[istate]
+                        e = mc_casci.e_tot[istate]
+                    else:
+                        ci_bra = mc_casci.ci
+                        e = mc_casci.e_tot
 
                     ncas = mc_casci.ncas
                     ncore = mc_casci.ncore
@@ -339,9 +355,12 @@ class CAS_EVCont_obj:
                     # casci_bra.casci(mo_sacasscf)
                     mo_coeff_bra = cas_sa.mo_coeff
                     mol_bra = cas_sa.mol
-                    ci_bra = cas_sa.ci[istate]
-
-                    e = cas_sa.e_states[istate]
+                    if self.nroots > 1:
+                        ci_bra = cas_sa.ci[istate]
+                        e = cas_sa.e_states[istate]
+                    else:
+                        ci_bra = cas_sa.ci
+                        e = cas_sa.e_tot
 
                     ncas = cas_sa.ncas
                     ncore = cas_sa.ncore

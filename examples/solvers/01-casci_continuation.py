@@ -34,12 +34,14 @@ def casci_reference_energies(mol, ncas, neleca, nroots):
     mc.fcisolver.nroots = nroots
     mc.kernel()
 
+    if nroots == 1:
+        return np.array([mc.e_tot], dtype=float)
     return np.array(mc.e_tot, dtype=float)
 
 
 # Problem setup kept intentionally small so this runs quickly.
 natom = 4
-nroots = 2
+nroots = 1
 ncas = 4
 neleca = 2
 basis = "6-31g"
