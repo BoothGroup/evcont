@@ -67,7 +67,7 @@ def get_trajectory(
     init_veloc=None,
     hermitian=True,
     trajectory_output=None,
-    energy_output=None,
+    data_output=None,
 ):
     """
     Helper function to compute an MD trajectory from eigenvector continuation with
@@ -114,7 +114,7 @@ def get_trajectory(
                 incore_anyway=True,
                 frames=frames,
                 trajectory_output=trajectory_output,
-                energy_output=energy_output,
+                data_output=data_output,
                 verbose=0,
             )
             myintegrator.run()
@@ -195,7 +195,7 @@ def converge_EVCont_MD(
             EVCont_obj.two_rdm,
             steps=steps,
             trajectory_output=trajectory_out,
-            energy_output=en_out,
+            data_output=en_out,
             dt=dt,
         )
 
@@ -245,7 +245,7 @@ def converge_EVCont_MD(
                 EVCont_obj.two_rdm,
                 steps=steps,
                 trajectory_output=trajectory_out,
-                energy_output=en_out,
+                data_output=en_out,
                 dt=dt,
             )
         else:
@@ -436,7 +436,7 @@ def converge_EVCont_MD(
             EVCont_obj.two_rdm,
             steps=steps,
             trajectory_output=trajectory_out,
-            energy_output=en_out,
+            data_output=en_out,
             dt=dt,
         )
 

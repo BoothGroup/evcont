@@ -1,7 +1,10 @@
 # EVCont
-This package bundles different scripts and tools for the application of the eigenvector continuation from few variational *ab initio* states, as presented in: Rath, Y., & Booth, G. H. (2025). Interpolating numerically exact many-body wave functions for accelerated molecular dynamics. *Nature Communications*, 16(1), 2005. [1]
+This package bundles different scripts and tools for the application of the eigenvector continuation from few variational *ab initio* states, as presented in: 
+Rath, Y., & Booth, G. H. (2025) [1]
+& Atalar, K., Rath, Y., Crespo-Otero, R. & Booth, G. H. (2024) [2]
 
-
+The codebase also includes low-rank compression protocols for two-body reduced density matrices and functionality to infer from compressed states, as described in:
+Atalar, K., Burton, H. G. A., Grüneis, A. & Booth, G. H. (2026) [3]
 
 ## Installation
 The project comes with a pyproject.toml.
@@ -18,14 +21,27 @@ Additional optional dependencies are not installed automatically and need to be 
 Optional dependencies include:
 - [block2](https://github.com/block-hczhai/block2-preview): required for the continuation from MPS
 - [pygnme](https://github.com/BoothGroup/pygnme/blob/master/README.md?plain=1): required for the continuation from CAS states
-- [dscribe](https://github.com/SINGROUP/dscribe): Required for GAP predictions
+- [quantel](https://github.com/hgaburton/quantel): for alternative state-specific CASSCF solutions 
+- [dscribe](https://github.com/SINGROUP/dscribe): Required for GAP predictions - as used in comparison scripts in [scripts](./scripts)
+
+The codebase is interfaced to:
+- [Newton-X](https://newtonx.org): for nonadiabatic molecular dynamics simulations 
+
+which require separate installations. 
+
+The [nx-interface](./nx-interface/) folder contains the driver script used to call this codebase within Newton-X workflows.
+
 
 ## Code
 
-This repository is merely a collection of utility functions and scripts for the eigenvector continuation (in particular, interfacing different codes).
-The [evcont](./evcont) folder contains common helper functions and bundles the main utilities (which can be installed).
+This repository is a collection of utility functions and scripts for the eigenvector continuation (in particular, interfacing different codes).
+
+The [evcont](./evcont) folder contains various classes for training with different wavefunction solvers, common helper functions and bundles the main utilities (which can be installed).
+
+The [examples](./examples) folder contains example scripts for demonstrating the general functionality of the codebase.
+
 The [scripts](./scripts) folder contains scripts generate the data from our manuscript [1].
-These should also serve as a good first point of entry into the general functionality of the codebase.
+They also serve as example workflows for the codebase.
 
 The following scripts are included:
  - [scripts/PES_H_chain/H6_PES/H6_continuation.py](./scripts/PES_H_chain/H6_PES/H6_continuation.py): Prediction of the PES for a 6-atom H chain from different training points as depicted in Fig. (1) of [1]
@@ -37,7 +53,11 @@ The following scripts are included:
 
 
 ## Contact
-Questions? Feel free to contact us via [yannic.rath@npl.co.uk](mailto:yannic.rath@npl.co.uk).
+Questions? Feel free to contact us via [kemal.atalar@kcl.ac.uk](mailto:kemal.atalar@kcl.ac.uk), [yannic.rath@npl.co.uk](mailto:yannic.rath@npl.co.uk) or [george.booth@kcl.ac.uk](mailto:george.booth@kcl.ac.uk).
 
-## Manuscript
+## Manuscripts
 [1] Rath, Y., & Booth, G. H. (2025). Interpolating numerically exact many-body wave functions for accelerated molecular dynamics. *Nature Communications*, 16(1), 2005.
+
+[2] Atalar, K., Rath, Y., Crespo-Otero, R. & Booth, G. H. (2024). Fast and accurate nonadiabatic molecular dynamics enabled through variational interpolation of correlated electron wavefunctions. *Faraday Discussions*, 254, 542-569.
+
+[3] Atalar, K., Burton, H. G. A., Grüneis, A. & Booth, G. H. (2026). Low-rank compression of two-electron reduced density matrices. [arXiv:2605.11253](https://arxiv.org/abs/2605.11253)
