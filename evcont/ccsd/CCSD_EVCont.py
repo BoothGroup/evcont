@@ -389,6 +389,8 @@ class CCSD_EVCont_obj:
         if nroots != 1:
             raise ValueError("CCSD continuation is currently implemented only for nroots=1")
         basis_kwargs = dict(self.abstract_basis_kwargs)
+        if self.abstract_basis_ref is not None:
+            basis_kwargs.setdefault("basis_ref", self.abstract_basis_ref)
         if self._basis_name == "split_procrustes":
             basis_kwargs.setdefault("basis_ref_mol", self.abstract_basis_ref_mol)
             basis_kwargs.setdefault("ref_mf", self.abstract_basis_ref_mf)

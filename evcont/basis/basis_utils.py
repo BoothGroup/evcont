@@ -3,7 +3,7 @@
 The continuation code stores transition RDMs in an abstract orthonormal AO
 basis so they can be evaluated at other geometries.  Historically that basis
 was the symmetric AO (SAO/OAO) Lowdin basis.  This module keeps SAO as the
-default and adds meta-Lowdin and split-Procrustes alternatives.
+default and adds meta-Lowdin, split-Procrustes, and least-change alternatives.
 """
 
 from __future__ import annotations
@@ -15,6 +15,12 @@ from dataclasses import dataclass
 import numpy as np
 from pyscf import gto, lo, scf
 
+from evcont.basis.least_change_orbitals import (
+    construct_least_change_orbitals,
+    prepare_atom_coordinate_anchor,
+    prepare_frozen_mo_anchor,
+)
+
 
 SAO_ALIASES = {"sao", "oao", "lowdin"}
 META_LOWDIN_ALIASES = {"meta_lowdin", "meta-lowdin", "metalowdin"}
@@ -23,6 +29,25 @@ SPLIT_PROCRUSTES_ALIASES = {
     "canonical_split_procrustes",
     "canonical_split_procrustes_none",
     "canonical_split_procrustes_none_isolated",
+}
+LEAST_CHANGE_ALIASES = {
+    "least_change",
+    "least_change_atom_coordinate",
+    "least_change_atom_coordinates",
+    "least_change_atom_template",
+    "least_change_global_atom_coordinate",
+    "least_change_global_atom_coordinates",
+}
+LEAST_CHANGE_FROZEN_MO_ALIASES = {
+    "least_change_frozen_mo",
+    "least_change_frozen_mos",
+    "least_change_reference_mo",
+    "least_change_global_frozen_mo",
+}
+LEAST_CHANGE_LOCAL_ALIASES = {
+    "least_change_local",
+    "least_change_pointwise",
+    "least_change_meta_lowdin",
 }
 
 DEFAULT_RHF_CONV_TOL = 1.0e-12
@@ -52,6 +77,12 @@ def normalize_basis_type(basis_type: str) -> str:
         return "meta_lowdin"
     if key in SPLIT_PROCRUSTES_ALIASES:
         return "split_procrustes"
+    if key in LEAST_CHANGE_ALIASES:
+        return "least_change_atom_coordinate"
+    if key in LEAST_CHANGE_FROZEN_MO_ALIASES:
+        return "least_change_frozen_mo"
+    if key in LEAST_CHANGE_LOCAL_ALIASES:
+        return "least_change_local"
     if key in {"canonical", "split"}:
         return key
     return key
@@ -64,13 +95,20 @@ def is_abstract_basis(basis_type: str) -> bool:
         "SAO",
         "meta_lowdin",
         "split_procrustes",
+        "least_change_atom_coordinate",
+        "least_change_frozen_mo",
+        "least_change_local",
     }
 
 
 def basis_requires_reference(basis_type: str) -> bool:
     """Whether a basis needs a reference geometry/basis for smooth transfer."""
 
-    return normalize_basis_type(basis_type) == "split_procrustes"
+    return normalize_basis_type(basis_type) in {
+        "split_procrustes",
+        "least_change_atom_coordinate",
+        "least_change_frozen_mo",
+    }
 
 
 def get_loewdin_trafo(overlap_mat: np.ndarray, thresh: float = 1.0e-15) -> np.ndarray:
@@ -285,6 +323,101 @@ def split_procrustes_basis(
     return basis, info
 
 
+def _least_change_reference(
+    mol: gto.Mole,
+    basis_type: str,
+    mf_object: scf.hf.RHF | None = None,
+    **kwargs,
+) -> dict:
+    """Prepare fixed data for a reference-anchored least-change gauge."""
+
+    allowed = (
+        "density_fit",
+        "df_basis",
+        "conv_tol",
+        "conv_tol_grad",
+        "conv_tol_cpscf",
+        "max_cycle",
+    )
+    rhf_options = {key: kwargs[key] for key in allowed if key in kwargs}
+    mf = mf_object if mf_object is not None else _run_rhf(mol, **rhf_options)
+    common = {
+        "rank_tolerance": kwargs.get("least_change_rank_tolerance", 1.0e-10),
+        "verification_tolerance": kwargs.get(
+            "least_change_verification_tolerance", 1.0e-8
+        ),
+        "require_converged": kwargs.get("least_change_require_converged", True),
+    }
+    if normalize_basis_type(basis_type) == "least_change_atom_coordinate":
+        return prepare_atom_coordinate_anchor(
+            mol,
+            mf,
+            anchor=kwargs.get("least_change_anchor", "meta_lowdin"),
+            pre_orth_ao=kwargs.get("least_change_pre_orth_ao", "ANO"),
+            **common,
+        )
+    if normalize_basis_type(basis_type) == "least_change_frozen_mo":
+        return prepare_frozen_mo_anchor(mol, mf, **common)
+    raise ValueError(f"Basis {basis_type!r} does not use a least-change reference")
+
+
+def _least_change_basis(
+    mol: gto.Mole,
+    basis_type: str,
+    basis_ref=None,
+    mf_object: scf.hf.RHF | None = None,
+    *,
+    return_derivatives: bool = False,
+    cphf_max_cycle: int = 50,
+    cphf_level_shift: float = 0.0,
+    **kwargs,
+):
+    """Construct a local or reference-anchored least-change frame."""
+
+    allowed = (
+        "density_fit",
+        "df_basis",
+        "conv_tol",
+        "conv_tol_grad",
+        "conv_tol_cpscf",
+        "max_cycle",
+    )
+    rhf_options = {key: kwargs[key] for key in allowed if key in kwargs}
+    mf = mf_object if mf_object is not None else _run_rhf(mol, **rhf_options)
+    basis_name = normalize_basis_type(basis_type)
+    options = {
+        "rank_tolerance": kwargs.get("least_change_rank_tolerance", 1.0e-10),
+        "verification_tolerance": kwargs.get(
+            "least_change_verification_tolerance", 1.0e-8
+        ),
+        "require_converged": kwargs.get("least_change_require_converged", True),
+        "emit_warnings": kwargs.get("least_change_emit_warnings", True),
+        "return_derivatives": return_derivatives,
+        "cphf_max_cycle": cphf_max_cycle,
+        "cphf_level_shift": cphf_level_shift,
+    }
+    if basis_name in {"least_change_atom_coordinate", "least_change_frozen_mo"}:
+        if basis_ref is None:
+            basis_ref = _least_change_reference(
+                mol,
+                basis_name,
+                mf_object=mf,
+                **kwargs,
+            )
+        options.update(basis_ref)
+    elif basis_name == "least_change_local":
+        options.update(
+            anchor=kwargs.get("least_change_anchor", "meta_lowdin"),
+            pre_orth_ao=kwargs.get("least_change_pre_orth_ao", "ANO"),
+            anchor_occ_indices=tuple(range(mol.nelectron // 2)),
+            use_sap=kwargs.get("least_change_use_sap", False),
+        )
+    else:
+        raise ValueError(f"Unknown least-change basis_type: {basis_type}")
+
+    return construct_least_change_orbitals(mol, mf, **options)
+
+
 def get_basis_reference(
     mol: gto.Mole,
     basis_type: str = "SAO",
@@ -296,6 +429,13 @@ def get_basis_reference(
     basis_name = normalize_basis_type(basis_type)
     if basis_name == "split_procrustes":
         return split_procrustes_basis(mol, mf_object=mf_object, basis_ref=None, **kwargs)
+    if basis_name in {"least_change_atom_coordinate", "least_change_frozen_mo"}:
+        return _least_change_reference(
+            mol,
+            basis_type,
+            mf_object=mf_object,
+            **kwargs,
+        )
     return get_basis(mol, basis_type=basis_type, mf_object=mf_object, **kwargs)
 
 
@@ -325,7 +465,8 @@ def get_basis(
     """Construct an orthonormal AO-to-orbital coefficient matrix.
 
     Supported abstract transfer bases are ``"SAO"``/``"OAO"``,
-    ``"meta_lowdin"``/``"metalowdin"``, and ``"split_procrustes"``.
+    ``"meta_lowdin"``/``"metalowdin"``, ``"split_procrustes"``, and the
+    ``"least_change"`` family.
     ``"canonical"`` and ``"split"`` are retained as computational-basis
     choices for solvers.
     """
@@ -364,6 +505,21 @@ def get_basis(
             conv_tol_grad=conv_tol_grad,
             conv_tol_cpscf=conv_tol_cpscf,
             max_cycle=max_cycle,
+        )
+
+    elif basis_name.startswith("least_change_"):
+        basis = _least_change_basis(
+            mol,
+            basis_type,
+            basis_ref=basis_ref,
+            mf_object=mf_object,
+            density_fit=procrustes_density_fit,
+            df_basis=procrustes_df_basis,
+            conv_tol=conv_tol,
+            conv_tol_grad=conv_tol_grad,
+            conv_tol_cpscf=conv_tol_cpscf,
+            max_cycle=max_cycle,
+            **kwargs,
         )
 
     elif basis_name in {"canonical", "split"}:
@@ -411,6 +567,7 @@ def get_basis(
 def get_basis_with_derivative(
     mol: gto.Mole,
     basis_type: str = "SAO",
+    basis_ref=None,
     basis_ref_mol: gto.Mole | None = None,
     mf_object: scf.hf.RHF | None = None,
     ref_mf: scf.hf.RHF | None = None,
@@ -434,8 +591,8 @@ def get_basis_with_derivative(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return an abstract basis and its nuclear derivative.
 
-    Derivatives are implemented for ``SAO``/``OAO``, ``meta_lowdin``, and
-    ``split_procrustes``.
+    Derivatives are implemented for ``SAO``/``OAO``, ``meta_lowdin``,
+    ``split_procrustes``, and the ``least_change`` family.
     """
 
     basis_name = normalize_basis_type(basis_type)
@@ -508,6 +665,25 @@ def get_basis_with_derivative(
             conv_tol_grad=conv_tol_grad,
             conv_tol_cpscf=conv_tol_cpscf,
             max_cycle=max_cycle,
+        )
+        return basis, basis_grad.transpose(2, 3, 0, 1)
+
+    if basis_name.startswith("least_change_"):
+        basis, basis_grad = _least_change_basis(
+            mol,
+            basis_type,
+            basis_ref=basis_ref,
+            mf_object=mf_object,
+            return_derivatives=True,
+            cphf_max_cycle=cphf_max_cycle,
+            cphf_level_shift=cphf_level_shift,
+            density_fit=procrustes_density_fit,
+            df_basis=procrustes_df_basis,
+            conv_tol=conv_tol,
+            conv_tol_grad=conv_tol_grad,
+            conv_tol_cpscf=conv_tol_cpscf,
+            max_cycle=max_cycle,
+            **kwargs,
         )
         return basis, basis_grad.transpose(2, 3, 0, 1)
 
