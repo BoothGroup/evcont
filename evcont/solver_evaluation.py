@@ -51,7 +51,8 @@ class EVContEvaluationMixin:
         return options
 
     def _vectorized_lowrank(self, hermitian=True):
-        if getattr(self, "lowrank_vectorized", None) is None:
+        vectorized = getattr(self, "lowrank_vectorized", None)
+        if vectorized is None or vectorized.get("ntrain") != self.overlap.shape[0]:
             vectorize_lowrank(self, hermitian=hermitian)
         return self.lowrank_vectorized, getattr(self, "diagonal_vectorized", None)
 

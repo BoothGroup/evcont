@@ -1,148 +1,87 @@
-from pyscf import md, scf, lib, grad
-
-import numpy as np
-
-from evcont.ab_initio_gradients_loewdin import get_energy_with_grad
-
-from evcont.ab_initio_eigenvector_continuation import (
-    approximate_ground_state_abstract_basis,
-)
-
-from evcont.electron_integral_utils import get_basis, get_integrals
-
-from mpi4py import MPI
-
+from pathlib import Path
 import os
 
+import numpy as np
+from pyscf import lib, md
 from threadpoolctl import threadpool_limits
+
+from evcont.dynamics.active_learning import (
+    hamiltonian_similarity,
+    select_active_learning_geometry,
+)
+
+try:
+    from mpi4py import MPI
+except ImportError:
+    class _SerialComm:
+        rank = 0
+
+        def Get_rank(self):
+            return 0
+
+        def Get_size(self):
+            return 1
+
+        def Split_type(self, *_):
+            return self
+
+        def Bcast(self, *_args, **_kwargs):
+            return None
+
+        def bcast(self, value, root=0):
+            return value
+
+        def Barrier(self):
+            return None
+
+    class _SerialMPI:
+        COMM_WORLD = _SerialComm()
+        COMM_TYPE_SHARED = 0
+
+    MPI = _SerialMPI()
+
 
 rank = MPI.COMM_WORLD.Get_rank()
 
 
-def _get_evcont_basis_settings(EVCont_obj):
-    abstract_basis = getattr(EVCont_obj, "abstract_basis", "SAO")
-    basis_kwargs = dict(getattr(EVCont_obj, "abstract_basis_kwargs", {}) or {})
-    basis_ref = getattr(EVCont_obj, "abstract_basis_ref", None)
-    basis_ref_mol = getattr(EVCont_obj, "abstract_basis_ref_mol", None)
-    basis_ref_mf = getattr(EVCont_obj, "abstract_basis_ref_mf", None)
-    if basis_ref is not None:
-        basis_kwargs.setdefault("basis_ref", basis_ref)
-    if basis_ref_mol is not None:
-        basis_kwargs.setdefault("basis_ref_mol", basis_ref_mol)
-    if basis_ref_mf is not None:
-        basis_kwargs.setdefault("ref_mf", basis_ref_mf)
-    return abstract_basis, basis_kwargs
-
-
-def get_scanner(
-    mol,
-    one_rdm,
-    two_rdm,
-    overlap,
-    hermitian=True,
-    abstract_basis="SAO",
-    basis_kwargs=None,
-):
-    """
-    Returns a fake scanner object to compute MD trajectories with PySCF from
-    an eigenvector continuation.
-    """
+def get_scanner(mol, continuation):
+    """Return a PySCF gradient scanner backed by a continuation object."""
 
     class Base:
         converged = True
-        ovlp = overlap
-        one_trdm = one_rdm
-        two_trdm = two_rdm
-        predicted_one_rdm = None
-        predicted_two_rdm = None
 
     class Scanner(lib.GradScanner):
         def __init__(self):
             self.mol = mol
             self.base = Base()
-            # self.converged = True
 
         def __call__(self, mol):
             self.mol = mol
-            if one_rdm is not None and two_rdm is not None and overlap is not None:
-                en, grad, rdm_o, rdm_t = get_energy_with_grad(
-                    mol,
-                    one_rdm,
-                    two_rdm,
-                    overlap,
-                    hermitian=hermitian,
-                    return_density_matrices=True,
-                    abstract_basis=abstract_basis,
-                    basis_kwargs=basis_kwargs,
-                )
-                self.base.predicted_one_rdm = rdm_o
-                self.base.predicted_two_rdm = rdm_t
-                return en, grad
-            else:
-                return mol.energy_nuc(), grad.RHF(scf.RHF(mol)).grad_nuc()
+            energies, gradients = continuation.get_en_with_grad(mol, nroots=1)
+            return energies[0], gradients[0]
 
     return Scanner()
 
 
 def get_trajectory(
     init_mol,
-    overlap,
-    one_rdm,
-    two_rdm,
+    continuation,
     dt=10.0,
     steps=10,
     init_veloc=None,
-    hermitian=True,
-    abstract_basis="SAO",
-    basis_kwargs=None,
     trajectory_output=None,
     data_output=None,
 ):
-    """
-    Helper function to compute an MD trajectory from eigenvector continuation with
-    PySCF.
-
-    Args:
-        init_mol: The initial molecule.
-        overlap: The overlap matrix.
-        one_rdm: The one-particle t-RDM.
-        two_rdm: The two-particle t-RDM.
-        dt: Time step for the simulation. Default is 10.0.
-        steps: Number of simulation steps. Default is 10.
-        init_veloc: Initial velocities of the atoms. Default is None.
-        hermitian (bool, optional):
-            Whether problem is solved with eigh or with eig. Defaults to True.
-        trajectory_output: File to write the trajectory output. Default is None.
-        energy_output: File to write the energy output. Default is None.
-
-    Returns:
-        trajectory: The calculated trajectory as a numpy array.
-    """
-    trajectory = np.zeros((steps, len(init_mol.atom), 3))
-
-    # Compute max number of threads we could use for the non-mpi-parallel part
+    """Compute a ground-state MD trajectory from a continuation object."""
+    trajectory = np.zeros((steps, init_mol.natm, 3))
     num_threads = MPI.COMM_WORLD.Split_type(MPI.COMM_TYPE_SHARED).Get_size()
-
-    num_threads_outer = os.getenv("OMP_NUM_THREADS")
-
-    if num_threads_outer is not None:
-        num_threads *= int(num_threads_outer)
+    num_threads *= int(os.getenv("OMP_NUM_THREADS", "1"))
 
     if rank == 0:
         with threadpool_limits(limits=num_threads):
-            scanner_fun = get_scanner(
-                init_mol,
-                one_rdm,
-                two_rdm,
-                overlap,
-                hermitian=hermitian,
-                abstract_basis=abstract_basis,
-                basis_kwargs=basis_kwargs,
-            )
-
             frames = []
-            myintegrator = md.NVE(
-                scanner_fun,
+            integrator = md.NVE(
+                get_scanner(init_mol, continuation),
                 dt=dt,
                 steps=steps,
                 veloc=init_veloc,
@@ -152,12 +91,94 @@ def get_trajectory(
                 data_output=data_output,
                 verbose=0,
             )
-            myintegrator.run()
-            trajectory = np.array([frame.coord for frame in frames])
+            integrator.run()
+            trajectory = np.asarray([frame.coord for frame in frames])
 
-    MPI.COMM_WORLD.Bcast(trajectory, root=0)
-
+    trajectory = MPI.COMM_WORLD.bcast(trajectory, root=0)
     return trajectory
+
+
+def _checkpoint_path(iteration, model_dir):
+    return Path(model_dir) / f"continuation_object-{iteration}.pkl"
+
+
+def _latest_checkpoint(model_dir):
+    files = list(Path(model_dir).glob("continuation_object-*.pkl"))
+    if not files:
+        return None
+    return max(files, key=lambda path: int(path.stem.rsplit("-", 1)[1]))
+
+
+def _ground_energies(continuation, init_mol, trajectory):
+    return np.asarray([
+        continuation.get_en(
+            init_mol.copy().set_geom_(geometry), nroots=1
+        )[0][0]
+        for geometry in trajectory
+    ])
+
+
+def _trajectory_iteration(continuation, init_mol, iteration, steps, dt):
+    trajectory_file = Path(f"traj_EVCont_{iteration}.npy")
+    if trajectory_file.exists():
+        return np.load(trajectory_file)
+
+    trajectory_handle = energy_handle = None
+    if rank == 0:
+        trajectory_handle = open(f"traj_EVCont_{iteration}.xyz", "w")
+        energy_handle = open(f"ens_EVCont_{iteration}.xyz", "w")
+    try:
+        trajectory = get_trajectory(
+            init_mol.copy(),
+            continuation,
+            steps=steps,
+            dt=dt,
+            trajectory_output=trajectory_handle,
+            data_output=energy_handle,
+        )
+    finally:
+        if rank == 0:
+            trajectory_handle.close()
+            energy_handle.close()
+    if rank == 0:
+        np.save(trajectory_file, trajectory)
+    return trajectory
+
+
+def _trajectory_energies(iteration, trajectory):
+    if rank == 0:
+        data = np.atleast_2d(np.genfromtxt(f"ens_EVCont_{iteration}.xyz"))
+        energies = np.ascontiguousarray(data[:, 1])
+    else:
+        energies = np.zeros(len(trajectory))
+    return MPI.COMM_WORLD.bcast(energies, root=0)
+
+
+def _converged(iteration, threshold, nconv):
+    if iteration < nconv:
+        return False
+    errors = [
+        np.max(np.atleast_1d(np.loadtxt(f"en_diff_{i}.txt")))
+        for i in range(iteration - nconv + 1, iteration + 1)
+    ]
+    return all(error <= threshold for error in errors)
+
+
+def _prune(continuation, init_mol, trajectory, energies, checkpoint, threshold):
+    keep = np.ones(continuation.overlap.shape[0], dtype=bool)
+    if rank == 0:
+        for index in range(len(keep)):
+            trial_keep = keep.copy()
+            trial_keep[index] = False
+            if not np.any(trial_keep):
+                continue
+            trial = type(continuation).load(checkpoint)
+            trial.prune_datapoints(np.flatnonzero(trial_keep))
+            if np.all(abs(_ground_energies(trial, init_mol, trajectory) - energies) < threshold):
+                keep = trial_keep
+    keep = MPI.COMM_WORLD.bcast(keep, root=0)
+    continuation.prune_datapoints(np.flatnonzero(keep))
+    return keep
 
 
 def converge_EVCont_MD(
@@ -166,395 +187,102 @@ def converge_EVCont_MD(
     steps=100,
     dt=1,
     convergence_thresh=1.0e-3,
+    nconv=2,
+    max_iter=100,
     prune_irrelevant_data=False,
-    trn_times=[],
-    data_addition="farthest_point_ham",
+    data_addition="weighted_highest_peak_ham",
+    restart=True,
+    model_dir="iterative-models",
 ):
-    """
-    Helper function to converge the prediction of MD trajectories from EV continuation.
-    This includes the on-the-fly learning by iteratively adding data points from
-    previously generated trajectories. The function saves the trajectories, the
-    intermediate representations for the continuation, the times at which data points
-    were picked, as well as PES information to disk.
+    """Active-learn a ground-state MD trajectory with model checkpoints."""
+    model_dir = Path(model_dir)
+    if rank == 0:
+        model_dir.mkdir(parents=True, exist_ok=True)
+    MPI.COMM_WORLD.Barrier()
 
-
-    TODO: This needs to be cleaned up.
-
-    Args:
-        EVCont_obj: The data structure for the eigenvectrous continuation.
-        init_mol: The initial molecule object.
-        steps: Number of MD simulation steps. Default is 100.
-        dt: Time step for the simulation. Default is 1.
-        convergence_thresh:
-            Energy convergence threshold to terminate the training. Default is 1.0e-3.
-        prune_irrelevant_data (bool, optional):
-            Whether to prune data points not contributing to the PES.
-        trn_times (list, optional):
-            List of previous training times (as indices). Required to continue a
-            previous simulation.
-        data_addition:
-            Criterion for adding new data points. Can be "farthest_point_ham" (default),
-            in which case data is added based on electron integral difference,
-            "farthest_point", in which case data is added based on the farthest point
-            according to Euclidean distance, or "energy", in which case data is added
-            based on the energy difference.
-
-    Returns:
-        trajectory: The calculated trajectory as a numpy array.
-    """
-    abstract_basis, basis_kwargs = _get_evcont_basis_settings(EVCont_obj)
-    if len(trn_times) < 1:
-        i = 0
-        trn_times = [0]
-
+    checkpoint = _latest_checkpoint(model_dir) if restart else None
+    if checkpoint is None:
+        iteration = 0
         EVCont_obj.append_to_rdms(init_mol.copy())
-        abstract_basis, basis_kwargs = _get_evcont_basis_settings(EVCont_obj)
-
+        trn_geometries = np.asarray([init_mol.atom_coords()])
         if rank == 0:
-            if prune_irrelevant_data:
-                np.save("overlap_{}.npy".format(i), EVCont_obj.overlap)
-                np.save("one_rdm_{}.npy".format(i), EVCont_obj.one_rdm)
-                np.save("two_rdm_{}.npy".format(i), EVCont_obj.two_rdm)
-            else:
-                np.save("overlap.npy", EVCont_obj.overlap)
-                np.save("one_rdm.npy", EVCont_obj.one_rdm)
-                np.save("two_rdm.npy", EVCont_obj.two_rdm)
-            trajectory_out = open("traj_EVCont_{}.xyz".format(i), "w")
-            en_out = open("ens_EVCont_{}.xyz".format(i), "w")
-        else:
-            trajectory_out = None
-            en_out = None
-
-        trajectory = get_trajectory(
-            init_mol.copy(),
-            EVCont_obj.overlap,
-            EVCont_obj.one_rdm,
-            EVCont_obj.two_rdm,
-            steps=steps,
-            trajectory_output=trajectory_out,
-            data_output=en_out,
-            dt=dt,
-            abstract_basis=abstract_basis,
-            basis_kwargs=basis_kwargs,
-        )
-
-        if rank == 0:
-            trajectory_out.close()
-            en_out.close()
-            np.save("traj_EVCont_{}.npy".format(i), trajectory)
-
-            updated_ens = np.ascontiguousarray(
-                np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
-            )
-        else:
-            updated_ens = np.zeros(trajectory.shape[0])
-
-        MPI.COMM_WORLD.Bcast(updated_ens, root=0)
-        reference_ens = updated_ens[0]
-
-        converged = False
+            EVCont_obj.save(_checkpoint_path(iteration, model_dir))
+            np.save("trn_geometries.npy", trn_geometries)
+        MPI.COMM_WORLD.Barrier()
     else:
-        i = len(trn_times) - 1
+        iteration = int(checkpoint.stem.rsplit("-", 1)[1])
+        EVCont_obj = type(EVCont_obj).load(checkpoint)
+        trn_geometries = np.load("trn_geometries.npy")
 
-        traj_computed = os.path.exists("traj_EVCont_{}.npy".format(i))
-
-        if rank == 0:
-            if prune_irrelevant_data:
-                np.save("overlap_{}.npy".format(i), EVCont_obj.overlap)
-                np.save("one_rdm_{}.npy".format(i), EVCont_obj.one_rdm)
-                np.save("two_rdm_{}.npy".format(i), EVCont_obj.two_rdm)
-                np.savetxt("trn_times_{}.txt".format(i), np.array(trn_times))
-            else:
-                np.save("overlap.npy", EVCont_obj.overlap)
-                np.save("one_rdm.npy", EVCont_obj.one_rdm)
-                np.save("two_rdm.npy", EVCont_obj.two_rdm)
-                np.savetxt("trn_times.txt", np.array(trn_times))
-            if not traj_computed:
-                trajectory_out = open("traj_EVCont_{}.xyz".format(i), "w")
-                en_out = open("ens_EVCont_{}.xyz".format(i), "w")
-        else:
-            trajectory_out = None
-            en_out = None
-
-        if not traj_computed:
-            trajectory = get_trajectory(
-                init_mol.copy(),
-                EVCont_obj.overlap,
-                EVCont_obj.one_rdm,
-                EVCont_obj.two_rdm,
-                steps=steps,
-            trajectory_output=trajectory_out,
-            data_output=en_out,
-            dt=dt,
-            abstract_basis=abstract_basis,
-            basis_kwargs=basis_kwargs,
+    trajectory = None
+    while iteration < max_iter:
+        trajectory = _trajectory_iteration(
+            EVCont_obj, init_mol, iteration, steps, dt
         )
+        updated_ens = _trajectory_energies(iteration, trajectory)
+
+        if iteration == 0:
+            en_diff = np.full_like(updated_ens, np.inf)
         else:
-            trajectory = np.load("traj_EVCont_{}.npy".format(i))
+            previous = type(EVCont_obj).load(
+                _checkpoint_path(iteration - 1, model_dir)
+            )
+            reference_ens = _ground_energies(previous, init_mol, trajectory)
+            en_diff = abs(reference_ens - updated_ens)
 
         if rank == 0:
-            if not traj_computed:
-                trajectory_out.close()
-                en_out.close()
-                np.save("traj_EVCont_{}.npy".format(i), trajectory)
+            np.savetxt(f"en_diff_{iteration}.txt", en_diff)
+        MPI.COMM_WORLD.Barrier()
 
-            updated_ens = np.ascontiguousarray(
-                np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
+        if prune_irrelevant_data and len(trn_geometries) > 1:
+            keep = _prune(
+                EVCont_obj,
+                init_mol,
+                trajectory,
+                updated_ens,
+                _checkpoint_path(iteration, model_dir),
+                convergence_thresh,
             )
-
-            if i > 0:
-                reference_ens = np.array(
-                    [
-                        approximate_ground_state_abstract_basis(
-                            init_mol.copy().set_geom_(geometry),
-                            EVCont_obj.one_rdm[:-1, :-1],
-                            EVCont_obj.two_rdm[:-1, :-1],
-                            EVCont_obj.overlap[:-1, :-1],
-                            abstract_basis=abstract_basis,
-                            **basis_kwargs,
-                        )[0]
-                        for geometry in trajectory
-                    ]
-                )
-            else:
-                reference_ens = updated_ens[0]
-
-            if prune_irrelevant_data:
-                print("pruning irrelevant data points")
-                keep = np.ones(len(trn_times), dtype=bool)
-                for j in range(len(trn_times)):
-                    print(j)
-                    test_keep = keep.copy()
-                    test_keep[j] = False
-                    if np.sum(test_keep) >= 1:
-                        test_ids = np.ix_(test_keep, test_keep)
-
-                        reference_ens_datapoint_removed = np.array(
-                            [
-                                approximate_ground_state_abstract_basis(
-                                    init_mol.copy().set_geom_(geometry),
-                                    EVCont_obj.one_rdm[test_ids],
-                                    EVCont_obj.two_rdm[test_ids],
-                                    EVCont_obj.overlap[test_ids],
-                                    abstract_basis=abstract_basis,
-                                    **basis_kwargs,
-                                )[0]
-                                for geometry in trajectory
-                            ]
-                        )
-                        if np.all(
-                            abs(reference_ens_datapoint_removed - updated_ens)
-                            < convergence_thresh
-                        ):
-                            keep = test_keep
-                            print("removing data point {}".format(j))
-        else:
-            reference_ens = np.zeros_like(updated_ens)
-            if prune_irrelevant_data:
-                keep = np.ones(len(trn_times), dtype=bool)
-
-        MPI.COMM_WORLD.Bcast(updated_ens, root=0)
-        MPI.COMM_WORLD.Bcast(reference_ens, root=0)
-
-        if prune_irrelevant_data:
-            MPI.COMM_WORLD.Bcast(keep, root=0)
-            keep_ids = np.nonzero(keep)[0]
-            trn_times = [trn_times[j] for j in keep_ids]
-            EVCont_obj.prune_datapoints(keep_ids)
-
-        converged = False
-        if i >= 1:
-            en_diff = np.loadtxt("en_diff_{}.txt".format(i - 1))
-            if max(en_diff) <= convergence_thresh:
-                converged = True
-
-    while True:
-        en_diff = abs(reference_ens - updated_ens)
-        if rank == 0:
-            np.savetxt("en_diff_{}.txt".format(i), np.array(en_diff))
-        i += 1
-
-        if converged and max(en_diff) <= convergence_thresh:
-            break
-        if max(en_diff) <= convergence_thresh:
-            converged = True
-        else:
-            converged = False
-
-        if data_addition == "energy":
-            trn_time = np.argmax(en_diff)
-        elif data_addition == "farthest_point":
-            # Reconstruct training geometries
-            trajs = [
-                np.load("traj_EVCont_{}.npy".format(i)) for i in range(len(trn_times))
-            ]
-
-            trn_geometries = [trajs[0][0]] + [
-                trajs[k][trn_times[k + 1]] for k in range(len(trajs) - 1)
-            ]
-
-            # Farthest point selection
-            trn_time = np.argmax(
-                np.min(
-                    np.array(
-                        [
-                            np.sum(abs(trn_geom - trajectory) ** 2, axis=(-1, -2))
-                            for trn_geom in trn_geometries
-                        ]
-                    ),
-                    axis=0,
-                )
-            )
-        elif data_addition == "farthest_point_ham":
-            trn_time = 0
+            trn_geometries = trn_geometries[keep]
             if rank == 0:
-                # Reconstruct training geometries
-                trajs = [
-                    np.load("traj_EVCont_{}.npy".format(i))
-                    for i in range(len(trn_times))
-                ]
+                EVCont_obj.save(_checkpoint_path(iteration, model_dir))
+                np.save("trn_geometries.npy", trn_geometries)
+            MPI.COMM_WORLD.Barrier()
+        if iteration and _converged(
+            iteration, convergence_thresh, nconv
+        ):
+            break
+        if iteration + 1 >= max_iter:
+            break
 
-                trn_geometries = [trajs[0][0]] + [
-                    trajs[k][trn_times[k + 1]] for k in range(len(trajs) - 1)
-                ]
-
-                h1_trn = np.zeros((len(trn_geometries), init_mol.nao, init_mol.nao))
-                h2_trn = np.zeros(
-                    (
-                        len(trn_geometries),
-                        init_mol.nao,
-                        init_mol.nao,
-                        init_mol.nao,
-                        init_mol.nao,
-                    )
-                )
-                for j, trn_geom in enumerate(trn_geometries):
-                    mol = init_mol.copy().set_geom_(trn_geom)
-                    h1, h2 = get_integrals(
-                        mol,
-                        get_basis(mol, basis_type=abstract_basis, **basis_kwargs),
-                    )
-                    h1_trn[j] = h1
-                    h2_trn[j] = h2
-
-                farthest_point = None
-
-                for j, geometry in enumerate(trajectory):
-                    mol = init_mol.copy().set_geom_(geometry)
-                    h1, h2 = get_integrals(
-                        mol,
-                        get_basis(mol, basis_type=abstract_basis, **basis_kwargs),
-                    )
-
-                    distance = np.sum(
-                        abs(h1 - h1_trn) ** 2, axis=(-1, -2)
-                    ) + 0.5 * np.sum(abs(h2 - h2_trn) ** 2, axis=(-1, -2, -3, -4))
-                    min_dist = np.min(distance)
-                    if farthest_point is None or min_dist > farthest_point:
-                        farthest_point = min_dist
-                        trn_time = j
-            trn_time = MPI.COMM_WORLD.bcast(trn_time, root=0)
+        if data_addition.endswith("_ham"):
+            distances, _ = hamiltonian_similarity(
+                init_mol,
+                trajectory,
+                trn_geometries,
+                basis_getter=getattr(EVCont_obj, "get_abstract_basis", None),
+            )
         else:
-            assert False
+            distances = None
 
-        trn_geometry = trajectory[trn_time]
-        trn_times.append(trn_time)
-
-        EVCont_obj.append_to_rdms(init_mol.copy().set_geom_(trn_geometry))
-        abstract_basis, basis_kwargs = _get_evcont_basis_settings(EVCont_obj)
-
-        if rank == 0:
-            if prune_irrelevant_data:
-                np.save("overlap_{}.npy".format(i), EVCont_obj.overlap)
-                np.save("one_rdm_{}.npy".format(i), EVCont_obj.one_rdm)
-                np.save("two_rdm_{}.npy".format(i), EVCont_obj.two_rdm)
-                np.savetxt("trn_times_{}.txt".format(i), np.array(trn_times))
-            else:
-                np.save("overlap.npy", EVCont_obj.overlap)
-                np.save("one_rdm.npy", EVCont_obj.one_rdm)
-                np.save("two_rdm.npy", EVCont_obj.two_rdm)
-                np.savetxt("trn_times.txt", np.array(trn_times))
-
-            trajectory_out = open("traj_EVCont_{}.xyz".format(i), "w")
-            en_out = open("ens_EVCont_{}.xyz".format(i), "w")
-        else:
-            trajectory_out = None
-            en_out = None
-
-        trajectory = get_trajectory(
-            init_mol.copy(),
-            EVCont_obj.overlap,
-            EVCont_obj.one_rdm,
-            EVCont_obj.two_rdm,
-            steps=steps,
-            trajectory_output=trajectory_out,
-            data_output=en_out,
-            dt=dt,
-            abstract_basis=abstract_basis,
-            basis_kwargs=basis_kwargs,
+        trn_time = select_active_learning_geometry(
+            distances,
+            method=data_addition,
+            en_diff=en_diff,
+            convergence_thresh=convergence_thresh,
+            trajectory=trajectory,
+            trn_geometries=trn_geometries,
         )
+        new_geometry = trajectory[trn_time]
+        EVCont_obj.append_to_rdms(
+            init_mol.copy().set_geom_(new_geometry)
+        )
+        trn_geometries = np.concatenate((trn_geometries, [new_geometry]))
+        iteration += 1
 
         if rank == 0:
-            trajectory_out.close()
-            en_out.close()
-            np.save("traj_EVCont_{}.npy".format(i), trajectory)
+            EVCont_obj.save(_checkpoint_path(iteration, model_dir))
+            np.save("trn_geometries.npy", trn_geometries)
+        MPI.COMM_WORLD.Barrier()
 
-            reference_ens = np.array(
-                [
-                    approximate_ground_state_abstract_basis(
-                        init_mol.copy().set_geom_(geometry),
-                        EVCont_obj.one_rdm[:-1, :-1],
-                        EVCont_obj.two_rdm[:-1, :-1],
-                        EVCont_obj.overlap[:-1, :-1],
-                        abstract_basis=abstract_basis,
-                        **basis_kwargs,
-                    )[0]
-                    for geometry in trajectory
-                ]
-            )
-            updated_ens = np.ascontiguousarray(
-                np.genfromtxt("ens_EVCont_{}.xyz".format(i))[:, 1]
-            )
-
-            if prune_irrelevant_data:
-                print("pruning irrelevant data points")
-                keep = np.ones(len(trn_times), dtype=bool)
-                for j in range(len(trn_times)):
-                    print(j)
-                    test_keep = keep.copy()
-                    test_keep[j] = False
-                    if np.sum(test_keep) >= 1:
-                        test_ids = np.ix_(test_keep, test_keep)
-
-                        reference_ens_datapoint_removed = np.array(
-                            [
-                                approximate_ground_state_abstract_basis(
-                                    init_mol.copy().set_geom_(geometry),
-                                    EVCont_obj.one_rdm[test_ids],
-                                    EVCont_obj.two_rdm[test_ids],
-                                    EVCont_obj.overlap[test_ids],
-                                    abstract_basis=abstract_basis,
-                                    **basis_kwargs,
-                                )[0]
-                                for geometry in trajectory
-                            ]
-                        )
-                        if np.all(
-                            abs(reference_ens_datapoint_removed - updated_ens)
-                            < convergence_thresh
-                        ):
-                            keep = test_keep
-                            print("removing data point {}".format(j))
-        else:
-            reference_ens = np.zeros_like(updated_ens)
-            if prune_irrelevant_data:
-                keep = np.ones(len(trn_times), dtype=bool)
-
-        MPI.COMM_WORLD.Bcast(updated_ens, root=0)
-        MPI.COMM_WORLD.Bcast(reference_ens, root=0)
-
-        if prune_irrelevant_data:
-            MPI.COMM_WORLD.Bcast(keep, root=0)
-            keep_ids = np.nonzero(keep)[0]
-            trn_times = [trn_times[j] for j in keep_ids]
-            EVCont_obj.prune_datapoints(keep_ids)
+    return trajectory

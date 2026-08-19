@@ -15,9 +15,13 @@ import sys
 import subprocess
 import glob
 
-from scipy.signal import find_peaks
-
 from evcont.electron_integral_utils import get_integrals, get_basis
+from evcont.dynamics.active_learning import (
+    hamiltonian_distance,
+    hamiltonian_similarity,
+    hamiltonian_similarity_argmin,
+    select_active_learning_geometry,
+)
 
 ##############################################################################
 # NX I/O FUNCTIONS
@@ -832,7 +836,9 @@ def run_trajectory(traj_ind, inp_par, run_command, init_mol=None, trn_geometries
                         
                         # Compute distances for new geometries only
                         new_geoms = current_traj[prev_traj_length:current_length]
-                        new_distances = hamiltonian_similarity(init_mol, new_geoms, trn_geometries)
+                        new_distances, _ = hamiltonian_similarity(
+                            init_mol, new_geoms, trn_geometries
+                        )
                         hamiltonian_distances.extend(new_distances.tolist())
                         
                         # Save updated distances to file
@@ -861,7 +867,9 @@ def run_trajectory(traj_ind, inp_par, run_command, init_mol=None, trn_geometries
                 if final_length > prev_traj_length:
                     print(f"Computing final Hamiltonian distances (total: {final_length})...")
                     new_geoms = final_traj[prev_traj_length:final_length]
-                    new_distances = hamiltonian_similarity(init_mol, new_geoms, trn_geometries)
+                    new_distances, _ = hamiltonian_similarity(
+                        init_mol, new_geoms, trn_geometries
+                    )
                     hamiltonian_distances.extend(new_distances.tolist())
                     np.savetxt(hamdist_outfile, np.array(hamiltonian_distances))
                     print(f"  Final distances computed for geometries {prev_traj_length} to {final_length-1}")
@@ -894,211 +902,8 @@ def check_status():
     else:
         return 'Running'
     
-def select_active_learning_geometry(hamiltonian_distance_all, data_addition, en_diff=None, convergence_thresh=None, exponent=0.5):
-    """
-    Select which geometry to add to the training set based on the hamiltonian 
-    distance metric and specified data addition method.
-
-    Args:
-        hamiltonian_distance_all (ndarray):
-            Array of Hamiltonian distances for all geometries in the trajectory.
-        data_addition (str):
-            Criterion for adding new data points. Can be 
-                "farthest_point_ham": in which case geometry that is furthest away from the training set is added,
-                "first_peak_ham": in which case data is added based on the first peak in Hamiltonian distance,
-                "weighted_highest_peak_ham": in which case data is added based on a weighted peak selection in 
-                    Hamiltonian distance,
-                "variable_weight_peak_ham": in which case the exponent of the weighting function is varied 
-                    based on current convergence.
-        en_diff (ndarray):
-            Array of energy differences for all geometries between the two previous trajectory iterations.
-        convergence_thresh (float):
-            Energy convergence threshold to terminate the training.
-
-    Returns:
-        addgeom_ind (int):
-            Index of the geometry to be added to the training set.
-    """
-    # Disregards peaks with hamdist less than this threshold
-    # (make this a parameter later on, also depends on norb)
-    threshold = 0.01
-    
-    # Find the index of the geometry with maximum H_dist
-    addgeom_ind = np.argmax(hamiltonian_distance_all)
-    
-    # Find which new geometry to add to the training set
-    # Select the geometry that's the furtherst in hamiltonian distance
-    if data_addition == "farthest_point_ham":
-        
-        # Find the index of the geometry with maximum H_dist
-        addgeom_ind = np.argmax(hamiltonian_distance_all)
-
-    # Select the temporally first peak in the hamiltonian distance
-    elif data_addition == "first_peak_ham":
-
-        # If no peak is found, choose the index with largest ham distance
-        addgeom_ind = np.argmax(hamiltonian_distance_all)
-            
-        # Find all peaks
-        peaks = find_peaks(hamiltonian_distance_all)[0]
-        
-        # If peaks above a threshold exist, choose that over farthest
-        if len(peaks) > 0:
-            ind_above_thr = np.where(hamiltonian_distance_all[peaks] > threshold)
-            if len(ind_above_thr[0]) > 0:
-                addgeom_ind = peaks[ind_above_thr][0]
-            
-    elif data_addition in ["weighted_highest_peak_ham", "variable_weight_peak_ham"]:
-        # Exponent of the time penalty function 
-        # (0 - chooses max, -->inf chooses 1st peak)
-        if data_addition == "weighted_highest_peak_ham":
-            exponent = exponent
-        else:
-            # Variable exponent based on current convergence (still experimental)
-            scaling = 0.01
-            scaled_exp = scaling * en_diff.max()/convergence_thresh
-            exponent = min(max(scaled_exp, 0.), 5.) # Limit between 0 and 5
-
-        # If no peak is found, choose the index with largest ham distance
-        addgeom_ind = np.argmax(hamiltonian_distance_all)
-            
-        # Find all peaks
-        peaks = find_peaks(hamiltonian_distance_all)[0]
-        
-        # Add the max point to the peaks as a possible selection geometry
-        if addgeom_ind not in peaks:
-            peaks = np.append(peaks, addgeom_ind)
-            
-        # If peaks above a threshold exist, choose that over farthest
-        ind_above_thr = np.where((hamiltonian_distance_all[peaks] > threshold) & (peaks > 0)) 
-        
-        if len(ind_above_thr[0]) > 0:
-            # Peaks above threshold
-            peaks_above_thr = peaks[ind_above_thr]
-            
-            # penalty function ranging from 0 (favourable) to 1 (unfavourable)
-            penalty = (peaks_above_thr/len(hamiltonian_distance_all))**exponent
-            
-            step_weighted_hamdist = hamiltonian_distance_all[peaks_above_thr]/penalty
-            
-            addgeom_ind = peaks_above_thr[np.argmax(step_weighted_hamdist)]
-            
-    else:
-        print('The data_addition method {} is not implemented.'.format(data_addition))
-        sys.exit()
-
-    return addgeom_ind
-
-def hamiltonian_distance(oei1, tei1, oei2, tei2):
-    """
-    Calculate a distance metric between two sets of one-electron and two-electron integrals.
-    
-    Parameters:
-    oei1, tei1 : numpy.ndarray
-        One- and two-electron integrals for a geometry.
-    oei2, tei2 : numpy.ndarray
-        One- and two-electron integrals for a different geometry 
-        (can be an array for different geometries in which case an array of distances is returned).
-
-    Returns:
-    float
-        A scalar distance metric quantifying the difference between the two Hamiltonians.
-    """
-    nbasis = oei1.shape[-1]
-
-    N1 = nbasis**2        # number of 1e integral elements
-    N2 = nbasis**4        # number of 2e integral elements
-
-    distance = (
-        np.sum(abs(oei1 - oei2)**2, axis=(-1, -2)) / N1
-        + 0.5 * np.sum(abs(tei1 - tei2)**2, axis=(-1, -2, -3, -4)) / N2
-    )
-    # Rescale for the upcoming heuristics (e.g. peak detection, etc.)
-    return distance*1000
-
-def hamiltonian_similarity(init_mol, trajectory, trn_geometries):
-    """
-    Compute the minimum Hamiltonian distance of a trajectory to a set
-    of training geometries
-    """
-    # Initialize hamiltonians of the training set
-    h1_trn = np.zeros((len(trn_geometries), init_mol.nao, init_mol.nao))
-    h2_trn = np.zeros(
-        (
-            len(trn_geometries),
-            init_mol.nao,
-            init_mol.nao,
-            init_mol.nao,
-            init_mol.nao,
-        )
-    )
-    
-    # Compute 1- and 2-electron integrals for all training geometries
-    for j, trn_geom in enumerate(trn_geometries):
-        mol = init_mol.copy().set_geom_(trn_geom)
-        h1, h2 = get_integrals(mol, get_basis(mol))
-        h1_trn[j] = h1
-        h2_trn[j] = h2
-    
-    # Compute min Hamiltonian distance to the training geometries for the new traj
-    min_dist_l = []
-    for j, geometry in enumerate(trajectory):
-        mol = init_mol.copy().set_geom_(geometry)
-        h1, h2 = get_integrals(mol, get_basis(mol))
-
-        distance = hamiltonian_distance(h1, h2, h1_trn, h2_trn)
-        min_dist = np.min(distance)
-        min_dist_l += [min_dist]
-        
-    return np.array(min_dist_l)
-
-def hamiltonian_similarity_argmin(init_mol, trajectory, trn_geometries):
-    """
-    Compute the minimum Hamiltonian distance and the argmin training index
-    of a trajectory to a set of training geometries.
-
-    Returns:
-        min_distances (ndarray)
-        argmins (ndarray[int])
-    """
-    # Initialize hamiltonians of the training set
-    h1_trn = np.zeros((len(trn_geometries), init_mol.nao, init_mol.nao))
-    h2_trn = np.zeros(
-        (
-            len(trn_geometries),
-            init_mol.nao,
-            init_mol.nao,
-            init_mol.nao,
-            init_mol.nao,
-        )
-    )
-
-    # Compute 1- and 2-electron integrals for all training geometries
-    for j, trn_geom in enumerate(trn_geometries):
-        mol = init_mol.copy().set_geom_(trn_geom)
-        h1, h2 = get_integrals(mol, get_basis(mol))
-        h1_trn[j] = h1
-        h2_trn[j] = h2
-
-    # Compute min Hamiltonian distance and argmin training index
-    min_dist_l = []
-    argmin_l = []
-    for j, geometry in enumerate(trajectory):
-        mol = init_mol.copy().set_geom_(geometry)
-        h1, h2 = get_integrals(mol, get_basis(mol))
-
-        distance = hamiltonian_distance(h1, h2, h1_trn, h2_trn)
-        min_dist = np.min(distance)
-        min_dist_l.append(min_dist)
-        argmin_l.append(int(np.argmin(distance)))
-        
-    return np.array(min_dist_l), np.array(argmin_l, dtype=int)
-
-
 if __name__ == '__main__':
     print('yes')
-
-
 
 
 

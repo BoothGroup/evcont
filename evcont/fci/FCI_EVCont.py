@@ -17,8 +17,9 @@ from evcont.ab_initio_gradients_loewdin import get_loewdin_trafo
 
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank, unpack_vectorized_lowrank
 from evcont.solver_evaluation import EVContEvaluationMixin
+from evcont.solver_persistence import EVContPersistenceMixin
 
-class FCI_EVCont_obj(EVContEvaluationMixin):
+class FCI_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
     """
     FCI_EVCont_obj holds the data structure for the continuation from FCI states.
     """

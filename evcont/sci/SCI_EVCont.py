@@ -15,6 +15,7 @@ from evcont.electron_integral_utils import get_basis
 from evcont.basis.basis_utils import basis_requires_reference, get_basis_reference
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank, unpack_vectorized_lowrank
 from evcont.solver_evaluation import EVContEvaluationMixin
+from evcont.solver_persistence import EVContPersistenceMixin
 
 ## Helper functions for reading SHCI transition RDMs from postprocessing outputs.
 def read2RDM(fname):
@@ -94,7 +95,7 @@ def cache_transition_rdms(run_prefix_i, run_prefix_j, mol, nroots, run_i, run_j,
         os.chdir(prev_cwd)
 
 # Main selected CI continuation class.
-class SCI_EVCont_obj(EVContEvaluationMixin):
+class SCI_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
     """SCI continuation container that mirrors the FCI EVCont layout."""
 
     def __init__(

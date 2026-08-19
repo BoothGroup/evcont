@@ -6,6 +6,7 @@ from evcont.basis.basis_utils import basis_requires_reference, get_basis_referen
 
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
 from evcont.solver_evaluation import EVContEvaluationMixin
+from evcont.solver_persistence import EVContPersistenceMixin
 
 from pygnme import wick, utils
 
@@ -111,7 +112,7 @@ def owndata(x):
 #     return overlap_new, one_rdm_new, two_rdm_new
 
 
-class CAS_EVCont_obj(EVContEvaluationMixin):
+class CAS_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
     """
     CAS_EVCont_obj holds the data structure for the continuation from CAS states.
     """
@@ -1861,6 +1862,15 @@ class CAS_EVCont_obj(EVContEvaluationMixin):
             'solutions_to_reconverge': getattr(self, 'solutions_to_reconverge', None),
             'abstract_basis': self.abstract_basis,
             'abstract_basis_ref': self.abstract_basis_ref,
+            'abstract_basis_ref_mol': (
+                None
+                if self.abstract_basis_ref_mol is None
+                else {
+                    'atom': self.abstract_basis_ref_mol.atom,
+                    'basis': self.abstract_basis_ref_mol.basis,
+                    'unit': self.abstract_basis_ref_mol.unit,
+                }
+            ),
             'abstract_basis_kwargs': self.abstract_basis_kwargs,
             
             # RDM and overlap data
@@ -1919,6 +1929,15 @@ class CAS_EVCont_obj(EVContEvaluationMixin):
         solutions_to_reconverge = cas_data.get('solutions_to_reconverge', None)
         abstract_basis = cas_data.get('abstract_basis', 'SAO')
         abstract_basis_ref = cas_data.get('abstract_basis_ref', None)
+        abstract_basis_ref_mol_data = cas_data.get('abstract_basis_ref_mol')
+        abstract_basis_ref_mol = None
+        if abstract_basis_ref_mol_data is not None:
+            abstract_basis_ref_mol = gto.M(
+                atom=abstract_basis_ref_mol_data['atom'],
+                basis=abstract_basis_ref_mol_data['basis'],
+                unit=abstract_basis_ref_mol_data['unit'],
+                verbose=0,
+            )
         abstract_basis_kwargs = cas_data.get('abstract_basis_kwargs', None)
         
         if cas_data['lowrank']:
@@ -1933,6 +1952,7 @@ class CAS_EVCont_obj(EVContEvaluationMixin):
                 lowrank=True,
                 abstract_basis=abstract_basis,
                 abstract_basis_ref=abstract_basis_ref,
+                abstract_basis_ref_mol=abstract_basis_ref_mol,
                 abstract_basis_kwargs=abstract_basis_kwargs,
                 **cas_data['kwargs']
             )
@@ -1948,6 +1968,7 @@ class CAS_EVCont_obj(EVContEvaluationMixin):
                 lowrank=False,
                 abstract_basis=abstract_basis,
                 abstract_basis_ref=abstract_basis_ref,
+                abstract_basis_ref_mol=abstract_basis_ref_mol,
                 abstract_basis_kwargs=abstract_basis_kwargs,
             )
         
