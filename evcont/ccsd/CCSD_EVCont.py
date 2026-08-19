@@ -6,13 +6,13 @@ from pyscf import ao2mo, lib, scf
 
 from evcont.ccsd.RCCSD_rdm_mixed import make_rdm1_f, make_rdm2_f
 from evcont.ab_initio_eigenvector_continuation import approximate_multistate
-from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC
 from evcont.basis.basis_utils import (
     basis_requires_reference,
     get_basis_reference,
     normalize_basis_type,
 )
 from evcont.electron_integral_utils import get_basis
+from evcont.solver_evaluation import EVContEvaluationMixin
 
 
 def _run_rhf(
@@ -64,7 +64,7 @@ def _rdm_energy(mol, mf, mo_coeff, rdm1, rdm2):
     return float(np.real(e_elec + mol.energy_nuc()))
 
 
-class CCSD_EVCont_obj:
+class CCSD_EVCont_obj(EVContEvaluationMixin):
     """Ground-state RCCSD eigenvector-continuation container.
 
     The object follows the SCI continuation convention of storing a reference
@@ -386,21 +386,11 @@ class CCSD_EVCont_obj:
         return np.real(energies + mol.energy_nuc()), vec
 
     def get_energy_with_grad(self, mol, nroots=1, **kwargs):
+        """Compatibility alias for the original gradient-and-NAC evaluator."""
+        return self.get_en_with_grad_and_NAC(mol, nroots=nroots, **kwargs)
+
+    def _resolve_nroots(self, nroots):
+        nroots = super()._resolve_nroots(nroots)
         if nroots != 1:
             raise ValueError("CCSD continuation is currently implemented only for nroots=1")
-        basis_kwargs = dict(self.abstract_basis_kwargs)
-        if self.abstract_basis_ref is not None:
-            basis_kwargs.setdefault("basis_ref", self.abstract_basis_ref)
-        if self._basis_name == "split_procrustes":
-            basis_kwargs.setdefault("basis_ref_mol", self.abstract_basis_ref_mol)
-            basis_kwargs.setdefault("ref_mf", self.abstract_basis_ref_mf)
-        return get_multistate_energy_with_grad_and_NAC(
-            mol,
-            self.one_rdm,
-            self.two_rdm,
-            self.overlap,
-            nroots=1,
-            abstract_basis=self.abstract_basis,
-            basis_kwargs=basis_kwargs or None,
-            **kwargs,
-        )
+        return nroots

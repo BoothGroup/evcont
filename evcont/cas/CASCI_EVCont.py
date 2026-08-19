@@ -5,6 +5,7 @@ from evcont.electron_integral_utils import get_basis, get_integrals
 from evcont.basis.basis_utils import basis_requires_reference, get_basis_reference
 
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
+from evcont.solver_evaluation import EVContEvaluationMixin
 
 from pygnme import wick, utils
 
@@ -110,7 +111,7 @@ def owndata(x):
 #     return overlap_new, one_rdm_new, two_rdm_new
 
 
-class CAS_EVCont_obj:
+class CAS_EVCont_obj(EVContEvaluationMixin):
     """
     CAS_EVCont_obj holds the data structure for the continuation from CAS states.
     """

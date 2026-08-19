@@ -7,6 +7,7 @@ from evcont.basis.basis_utils import basis_requires_reference, get_basis_referen
 from evcont.dmrg.converge_dmrg import converge_dmrg
 
 from evcont.dmrg.MPS_orb_rotation import converge_orbital_rotation_mps
+from evcont.solver_evaluation import EVContEvaluationMixin
 
 from mpi4py import MPI
 
@@ -518,7 +519,7 @@ def append_to_rdms_orbital_rotation(
     return overlap_new, one_rdm_new, two_rdm_new
 
 
-class DMRG_EVCont_obj:
+class DMRG_EVCont_obj(EVContEvaluationMixin):
     """
     DMRG_EVCont_obj holds the data structure for the continuation from MPS (optimized
     with DMRG).
