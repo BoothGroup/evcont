@@ -7,7 +7,7 @@ import numpy as np
 from pyscf.data import nist
 
 
-from evcont.MD_utils import get_scanner
+from evcont.dynamics.MD_utils import get_scanner
 
 
 from evcont.ab_initio_eigenvector_continuation import (

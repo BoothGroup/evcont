@@ -26,8 +26,8 @@ from pathlib import Path
 # Checks for evcont and pyscf
 try:
    from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC, get_lowrank_en_with_grad_and_NAC
-   from evcont.FCI_NAC import get_FCI_energy_with_grad_and_NAC, get_FCI_energy_with_grad_and_NAC_withsym
-   from evcont.NAMD_utils import read_model
+   from evcont.tools.FCI_NAC import get_FCI_energy_with_grad_and_NAC, get_FCI_energy_with_grad_and_NAC_withsym
+   from evcont.dynamics.NAMD_utils import read_model
 except:
    print('Error in run-evcont-driver: evcont is not installed!')
    sys.exit()

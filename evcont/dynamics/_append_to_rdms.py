@@ -50,7 +50,7 @@ def main():
     try:
         # Import continuation object class based on type
         if cont_obj_type == 'CAS':
-            from evcont.CASCI_EVCont import CAS_EVCont_obj as CONT_OBJ_CLASS
+            from evcont.cas.CASCI_EVCont import CAS_EVCont_obj as CONT_OBJ_CLASS
         else:
             print(f"Error: Unsupported continuation object type: {cont_obj_type}")
             return 1

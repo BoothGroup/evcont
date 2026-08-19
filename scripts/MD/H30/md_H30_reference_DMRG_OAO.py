@@ -7,7 +7,7 @@ from evcont.ab_initio_gradients_loewdin import get_grad_elec_OAO
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 
-from evcont.converge_dmrg import converge_dmrg
+from evcont.dmrg.converge_dmrg import converge_dmrg
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 

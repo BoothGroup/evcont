@@ -3,10 +3,10 @@ import numpy as np
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 from evcont.electron_integral_utils import get_basis, get_integrals, transform_integrals
-from evcont.basis_utils import basis_requires_reference, get_basis_reference
-from evcont.converge_dmrg import converge_dmrg
+from evcont.basis.basis_utils import basis_requires_reference, get_basis_reference
+from evcont.dmrg.converge_dmrg import converge_dmrg
 
-from evcont.MPS_orb_rotation import converge_orbital_rotation_mps
+from evcont.dmrg.MPS_orb_rotation import converge_orbital_rotation_mps
 
 from mpi4py import MPI
 

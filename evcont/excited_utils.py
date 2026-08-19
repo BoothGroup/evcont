@@ -14,7 +14,7 @@ from pyscf import gto
 
 from pyscf.scf import hf
 
-from evcont.FCI_EVCont import FCI_EVCont_obj
+from evcont.fci.FCI_EVCont import FCI_EVCont_obj
 
 from evcont.ab_initio_eigenvector_continuation import approximate_multistate_OAO
 

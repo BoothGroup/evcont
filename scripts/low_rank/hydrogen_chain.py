@@ -14,8 +14,8 @@ import pickle
 
 from pyscf import gto, fci, scf, lib, ao2mo, mcscf, df
 
-from evcont.FCI_EVCont import FCI_EVCont_obj
-from evcont.CASCI_EVCont import CAS_EVCont_obj
+from evcont.fci.FCI_EVCont import FCI_EVCont_obj
+from evcont.cas.CASCI_EVCont import CAS_EVCont_obj
 
 from evcont.electron_integral_utils import get_basis, get_integrals, get_loewdin_trafo, get_df_integrals
 
@@ -33,7 +33,7 @@ from evcont.ab_initio_gradients_loewdin import (
     get_grad_elec_OAO_customERI
 )
 
-#from evcont.FCI_NAC import get_FCI_energy_with_grad_and_NAC_withsym
+#from evcont.tools.FCI_NAC import get_FCI_energy_with_grad_and_NAC_withsym
 #from pyscf.mcscf import CASCI
 #import pickle
 

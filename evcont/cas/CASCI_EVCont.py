@@ -2,7 +2,7 @@ import numpy as np
 import pickle
 
 from evcont.electron_integral_utils import get_basis, get_integrals
-from evcont.basis_utils import basis_requires_reference, get_basis_reference
+from evcont.basis.basis_utils import basis_requires_reference, get_basis_reference
 
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
 

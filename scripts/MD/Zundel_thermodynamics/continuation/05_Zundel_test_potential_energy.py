@@ -13,7 +13,7 @@ import sys
 
 from pyscf import cc, dft
 
-from evcont.converge_dmrg import converge_dmrg
+from evcont.dmrg.converge_dmrg import converge_dmrg
 
 """
 Evaluates tes energies for a specified test point from a trajectory specified by an

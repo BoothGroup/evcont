@@ -191,7 +191,7 @@ def split_procrustes_basis(
 
     ref_mol = basis_ref_mol
     if ref_mol is not None:
-        from evcont.split_procrustes_derivatives import split_procrustes_basis_none
+        from evcont.basis.split_procrustes_derivatives import split_procrustes_basis_none
 
         ref_density_fit = (
             procrustes_density_fit
@@ -204,7 +204,7 @@ def split_procrustes_basis(
             else procrustes_ref_df_basis
         )
         if ref_mf is None:
-            from evcont.split_procrustes_derivatives import run_rhf as run_procrustes_rhf
+            from evcont.basis.split_procrustes_derivatives import run_rhf as run_procrustes_rhf
 
             ref_mf = run_procrustes_rhf(
                 ref_mol,
@@ -453,7 +453,7 @@ def get_basis_with_derivative(
             raise ValueError(
                 "basis_ref_mol must be supplied for split_procrustes derivatives"
             )
-        from evcont.split_procrustes_derivatives import (
+        from evcont.basis.split_procrustes_derivatives import (
             run_rhf as run_procrustes_rhf,
             split_procrustes_basis_none,
             split_procrustes_basis_none_derivative,
@@ -514,7 +514,7 @@ def get_basis_with_derivative(
     if basis_name not in {"SAO", "meta_lowdin"}:
         raise NotImplementedError(f"Basis derivatives are not implemented for {basis_type!r}")
 
-    from evcont.localization_derivatives import orth_ao_derivative
+    from evcont.basis.localization_derivatives import orth_ao_derivative
 
     method = "lowdin" if basis_name == "SAO" else "meta_lowdin"
     pre_orth_ao = None if basis_name == "SAO" else _metalowdin_pre_orth_from_name(basis_type)

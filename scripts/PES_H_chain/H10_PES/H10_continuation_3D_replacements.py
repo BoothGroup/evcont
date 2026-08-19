@@ -6,7 +6,7 @@ import sys
 
 from evcont.ab_initio_gradients_loewdin import get_energy_with_grad
 
-from evcont.FCI_EVCont import FCI_EVCont_obj
+from evcont.fci.FCI_EVCont import FCI_EVCont_obj
 
 from pyscf.mcscf import CASCI
 

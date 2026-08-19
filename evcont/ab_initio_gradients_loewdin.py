@@ -1853,7 +1853,7 @@ if __name__ == '__main__':
     from pyscf import gto, fci
 
     from pyscf.fci.addons import fix_spin_
-    from evcont.FCI_EVCont import FCI_EVCont_obj
+    from evcont.fci.FCI_EVCont import FCI_EVCont_obj
     
     from pyscf.mcscf import CASCI
         

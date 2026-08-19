@@ -12,7 +12,7 @@ import PostProcessStates
 import shci
 
 from evcont.electron_integral_utils import get_basis
-from evcont.basis_utils import basis_requires_reference, get_basis_reference
+from evcont.basis.basis_utils import basis_requires_reference, get_basis_reference
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank, unpack_vectorized_lowrank
 
 ## Helper functions for reading SHCI transition RDMs from postprocessing outputs.

@@ -3,7 +3,7 @@ import sys
 import itertools
 
 from evcont.electron_integral_utils import get_basis, get_integrals
-from evcont.basis_utils import (
+from evcont.basis.basis_utils import (
     basis_requires_reference,
     get_basis_reference,
     normalize_basis_type,

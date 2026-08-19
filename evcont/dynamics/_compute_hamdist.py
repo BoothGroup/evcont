@@ -21,7 +21,7 @@ Operation:
   3. (Re)compute one- and two-electron integrals for training geometries unless
      cached arrays exist (<prefix>_h1.npy / <prefix>_h2.npy).
   4. Loop over trajectory geometries, compute integrals, evaluate minimum
-     Hamiltonian distance to training set (using evcont.NAMD_utils.hamiltonian_distance).
+     Hamiltonian distance to training set (using evcont.dynamics.NAMD_utils.hamiltonian_distance).
   5. Write distances to plain text file (np.savetxt).
 
 The script deliberately avoids modifying any continuation object; it is purely
@@ -42,7 +42,7 @@ import numpy as np
 
 from pyscf import gto
 from evcont.electron_integral_utils import get_integrals, get_basis
-from evcont.NAMD_utils import hamiltonian_distance
+from evcont.dynamics.NAMD_utils import hamiltonian_distance
 
 
 def build_molecule(geom_filename, basis):

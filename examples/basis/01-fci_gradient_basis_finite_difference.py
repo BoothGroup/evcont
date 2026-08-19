@@ -33,7 +33,7 @@ from pyscf import gto
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from evcont.FCI_EVCont import FCI_EVCont_obj
+from evcont.fci.FCI_EVCont import FCI_EVCont_obj
 from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad
 
 

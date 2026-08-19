@@ -3,8 +3,8 @@ from pyscf import gto
 import os
 import numpy as np
 
-from evcont.MD_utils import converge_EVCont_MD
-from evcont.CCSD_EVCont import CCSD_EVCont_obj
+from evcont.dynamics.MD_utils import converge_EVCont_MD
+from evcont.ccsd.CCSD_EVCont import CCSD_EVCont_obj
 
 
 """

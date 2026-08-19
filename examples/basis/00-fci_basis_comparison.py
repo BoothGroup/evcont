@@ -14,7 +14,7 @@ from pyscf import fci, gto
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from evcont.FCI_EVCont import FCI_EVCont_obj
+from evcont.fci.FCI_EVCont import FCI_EVCont_obj
 from evcont.ab_initio_eigenvector_continuation import approximate_multistate_OAO
 from evcont.electron_integral_utils import get_basis, get_integrals
 

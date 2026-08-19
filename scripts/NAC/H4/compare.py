@@ -12,7 +12,7 @@ import numpy as np
 
 from pyscf import gto, fci
 
-from evcont.FCI_EVCont import FCI_EVCont_obj
+from evcont.fci.FCI_EVCont import FCI_EVCont_obj
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 

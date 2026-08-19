@@ -675,7 +675,7 @@ def run_append_states(mol, cont_obj_path, newcont_obj_path, solver, run_append_c
     # Read in the appended continuation object
     if solver == 'CAS':
         try:
-            from evcont.CASCI_EVCont import CAS_EVCont_obj
+            from evcont.cas.CASCI_EVCont import CAS_EVCont_obj
             cont_obj = CAS_EVCont_obj.load(newcont_obj_path)
         except Exception as e:
             print(f"Error loading appended continuation object: {e}")

@@ -12,8 +12,8 @@ This script:
 import numpy as np
 from pyscf import fci, gto
 
-from evcont.FCI_EVCont import FCI_EVCont_obj
-from evcont.FCI_NAC import get_FCI_energy_with_grad_and_NAC
+from evcont.fci.FCI_EVCont import FCI_EVCont_obj
+from evcont.tools.FCI_NAC import get_FCI_energy_with_grad_and_NAC
 from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC
 
 

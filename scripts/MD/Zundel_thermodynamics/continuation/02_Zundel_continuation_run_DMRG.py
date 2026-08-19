@@ -8,7 +8,7 @@ import sys
 from evcont.electron_integral_utils import get_basis, get_integrals
 
 
-from evcont.converge_dmrg import converge_dmrg
+from evcont.dmrg.converge_dmrg import converge_dmrg
 
 
 from mpi4py import MPI

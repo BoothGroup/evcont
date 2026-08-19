@@ -21,10 +21,10 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(REPO_ROOT))
 
 from evcont.ab_initio_eigenvector_continuation import approximate_multistate
-from evcont.basis_utils import get_basis
+from evcont.basis.basis_utils import get_basis
 from evcont.electron_integral_utils import get_integrals
 from evcont.excited_utils import make_rdm1
-from evcont.split_procrustes_derivatives import run_rhf
+from evcont.basis.split_procrustes_derivatives import run_rhf
 
 
 TRAJECTORY_FILE = SCRIPT_DIR / "traj_EVCont_13.npy"

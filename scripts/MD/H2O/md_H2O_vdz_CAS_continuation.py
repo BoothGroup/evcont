@@ -3,9 +3,9 @@ from pyscf import gto
 
 import numpy as np
 
-from evcont.MD_utils import converge_EVCont_MD
+from evcont.dynamics.MD_utils import converge_EVCont_MD
 
-from evcont.CASCI_EVCont import CAS_EVCont_obj
+from evcont.cas.CASCI_EVCont import CAS_EVCont_obj
 
 
 from mpi4py import MPI

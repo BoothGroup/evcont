@@ -2,7 +2,7 @@ import numpy as np
 
 from pyscf import scf, ao2mo, df
 
-from evcont.basis_utils import (
+from evcont.basis.basis_utils import (
     basis_requires_reference,
     get_basis,
     get_basis_reference,

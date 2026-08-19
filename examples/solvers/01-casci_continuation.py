@@ -13,7 +13,7 @@ Author: Kemal Atalar
 import numpy as np
 from pyscf import gto, scf, mcscf
 
-from evcont.CASCI_EVCont import CAS_EVCont_obj
+from evcont.cas.CASCI_EVCont import CAS_EVCont_obj
 from evcont.ab_initio_eigenvector_continuation import approximate_multistate_OAO
 
 

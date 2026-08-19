@@ -17,7 +17,7 @@ Author: Kemal Atalar
 import numpy as np
 from pyscf import gto
 
-from evcont.CASCI_EVCont import CAS_EVCont_obj
+from evcont.cas.CASCI_EVCont import CAS_EVCont_obj
 from evcont.ab_initio_gradients_loewdin import (
     get_lowrank_en_with_grad_and_NAC,
     get_multistate_energy_with_grad_and_NAC,

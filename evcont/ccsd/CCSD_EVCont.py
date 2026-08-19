@@ -4,10 +4,10 @@ from ebcc import REBCC
 from ebcc.logging import NullLogger
 from pyscf import ao2mo, lib, scf
 
-from evcont.RCCSD_rdm_mixed import make_rdm1_f, make_rdm2_f
+from evcont.ccsd.RCCSD_rdm_mixed import make_rdm1_f, make_rdm2_f
 from evcont.ab_initio_eigenvector_continuation import approximate_multistate
 from evcont.ab_initio_gradients_loewdin import get_multistate_energy_with_grad_and_NAC
-from evcont.basis_utils import (
+from evcont.basis.basis_utils import (
     basis_requires_reference,
     get_basis_reference,
     normalize_basis_type,

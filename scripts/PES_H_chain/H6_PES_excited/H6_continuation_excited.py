@@ -4,7 +4,7 @@ import sys
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
-from evcont.FCI_EVCont import FCI_EVCont_obj
+from evcont.fci.FCI_EVCont import FCI_EVCont_obj
 
 from evcont.ab_initio_eigenvector_continuation import approximate_multistate_OAO
 

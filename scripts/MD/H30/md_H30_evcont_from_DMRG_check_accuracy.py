@@ -3,7 +3,7 @@ from pyscf import gto
 import numpy as np
 
 from evcont.electron_integral_utils import get_basis, get_integrals
-from evcont.converge_dmrg import converge_dmrg
+from evcont.dmrg.converge_dmrg import converge_dmrg
 
 
 from evcont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO

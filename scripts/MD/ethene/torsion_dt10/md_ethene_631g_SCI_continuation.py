@@ -2,8 +2,8 @@ from pyscf import gto
 
 import numpy as np
 
-from evcont.MD_utils import converge_EVCont_MD
-from evcont.SCI_EVCont import SCI_EVCont_obj
+from evcont.dynamics.MD_utils import converge_EVCont_MD
+from evcont.sci.SCI_EVCont import SCI_EVCont_obj
 
 
 """

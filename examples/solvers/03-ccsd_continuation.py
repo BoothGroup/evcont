@@ -19,7 +19,7 @@ from pyscf import cc, gto, scf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from evcont.CCSD_EVCont import CCSD_EVCont_obj
+from evcont.ccsd.CCSD_EVCont import CCSD_EVCont_obj
 
 
 def build_water(oh_distance_angstrom, angle_degrees=104.5, basis="6-31g"):
