@@ -1,2 +1,0 @@
-Miniconda: To make conda operate correctly, please run: 
-            source $UCL_CONDA_PATH/etc/profile.d/conda.sh 
