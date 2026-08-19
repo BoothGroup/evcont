@@ -3,6 +3,11 @@ import sys
 import itertools
 
 from evcont.electron_integral_utils import get_basis, get_integrals
+from evcont.basis_utils import (
+    basis_requires_reference,
+    get_basis_reference,
+    normalize_basis_type,
+)
 
 from pyscf import scf, ao2mo, fci, symm
 
@@ -25,6 +30,10 @@ class FCI_EVCont_obj:
         roots_train=None,
         irrep_name=None,
         lowrank=False,
+        abstract_basis="SAO",
+        abstract_basis_ref=None,
+        abstract_basis_ref_mol=None,
+        abstract_basis_kwargs=None,
         **kwargs
     ):
         """
@@ -49,6 +58,10 @@ class FCI_EVCont_obj:
         """
         self.cisolver = cisolver
         self.cibasis = cibasis
+        self.abstract_basis = abstract_basis
+        self.abstract_basis_ref = abstract_basis_ref
+        self.abstract_basis_ref_mol = abstract_basis_ref_mol
+        self.abstract_basis_kwargs = dict(abstract_basis_kwargs or {})
         
         self.nroots = nroots
         if roots_train == None:
@@ -91,6 +104,52 @@ class FCI_EVCont_obj:
         #                         'vecs': np.array([nbra, nket, nvec, nao, nao])]
         
         self.vecs_lowrank = {}
+
+    def _ensure_abstract_basis_reference(self, mol, mf_object=None):
+        if not basis_requires_reference(self.abstract_basis):
+            return
+        if self.abstract_basis_ref is None:
+            self.abstract_basis_ref = get_basis_reference(
+                mol,
+                basis_type=self.abstract_basis,
+                mf_object=mf_object,
+                **self.abstract_basis_kwargs,
+            )
+            self.abstract_basis_ref_mol = mol.copy()
+
+    def get_abstract_basis(self, mol, mf_object=None):
+        """Return the AO-to-abstract-basis coefficients for ``mol``."""
+
+        self._ensure_abstract_basis_reference(mol, mf_object=mf_object)
+        return get_basis(
+            mol,
+            basis_type=self.abstract_basis,
+            basis_ref=self.abstract_basis_ref,
+            basis_ref_mol=self.abstract_basis_ref_mol,
+            mf_object=mf_object,
+            **self.abstract_basis_kwargs,
+        )
+
+    def approximate_multistate(self, mol, nroots=None, hermitian=True, lindep=1e-12):
+        """Evaluate this FCI continuation object at ``mol``."""
+
+        from evcont.ab_initio_eigenvector_continuation import (
+            approximate_multistate_abstract_basis,
+        )
+
+        return approximate_multistate_abstract_basis(
+            mol,
+            self.one_rdm,
+            self.two_rdm,
+            self.overlap,
+            nroots=self.nroots if nroots is None else nroots,
+            hermitian=hermitian,
+            lindep=lindep,
+            abstract_basis=self.abstract_basis,
+            basis_ref=self.abstract_basis_ref,
+            basis_ref_mol=self.abstract_basis_ref_mol,
+            **self.abstract_basis_kwargs,
+        )
     
     def vectorize_lowrank(self,hermitian=True):        
         vectorize_lowrank(self,hermitian=hermitian)
@@ -110,7 +169,7 @@ class FCI_EVCont_obj:
         #S = mol.intor("int1e_ovlp")
         #ao_mo_trafo = get_loewdin_trafo(S)
         
-        basis = get_basis(mol,basis_type=self.cibasis)
+        basis = get_basis(mol, basis_type=self.cibasis)
         h1, h2 = get_integrals(mol, basis)
         
         nroots_train = max(self.roots_train)+1
@@ -131,12 +190,17 @@ class FCI_EVCont_obj:
             e_all = [e_all]
             fcivec_all = [fcivec_all]
 
-        # Transform to OAO basis
-        if self.cibasis != 'OAO':
+        # Transform to the abstract transfer basis used by continuation.
+        basis_abstract = self.get_abstract_basis(mol)
+        same_basis_name = (
+            normalize_basis_type(self.cibasis)
+            == normalize_basis_type(self.abstract_basis)
+            and self.abstract_basis_ref is None
+        )
+        if not same_basis_name and not np.allclose(basis, basis_abstract, atol=1.0e-10):
             S = mol.intor("int1e_ovlp")
-            basis_oao = get_basis(mol)
 
-            u = np.einsum('ji,jk,kl->il',basis,S,basis_oao)
+            u = np.einsum('ji,jk,kl->il', basis, S, basis_abstract)
             
             fcivec_all = [transform_ci(fcivec_i,mol.nelec,u) for fcivec_i in fcivec_all]
 
@@ -219,6 +283,9 @@ class FCI_EVCont_obj:
                         lowrank_vecs, diagonals, use_joint = \
                             reduce_2rdm(rdm1, rdm2, ovlp, 
                                         mol=mol, train_en=e,
+                                        abstract_basis=self.abstract_basis,
+                                        basis_ref=self.abstract_basis_ref,
+                                        basis_kwargs=self.abstract_basis_kwargs,
                                         **self.kwargs)
                         
                         #lowrank_vecs_conj, diagonals_conj = \

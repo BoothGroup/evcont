@@ -3,6 +3,7 @@ import numpy as np
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 from evcont.electron_integral_utils import get_basis, get_integrals, transform_integrals
+from evcont.basis_utils import basis_requires_reference, get_basis_reference
 from evcont.converge_dmrg import converge_dmrg
 
 from evcont.MPS_orb_rotation import converge_orbital_rotation_mps
@@ -24,6 +25,9 @@ def append_to_rdms_OAO_basis(
     nroots=1,
     roots_train=[1],
     mem=5,
+    abstract_basis="SAO",
+    abstract_basis_ref=None,
+    abstract_basis_kwargs=None,
 ):
     """
     Grows the training set by appending to the t-RDMs by running DMRG directly in the
@@ -37,7 +41,15 @@ def append_to_rdms_OAO_basis(
 
     new_tags = tags
 
-    h1, h2 = get_integrals(mol_bra, get_basis(mol_bra, basis_type="OAO"))
+    h1, h2 = get_integrals(
+        mol_bra,
+        get_basis(
+            mol_bra,
+            basis_type=abstract_basis,
+            basis_ref=abstract_basis_ref,
+            **dict(abstract_basis_kwargs or {}),
+        ),
+    )
 
     MPI.COMM_WORLD.Bcast(h1, root=0)
 
@@ -145,6 +157,9 @@ def append_to_rdms_rerun(
     converge_dmrg_fun=converge_dmrg,
     enforce_symmetric=True,
     mem=5,
+    abstract_basis="SAO",
+    abstract_basis_ref=None,
+    abstract_basis_kwargs=None,
 ):
     """
     Grows the training set by appending to the t-RDMs by running DMRG in a basis
@@ -190,7 +205,12 @@ def append_to_rdms_rerun(
         np.save("basis_{}.npy".format(tags[-1]), basis)
 
     ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
-    oao_basis_bra = get_basis(mol_bra, "OAO")
+    oao_basis_bra = get_basis(
+        mol_bra,
+        basis_type=abstract_basis,
+        basis_ref=abstract_basis_ref,
+        **dict(abstract_basis_kwargs or {}),
+    )
 
     overlap_new = np.ones((len(mols), len(mols)))
     if overlap is not None:
@@ -206,7 +226,12 @@ def append_to_rdms_rerun(
         ket = mps_solver.load_mps("MPS_{}".format(tags[i]))
         computational_basis_ket = np.load("basis_{}.npy".format(tags[i]))
         ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
-        oao_basis_ket = get_basis(mol_ket, "OAO")
+        oao_basis_ket = get_basis(
+            mol_ket,
+            basis_type=abstract_basis,
+            basis_ref=abstract_basis_ref,
+            **dict(abstract_basis_kwargs or {}),
+        )
 
         # Transform ket into computational basis of bra
         computational_to_OAO_ket = oao_basis_ket.T.dot(ovlp_ket).dot(
@@ -265,7 +290,12 @@ def append_to_rdms_rerun(
             ket = mps_solver.load_mps("MPS_{}".format(tags[i]))
             computational_basis_ket = np.load("basis_{}.npy".format(tags[i]))
             ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
-            oao_basis_ket = get_basis(mol_ket, "OAO")
+            oao_basis_ket = get_basis(
+                mol_ket,
+                basis_type=abstract_basis,
+                basis_ref=abstract_basis_ref,
+                **dict(abstract_basis_kwargs or {}),
+            )
 
             # Transform ket into computational basis of bra
             computational_to_OAO_ket = oao_basis_ket.T.dot(ovlp_ket).dot(
@@ -330,6 +360,9 @@ def append_to_rdms_orbital_rotation(
     converge_dmrg_fun=converge_dmrg,
     rotation_thresh=1.0e-6,
     mem=5,
+    abstract_basis="SAO",
+    abstract_basis_ref=None,
+    abstract_basis_kwargs=None,
 ):
     """
     Grows the training set by appending to the t-RDMs by running DMRG in a basis
@@ -402,13 +435,23 @@ def append_to_rdms_orbital_rotation(
         np.save("basis_{}.npy".format(tags[-1]), basis)
 
         ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
-        oao_basis_bra = get_basis(mol_bra, "OAO")
+        oao_basis_bra = get_basis(
+            mol_bra,
+            basis_type=abstract_basis,
+            basis_ref=abstract_basis_ref,
+            **dict(abstract_basis_kwargs or {}),
+        )
 
         for i, mol_ket in enumerate(mols):
             ket = mps_solver.load_mps("MPS_{}".format(tags[i]))
             computational_basis_ket = np.load("basis_{}.npy".format(tags[i]))
             ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
-            oao_basis_ket = get_basis(mol_ket, "OAO")
+            oao_basis_ket = get_basis(
+                mol_ket,
+                basis_type=abstract_basis,
+                basis_ref=abstract_basis_ref,
+                **dict(abstract_basis_kwargs or {}),
+            )
 
             # Transform ket into computational basis of bra
             computational_to_OAO_ket = oao_basis_ket.T.dot(ovlp_ket).dot(
@@ -488,6 +531,9 @@ class DMRG_EVCont_obj:
         nroots=1,
         roots_train=None,
         mem=5,
+        abstract_basis="SAO",
+        abstract_basis_ref=None,
+        abstract_basis_kwargs=None,
     ):
         """
         Initializes the DMRG_EVCont_obj class.
@@ -516,6 +562,21 @@ class DMRG_EVCont_obj:
         self.one_rdm = None
         self.two_rdm = None
         self.mem = mem
+        self.abstract_basis = abstract_basis
+        self.abstract_basis_ref = abstract_basis_ref
+        self.abstract_basis_ref_mol = None
+        self.abstract_basis_kwargs = dict(abstract_basis_kwargs or {})
+
+    def _ensure_abstract_basis_reference(self, mol):
+        if not basis_requires_reference(self.abstract_basis):
+            return
+        if self.abstract_basis_ref is None:
+            self.abstract_basis_ref = get_basis_reference(
+                mol,
+                basis_type=self.abstract_basis,
+                **self.abstract_basis_kwargs,
+            )
+            self.abstract_basis_ref_mol = mol.copy()
 
     def append_to_rdms(self, mol):
         """
@@ -524,6 +585,7 @@ class DMRG_EVCont_obj:
         Args:
             mol: The molecule to append.
         """
+        self._ensure_abstract_basis_reference(mol)
         self.mols.append(mol)
         #self.tags.append(self.max_tag)
         #self.max_tag += 1
@@ -537,6 +599,9 @@ class DMRG_EVCont_obj:
             nroots=self.nroots,
             roots_train=self.roots_train,
             mem=self.mem,
+            abstract_basis=self.abstract_basis,
+            abstract_basis_ref=self.abstract_basis_ref,
+            abstract_basis_kwargs=self.abstract_basis_kwargs,
         )
 
     def prune_datapoints(self, keep_ids):

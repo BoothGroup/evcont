@@ -127,7 +127,9 @@ def solve_subspace(H, S, nroots=1, hermitian=True, lindep=1e-12):
 def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
                                    nroots=1, Jdiag_only=True, sao_diag=True, 
                                    hermitian=True, density_fit=True, df_basis=None,
-                                   lindep=1e-4):
+                                   lindep=1e-4,
+                                   abstract_basis="SAO", basis_ref=None,
+                                   basis_kwargs=None):
     """
     Returns multiple approximate electronic states from solving the generalised
     eigenvalue problem defined via the one- and two-body transition RDMs.
@@ -149,7 +151,10 @@ def approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S,
     # Calculate the Hamiltonian matrix
     H = lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, cum_diagonal, 
                             density_fit=density_fit, df_basis=df_basis,
-                            Jdiag_only=Jdiag_only, sao_diag=sao_diag)
+                            Jdiag_only=Jdiag_only, sao_diag=sao_diag,
+                            abstract_basis=abstract_basis,
+                            basis_ref=basis_ref,
+                            basis_kwargs=basis_kwargs)
 
     #print('  Hamiltonian')
     #print(H.tolist())
@@ -312,8 +317,34 @@ def approximate_ground_state_OAO(mol, one_RDM, two_RDM, S, hermitian=True):
         coefficients.
 
     """
+    return approximate_ground_state_abstract_basis(
+        mol,
+        one_RDM,
+        two_RDM,
+        S,
+        hermitian=hermitian,
+        abstract_basis="SAO",
+    )
+
+
+def approximate_ground_state_abstract_basis(
+    mol,
+    one_RDM,
+    two_RDM,
+    S,
+    hermitian=True,
+    abstract_basis="SAO",
+    basis_ref=None,
+    **basis_kwargs,
+):
+    """
+    Approximate the ground-state energy using integrals in an abstract basis.
+    """
     # Construct h1 and h2
-    h1, h2 = get_integrals(mol, get_basis(mol))
+    h1, h2 = get_integrals(
+        mol,
+        get_basis(mol, basis_type=abstract_basis, basis_ref=basis_ref, **basis_kwargs),
+    )
 
     # Approximate the ground state energy and wavefunction in projected subspace
     en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
@@ -323,7 +354,18 @@ def approximate_ground_state_OAO(mol, one_RDM, two_RDM, S, hermitian=True):
 
     return total_energy, vec
 
-def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True, lindep=1e-12):
+def approximate_multistate_OAO(
+    mol,
+    one_RDM,
+    two_RDM,
+    S,
+    nroots=1,
+    hermitian=True,
+    lindep=1e-12,
+    abstract_basis="SAO",
+    basis_ref=None,
+    **basis_kwargs,
+):
     """
     This function approximates multiple state energies and wavefunctions of a given
     molecule from an eigenvector continuation with t-RDMS and the overlap matrix S.
@@ -348,8 +390,40 @@ def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=Tru
         coefficients.
 
     """
+    return approximate_multistate_abstract_basis(
+        mol,
+        one_RDM,
+        two_RDM,
+        S,
+        nroots=nroots,
+        hermitian=hermitian,
+        lindep=lindep,
+        abstract_basis=abstract_basis,
+        basis_ref=basis_ref,
+        **basis_kwargs,
+    )
+
+
+def approximate_multistate_abstract_basis(
+    mol,
+    one_RDM,
+    two_RDM,
+    S,
+    nroots=1,
+    hermitian=True,
+    lindep=1e-12,
+    abstract_basis="SAO",
+    basis_ref=None,
+    **basis_kwargs,
+):
+    """
+    Approximate multiple state energies using integrals in an abstract basis.
+    """
     # Construct h1 and h2
-    h1, h2 = get_integrals(mol, get_basis(mol))
+    h1, h2 = get_integrals(
+        mol,
+        get_basis(mol, basis_type=abstract_basis, basis_ref=basis_ref, **basis_kwargs),
+    )
 
     # Approximate the ground state energy and wavefunction in projected subspace
     en, vec = approximate_multistate(
@@ -365,7 +439,9 @@ def approximate_multistate_OAO(mol, one_RDM, two_RDM, S, nroots=1, hermitian=Tru
 def approximate_multistate_lowrank_OAO(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
                                        nroots=1, Jdiag_only=True, sao_diag=True,
                                        hermitian=True, density_fit=True, df_basis=None,
-                                       lindep=1e-4):
+                                       lindep=1e-4,
+                                       abstract_basis="SAO", basis_ref=None,
+                                       basis_kwargs=None):
     """
     This function approximates multiple state energies and wavefunctions of a given
     molecule from an eigenvector continuation with t-RDMS and the overlap matrix S.
@@ -393,7 +469,11 @@ def approximate_multistate_lowrank_OAO(mol, one_RDM, lowrank_vecs, cum_diagonal,
     en, vec = approximate_multistate_lowrank(mol, one_RDM, lowrank_vecs, cum_diagonal, S, 
                                              nroots=nroots, hermitian=hermitian, 
                                              density_fit=density_fit, df_basis=df_basis, 
-                                             Jdiag_only=Jdiag_only, sao_diag=sao_diag, lindep=lindep)
+                                             Jdiag_only=Jdiag_only, sao_diag=sao_diag,
+                                             abstract_basis=abstract_basis,
+                                             basis_ref=basis_ref,
+                                             basis_kwargs=basis_kwargs,
+                                             lindep=lindep)
     # Calculate the total energy by adding the nuclear repulsion energy
     total_energy = en.real + mol.energy_nuc()
 

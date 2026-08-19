@@ -1,21 +1,15 @@
 import numpy as np
 
-from pyscf import scf, lo, ao2mo, df
+from pyscf import scf, ao2mo, df
 
-
-def get_loewdin_trafo(overlap_mat):
-    """
-    Computes the Loewdin transformation based on the given overlap matrix between AOs.
-
-    Parameters:
-        overlap_mat (ndarray): The overlap matrix.
-
-    Returns:
-        ndarray: The transformed matrix.
-    """
-    vals, vecs = np.linalg.eigh(overlap_mat)
-    inverse_sqrt_vals = np.where(vals > 1.0e-15, 1 / np.sqrt(vals), 0.0)
-    return np.array(np.dot(vecs * inverse_sqrt_vals, vecs.conj().T))
+from evcont.basis_utils import (
+    basis_requires_reference,
+    get_basis,
+    get_basis_reference,
+    get_basis_with_derivative,
+    get_loewdin_trafo,
+    normalize_basis_type,
+)
 
 
 def transform_integrals(h1, h2, trafo):
@@ -86,37 +80,6 @@ def restore_electron_exchange_symmetry(h2, norb):
     ]
 
     return h2_restored.reshape((norb, norb, norb, norb))
-
-
-def get_basis(mol, basis_type="OAO"):
-    """
-    Construct a basis of orthogonal MOs for the given molecule.
-
-    Args:
-        mol: The molecule object.
-        basis_type: The type of basis. Default is "OAO".
-
-    Returns:
-        basis: The basis for the molecule (as transformation coefficients from the AO
-        basis).
-    """
-    if basis_type == "OAO":
-        basis = get_loewdin_trafo(mol.intor("int1e_ovlp"))
-    else:
-        myhf = scf.RHF(mol)
-        _ = myhf.scf()
-        basis = myhf.mo_coeff
-        if basis_type == "split":
-            localizer = lo.Boys(mol, basis[:, : mol.nelec[0]])
-            localizer.init_guess = None
-            basis_occ = localizer.kernel()
-            localizer = lo.Boys(mol, basis[:, mol.nelec[0] :])
-            localizer.init_guess = None
-            basis_vrt = localizer.kernel()
-            basis = np.concatenate((basis_occ, basis_vrt), axis=1)
-        else:
-            assert basis_type == "canonical"
-    return basis
 
 
 def get_integrals(mol, basis):
@@ -199,4 +162,3 @@ def get_df_integrals(mol, basis=None, auxbasis=None, grad=False):
     
     else:
         return cd_array
-    

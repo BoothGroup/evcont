@@ -2,6 +2,7 @@ import numpy as np
 import pickle
 
 from evcont.electron_integral_utils import get_basis, get_integrals
+from evcont.basis_utils import basis_requires_reference, get_basis_reference
 
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
 
@@ -118,6 +119,10 @@ class CAS_EVCont_obj:
                 nroots=1, solver='SS-CASSCF',
                 software='pyscf', quantel_path=None, solutions_to_reconverge=None,
                 lowrank=False,
+                abstract_basis="SAO",
+                abstract_basis_ref=None,
+                abstract_basis_ref_mol=None,
+                abstract_basis_kwargs=None,
                 **kwargs):
         """
         Initialize the CAS_EVCont_obj.
@@ -152,6 +157,10 @@ class CAS_EVCont_obj:
 
         self.ncas = ncas
         self.neleca = neleca
+        self.abstract_basis = abstract_basis
+        self.abstract_basis_ref = abstract_basis_ref
+        self.abstract_basis_ref_mol = abstract_basis_ref_mol
+        self.abstract_basis_kwargs = dict(abstract_basis_kwargs or {})
 
         self.overlap = None
         self.one_rdm = None
@@ -199,6 +208,31 @@ class CAS_EVCont_obj:
         self.inv_OAO_all = []
         self.mb_all = None
         self.occ_strings_all = []
+
+    def _ensure_abstract_basis_reference(self, mol, mf_object=None):
+        if not basis_requires_reference(self.abstract_basis):
+            return
+        if self.abstract_basis_ref is None:
+            self.abstract_basis_ref = get_basis_reference(
+                mol,
+                basis_type=self.abstract_basis,
+                mf_object=mf_object,
+                **self.abstract_basis_kwargs,
+            )
+            self.abstract_basis_ref_mol = mol.copy()
+
+    def get_abstract_basis(self, mol, mf_object=None):
+        """Return the AO-to-abstract-basis coefficients for ``mol``."""
+
+        self._ensure_abstract_basis_reference(mol, mf_object=mf_object)
+        return get_basis(
+            mol,
+            basis_type=self.abstract_basis,
+            basis_ref=self.abstract_basis_ref,
+            basis_ref_mol=self.abstract_basis_ref_mol,
+            mf_object=mf_object,
+            **self.abstract_basis_kwargs,
+        )
 
     def _input_checks(self, solver, software, nroots, quantel_path, solutions_to_reconverge):
         if solver in ['CASCI','SS-CASSCF','SA-CASSCF', 'casci','ss-casscf','sa-casscf']:
@@ -258,7 +292,7 @@ class CAS_EVCont_obj:
         ## Preliminaries before state iterations
         # AO-SAO transformation
         ovlp_bra = mol.intor_symmetric("int1e_ovlp")
-        basis_OAO_bra = get_basis(mol)
+        basis_OAO_bra = self.get_abstract_basis(mol)
     
         if self.software == 'pyscf' and state is None:
             # Run mean field calculations for the orbitals
@@ -659,6 +693,9 @@ class CAS_EVCont_obj:
                         lowrank_vecs, diagonals, use_joint = \
                             reduce_2rdm(rdm1, rdm2, overlap_accumulate, 
                                         mol=mol, train_en=e,
+                                        abstract_basis=self.abstract_basis,
+                                        basis_ref=self.abstract_basis_ref,
+                                        basis_kwargs=self.abstract_basis_kwargs,
                                         **self.kwargs)
                         
                         diagonal_lr_new[-1, i, :, :, :] = diagonals
@@ -791,7 +828,7 @@ class CAS_EVCont_obj:
             print(f"State {istate}: Found {len(nz)} significant determinants")
             for det_idx, (iabra, ibbra) in enumerate(nz):
                 ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
-                basis_OAO_bra = get_basis(mol_bra)
+                basis_OAO_bra = self.get_abstract_basis(mol_bra)
                 trafo_bra = basis_OAO_bra.T.dot(ovlp_bra).dot(mo_coeff_bra)
 
                 self.mo_coeffs.append(mo_coeff_bra)
@@ -952,6 +989,9 @@ class CAS_EVCont_obj:
                             lowrank_vecs, diagonals, use_joint = reduce_2rdm(
                                 rdm1, rdm2, overlap_accumulate, 
                                 mol=mol, train_en=e,
+                                abstract_basis=self.abstract_basis,
+                                basis_ref=self.abstract_basis_ref,
+                                basis_kwargs=self.abstract_basis_kwargs,
                                 **self.kwargs
                             )
 
@@ -1016,7 +1056,7 @@ class CAS_EVCont_obj:
             mol_bra = casci_bra.mol
 
             ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
-            basis_OAO_bra = get_basis(mol_bra)
+            basis_OAO_bra = self.get_abstract_basis(mol_bra)
             trafo_bra = basis_OAO_bra.T.dot(ovlp_bra).dot(mo_coeff_bra)
             #print('bra',ovlp_bra.shape,basis_OAO_bra.shape,trafo_bra.shape)
 
@@ -1072,7 +1112,7 @@ class CAS_EVCont_obj:
                 mol_ket = casci_ket.mol
 
                 ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
-                basis_OAO_ket = get_basis(mol_ket)
+                basis_OAO_ket = self.get_abstract_basis(mol_ket)
                 trafo_ket = basis_OAO_ket.T.dot(ovlp_ket).dot(mo_coeff_ket)
 
                 trafo_ket_bra = basis_OAO_bra.dot(trafo_ket)
@@ -1358,7 +1398,7 @@ class CAS_EVCont_obj:
             mol_bra = casci_bra.mol
 
             ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
-            basis_OAO_bra = get_basis(mol_bra)
+            basis_OAO_bra = self.get_abstract_basis(mol_bra)
             trafo_bra = basis_OAO_bra.T.dot(ovlp_bra).dot(mo_coeff_bra)
             #print('bra',ovlp_bra.shape,basis_OAO_bra.shape,trafo_bra.shape)
 
@@ -1392,7 +1432,7 @@ class CAS_EVCont_obj:
                 mol_ket = casci_ket.mol
 
                 ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
-                basis_OAO_ket = get_basis(mol_ket)
+                basis_OAO_ket = self.get_abstract_basis(mol_ket)
                 trafo_ket = basis_OAO_ket.T.dot(ovlp_ket).dot(mo_coeff_ket)
 
                 trafo_ket_bra = basis_OAO_bra.dot(trafo_ket)
@@ -1524,7 +1564,7 @@ class CAS_EVCont_obj:
             mol_bra = casci_bra.mol
 
             ovlp_bra = mol_bra.intor_symmetric("int1e_ovlp")
-            basis_OAO_bra = get_basis(mol_bra)
+            basis_OAO_bra = self.get_abstract_basis(mol_bra)
             trafo_bra = basis_OAO_bra.T.dot(ovlp_bra).dot(mo_coeff_bra)
             #print('bra',ovlp_bra.shape,basis_OAO_bra.shape,trafo_bra.shape)
 
@@ -1552,7 +1592,7 @@ class CAS_EVCont_obj:
                 mol_ket = casci_ket.mol
 
                 ovlp_ket = mol_ket.intor_symmetric("int1e_ovlp")
-                basis_OAO_ket = get_basis(mol_ket)
+                basis_OAO_ket = self.get_abstract_basis(mol_ket)
                 trafo_ket = basis_OAO_ket.T.dot(ovlp_ket).dot(mo_coeff_ket)
 
                 trafo_ket_bra = basis_OAO_bra.dot(trafo_ket)
@@ -1684,6 +1724,9 @@ class CAS_EVCont_obj:
                             overlap_accumulate,
                             mol=mol_bra,
                             train_en=casci_bra.e_tot,
+                            abstract_basis=self.abstract_basis,
+                            basis_ref=self.abstract_basis_ref,
+                            basis_kwargs=self.abstract_basis_kwargs,
                             **self.kwargs,
                         )
                 
@@ -1815,6 +1858,9 @@ class CAS_EVCont_obj:
             'software': self.software,
             'quantel_path': getattr(self, 'quantel_path', None),
             'solutions_to_reconverge': getattr(self, 'solutions_to_reconverge', None),
+            'abstract_basis': self.abstract_basis,
+            'abstract_basis_ref': self.abstract_basis_ref,
+            'abstract_basis_kwargs': self.abstract_basis_kwargs,
             
             # RDM and overlap data
             'overlap': self.overlap,
@@ -1870,6 +1916,9 @@ class CAS_EVCont_obj:
         software = cas_data.get('software', 'pyscf')
         quantel_path = cas_data.get('quantel_path', None)
         solutions_to_reconverge = cas_data.get('solutions_to_reconverge', None)
+        abstract_basis = cas_data.get('abstract_basis', 'SAO')
+        abstract_basis_ref = cas_data.get('abstract_basis_ref', None)
+        abstract_basis_kwargs = cas_data.get('abstract_basis_kwargs', None)
         
         if cas_data['lowrank']:
             cas_obj = cls(
@@ -1881,6 +1930,9 @@ class CAS_EVCont_obj:
                 quantel_path=quantel_path,
                 solutions_to_reconverge=solutions_to_reconverge,
                 lowrank=True,
+                abstract_basis=abstract_basis,
+                abstract_basis_ref=abstract_basis_ref,
+                abstract_basis_kwargs=abstract_basis_kwargs,
                 **cas_data['kwargs']
             )
         else:
@@ -1892,7 +1944,10 @@ class CAS_EVCont_obj:
                 software=software,
                 quantel_path=quantel_path,
                 solutions_to_reconverge=solutions_to_reconverge,
-                lowrank=False
+                lowrank=False,
+                abstract_basis=abstract_basis,
+                abstract_basis_ref=abstract_basis_ref,
+                abstract_basis_kwargs=abstract_basis_kwargs,
             )
         
         # Restore RDM and overlap data

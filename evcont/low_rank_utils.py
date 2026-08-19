@@ -101,7 +101,8 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
                 use_svd=False, svd_weight = 1.0,
                 iterative=False, nit=None, max_iter_time=10000,
                 mol=None,train_en=None,
-                min_eval=None):
+                min_eval=None,
+                abstract_basis="SAO", basis_ref=None, basis_kwargs=None):
     """
     Function to compress the 2-transition-RDM between a pair of training
     states using joint decomposition and diagonal corrections, and
@@ -237,7 +238,10 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
                                 ham_thr=ham_thr, min_nvec=min_nvecs,
                                 min_eval=min_eval,
                                 relax_amp=relax_amp,
-                                remove_diagopt=(opt_no_diag and save_diag))
+                                remove_diagopt=(opt_no_diag and save_diag),
+                                abstract_basis=abstract_basis,
+                                basis_ref=basis_ref,
+                                basis_kwargs=basis_kwargs)
         lowrank_vecs_joint = out_ham[:-1]
         #ham_err_joint = out_ham[-1]
         
@@ -267,7 +271,10 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
                                     rightvecs=rightvecs2,
                                     truncation_style=truncation_style,
                                     ham_thr=ham_thr, min_nvec=min_nvecs,
-                                    min_eval=min_eval, relax_amp=False)
+                                    min_eval=min_eval, relax_amp=False,
+                                    abstract_basis=abstract_basis,
+                                    basis_ref=basis_ref,
+                                    basis_kwargs=basis_kwargs)
             lowrank_vecs_svd = out_ham[:-1]
             #ham_err_svd = out_ham[-1]
         
@@ -319,7 +326,15 @@ def reduce_2rdm(rdm1, rdm2, ovlp,
     reconstructed_rdm2 = reconstruct_rdm2_joint(lowrank_vecs, diagonals, joint=joint)
     if mol is not None:
         # Compute the energy error as well
-        h1, h2 = get_integrals(mol, get_basis(mol))
+        h1, h2 = get_integrals(
+            mol,
+            get_basis(
+                mol,
+                basis_type=abstract_basis,
+                basis_ref=basis_ref,
+                **dict(basis_kwargs or {}),
+            ),
+        )
         ham_inferred = 0.5*np.einsum('pqrs,pqrs->', reconstructed_rdm2, h2,optimize='optimal') + \
                       np.einsum('pq,pq->', rdm1, h1)
         # Recompute train hamiltonian
@@ -370,7 +385,8 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
                         sao_basis=None, density_fit=True, df_basis=None, 
                         Jdiag_only=True, sao_diag=False,
                         hermitian=True,
-                        debug=False):
+                        debug=False,
+                        abstract_basis="SAO", basis_ref=None, basis_kwargs=None):
     """
     Construct subspace Hamiltonian using the low-rank decomposition of 
     2-transition-cumulant
@@ -405,7 +421,12 @@ def lowrank_hamiltonian(mol, one_RDM, S, lowrank_vecs, diagonals=None,
     
     # AO to SAO basis transformation
     if sao_basis is None:
-        sao_basis = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+        sao_basis = get_basis(
+            mol,
+            basis_type=abstract_basis,
+            basis_ref=basis_ref,
+            **dict(basis_kwargs or {}),
+        )
     
     # 1-electron integrals with DF
     h1_ao = mf.get_hcore()
@@ -939,6 +960,7 @@ def select_lowrank_ham(evals, evecs, joint, norb,
                        min_nvec=1, min_eval=None,
                        relax_amp=True, 
                        remove_diagopt=False,
+                       abstract_basis="SAO", basis_ref=None, basis_kwargs=None,
                        ):
     """
     Select a low rank decomposition of the RDM based on the error on
@@ -961,7 +983,15 @@ def select_lowrank_ham(evals, evecs, joint, norb,
     rightvecs_sort = rightvecs[idx,:]
 
     # For direct contraction
-    h1, h2 = get_integrals(mol, get_basis(mol))
+    h1, h2 = get_integrals(
+        mol,
+        get_basis(
+            mol,
+            basis_type=abstract_basis,
+            basis_ref=basis_ref,
+            **dict(basis_kwargs or {}),
+        ),
+    )
     e1 = lib.einsum('ij,ij->', h1, rdm1)
     
     # Exact element of subspace Hamiltonian - compute explicitly instead of using train_en*ovlp
@@ -1077,6 +1107,7 @@ def select_lowrank_ham_relaxed(evals, evecs, joint, norb,
                                min_nvec=1, min_eval=None,
                                relax_amp=True,
                                remove_diagopt=False,
+                               abstract_basis="SAO", basis_ref=None, basis_kwargs=None,
                                ):
     """
     Select a joint low-rank decomposition based on Hamiltonian error while
@@ -1102,7 +1133,15 @@ def select_lowrank_ham_relaxed(evals, evecs, joint, norb,
     rightvecs_sort = rightvecs[idx, :]
 
     # Precompute one-electron and exact training Hamiltonian pieces once.
-    h1, h2 = get_integrals(mol, get_basis(mol))
+    h1, h2 = get_integrals(
+        mol,
+        get_basis(
+            mol,
+            basis_type=abstract_basis,
+            basis_ref=basis_ref,
+            **dict(basis_kwargs or {}),
+        ),
+    )
     e1 = lib.einsum('ij,ij->', h1, rdm1)
     ham_training = 0.5 * lib.einsum('pqrs,pqrs->', rdm2, h2, optimize='optimal') + \
                    lib.einsum('pq,pq->', rdm1, h1)
@@ -1728,5 +1767,3 @@ def build_diag_mask(norb):
         diag_mask[i,i,j,j] = diag_mask[i,j,i,j] = diag_mask[i,j,j,i] = 1.0
 
     return diag_mask 
-
-

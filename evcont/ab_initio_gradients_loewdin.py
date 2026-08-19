@@ -9,6 +9,8 @@ from evcont.ab_initio_eigenvector_continuation import (
 )
 
 from evcont.electron_integral_utils import (
+    get_basis,
+    get_basis_with_derivative,
     get_loewdin_trafo,
     restore_electron_exchange_symmetry,
     get_df_integrals
@@ -136,8 +138,26 @@ def loewdin_trafo_grad(overlap_mat, degeneracy_precision=7):
     # Transpose the return value to match the desired ordering of indices
     return np.transpose(dS, (2, 3, 0, 1))
 
+def _basis_kwargs_dict(basis_kwargs):
+    return dict(basis_kwargs or {})
+
+
+def get_ao_to_abstract_basis_with_derivative(
+    mol,
+    abstract_basis="SAO",
+    basis_kwargs=None,
+):
+    """Return AO-to-abstract-basis coefficients and nuclear derivatives."""
+
+    return get_basis_with_derivative(
+        mol,
+        basis_type=abstract_basis,
+        **_basis_kwargs_dict(basis_kwargs),
+    )
+
+
 @timeit
-def get_derivative_ao_mo_trafo(mol):
+def get_derivative_ao_mo_trafo(mol, abstract_basis="SAO", basis_kwargs=None):
     """
     Calculates the derivatives of the atomic orbital to molecular orbital
     transformation.
@@ -148,6 +168,14 @@ def get_derivative_ao_mo_trafo(mol):
     Returns:
         ndarray: The derivatives of the transformation matrix.
     """
+
+    if abstract_basis.lower().replace("-", "_") not in {"sao", "oao", "lowdin"}:
+        _, trafo_grad = get_ao_to_abstract_basis_with_derivative(
+            mol,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
+        return trafo_grad
 
     overlap_grad = get_overlap_grad(mol)
     trafo_grad = lib.einsum(
@@ -185,7 +213,14 @@ def get_one_el_grad_ao(mol):
     return np.transpose(return_val, (2, 3, 0, 1))
 
 
-def get_one_el_grad(mol, h1_ao=None, ao_mo_trafo=None, ao_mo_trafo_grad=None):
+def get_one_el_grad(
+    mol,
+    h1_ao=None,
+    ao_mo_trafo=None,
+    ao_mo_trafo_grad=None,
+    abstract_basis="SAO",
+    basis_kwargs=None,
+):
     """
     Calculate the gradient of the one-electron integrals with respect to nuclear
     coordinates.
@@ -204,14 +239,19 @@ def get_one_el_grad(mol, h1_ao=None, ao_mo_trafo=None, ao_mo_trafo_grad=None):
             The gradient of the one-electron integrals.
 
     """
-    if ao_mo_trafo is None:
-        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    if ao_mo_trafo is None or ao_mo_trafo_grad is None:
+        basis, basis_grad = get_ao_to_abstract_basis_with_derivative(
+            mol,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
+        if ao_mo_trafo is None:
+            ao_mo_trafo = basis
+        if ao_mo_trafo_grad is None:
+            ao_mo_trafo_grad = basis_grad
 
     if h1_ao is None:
         h1_ao = scf.hf.get_hcore(mol)
-
-    if ao_mo_trafo_grad is None:
-        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
 
     h1_grad_ao = get_one_el_grad_ao(mol)
     h1_grad = lib.einsum("ijkl,im,mn->jnkl", ao_mo_trafo_grad, h1_ao, ao_mo_trafo)
@@ -285,7 +325,15 @@ def two_el_grad(h2_ao, two_rdm, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_
     return h2_grad_ao_sum + two_el_contraction
 
 
-def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=None):
+def get_grad_elec_OAO(
+    mol,
+    one_rdm,
+    two_rdm,
+    ao_mo_trafo=None,
+    ao_mo_trafo_grad=None,
+    abstract_basis="SAO",
+    basis_kwargs=None,
+):
     """
     Calculates the gradient of the electronic energy based on one- and two-rdms
     in the OAO.
@@ -303,14 +351,23 @@ def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=
         ndarray: Electronic gradient.
     """
 
-    if ao_mo_trafo is None:
-        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
-
-    if ao_mo_trafo_grad is None:
-        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+    if ao_mo_trafo is None or ao_mo_trafo_grad is None:
+        basis, basis_grad = get_ao_to_abstract_basis_with_derivative(
+            mol,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
+        if ao_mo_trafo is None:
+            ao_mo_trafo = basis
+        if ao_mo_trafo_grad is None:
+            ao_mo_trafo_grad = basis_grad
 
     h1_jac = get_one_el_grad(
-        mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
+        mol,
+        ao_mo_trafo=ao_mo_trafo,
+        ao_mo_trafo_grad=ao_mo_trafo_grad,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
     )
 
     h2_ao = mol.intor("int2e")
@@ -338,7 +395,17 @@ def get_grad_elec_OAO(mol, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=
     return grad_elec
 
 
-def get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, one_rdm, two_rdm, ao_mo_trafo=None, ao_mo_trafo_grad=None):
+def get_grad_elec_OAO_customERI(
+    mol,
+    h2_ao,
+    h2_ao_deriv,
+    one_rdm,
+    two_rdm,
+    ao_mo_trafo=None,
+    ao_mo_trafo_grad=None,
+    abstract_basis="SAO",
+    basis_kwargs=None,
+):
     """
     Calculates the gradient of the electronic energy based on one- and two-rdms
     in the OAO.
@@ -356,14 +423,23 @@ def get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, one_rdm, two_rdm, ao_mo
         ndarray: Electronic gradient.
     """
 
-    if ao_mo_trafo is None:
-        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
-
-    if ao_mo_trafo_grad is None:
-        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+    if ao_mo_trafo is None or ao_mo_trafo_grad is None:
+        basis, basis_grad = get_ao_to_abstract_basis_with_derivative(
+            mol,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
+        if ao_mo_trafo is None:
+            ao_mo_trafo = basis
+        if ao_mo_trafo_grad is None:
+            ao_mo_trafo_grad = basis_grad
 
     h1_jac = get_one_el_grad(
-        mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
+        mol,
+        ao_mo_trafo=ao_mo_trafo,
+        ao_mo_trafo_grad=ao_mo_trafo_grad,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
     )
 
     #h2_ao = mol.intor("int2e")
@@ -393,7 +469,14 @@ def get_grad_elec_OAO_customERI(mol, h2_ao, h2_ao_deriv, one_rdm, two_rdm, ao_mo
 
 
 def get_energy_with_grad(
-    mol, one_RDM, two_RDM, S, hermitian=True, return_density_matrices=False
+    mol,
+    one_RDM,
+    two_RDM,
+    S,
+    hermitian=True,
+    return_density_matrices=False,
+    abstract_basis="SAO",
+    basis_kwargs=None,
 ):
     """
     Calculates the potential energy and its gradient w.r.t. nuclear positions of a
@@ -420,7 +503,11 @@ def get_energy_with_grad(
             A tuple containing the total potential energy and its gradient.
     """
     # Construct h1 and h2
-    ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    ao_mo_trafo, ao_mo_trafo_grad = get_ao_to_abstract_basis_with_derivative(
+        mol,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
+    )
 
     h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
@@ -448,7 +535,13 @@ def get_energy_with_grad(
         )
 
     grad_elec = get_grad_elec_OAO(
-        mol, one_rdm_predicted, two_rdm_predicted, ao_mo_trafo=ao_mo_trafo
+        mol,
+        one_rdm_predicted,
+        two_rdm_predicted,
+        ao_mo_trafo=ao_mo_trafo,
+        ao_mo_trafo_grad=ao_mo_trafo_grad,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
     )
 
     if return_density_matrices:
@@ -465,7 +558,16 @@ def get_energy_with_grad(
             grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
         )
       
-def get_energy_with_grad_cpuefficient(mol, one_RDM, two_RDM, S, hermitian=True, return_density_matrices=False):
+def get_energy_with_grad_cpuefficient(
+    mol,
+    one_RDM,
+    two_RDM,
+    S,
+    hermitian=True,
+    return_density_matrices=False,
+    abstract_basis="SAO",
+    basis_kwargs=None,
+):
     """
     Calculates the potential energy and its gradient w.r.t. nuclear positions of a
     molecule from the eigenvector continuation.
@@ -487,7 +589,11 @@ def get_energy_with_grad_cpuefficient(mol, one_RDM, two_RDM, S, hermitian=True, 
             A tuple containing the total potential energy and its gradient.
     """
     # Construct h1 and h2
-    ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    ao_mo_trafo, ao_mo_trafo_grad = get_ao_to_abstract_basis_with_derivative(
+        mol,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
+    )
 
     h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
@@ -496,7 +602,13 @@ def get_energy_with_grad_cpuefficient(mol, one_RDM, two_RDM, S, hermitian=True, 
 
     # Get the gradient of one and two-electron integrals before contracting onto
     # rdms of different states
-    h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
+    h1_jac, h2_jac = get_one_and_two_el_grad(
+        mol,
+        ao_mo_trafo=ao_mo_trafo,
+        ao_mo_trafo_grad=ao_mo_trafo_grad,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
+    )
 
     one_rdm_predicted = np.tensordot(np.outer(vec, vec), one_RDM, axes=2)
 
@@ -645,7 +757,13 @@ def get_two_el_grad_new(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_s
     return h2_grad
 
 
-def get_one_and_two_el_grad(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None):
+def get_one_and_two_el_grad(
+    mol,
+    ao_mo_trafo=None,
+    ao_mo_trafo_grad=None,
+    abstract_basis="SAO",
+    basis_kwargs=None,
+):
     """
     Calculates the gradient of the one- and two-electron integrals
     in the OAO.
@@ -662,14 +780,23 @@ def get_one_and_two_el_grad(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None):
             One- and two-electron gradients.
     """
     
-    if ao_mo_trafo is None:
-        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
-
-    if ao_mo_trafo_grad is None:
-        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+    if ao_mo_trafo is None or ao_mo_trafo_grad is None:
+        basis, basis_grad = get_ao_to_abstract_basis_with_derivative(
+            mol,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
+        if ao_mo_trafo is None:
+            ao_mo_trafo = basis
+        if ao_mo_trafo_grad is None:
+            ao_mo_trafo_grad = basis_grad
         
     h1_jac = get_one_el_grad(
-        mol, ao_mo_trafo=ao_mo_trafo, ao_mo_trafo_grad=ao_mo_trafo_grad
+        mol,
+        ao_mo_trafo=ao_mo_trafo,
+        ao_mo_trafo_grad=ao_mo_trafo_grad,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
     )
     
     h2_ao = mol.intor("int2e")
@@ -728,7 +855,14 @@ def get_grad_elec_from_gradH(one_rdm, two_rdm, h1_jac, h2_jac):
     return grad_elec
 
 
-def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None, ovlp=None):
+def get_orbital_derivative_coupling(
+    mol,
+    ao_mo_trafo=None,
+    ao_mo_trafo_grad=None,
+    ovlp=None,
+    abstract_basis="SAO",
+    basis_kwargs=None,
+):
     """ 
     For orbital contribution to nonadiabatic coupling vectors;
     < Phi_a | d/dR Phi_b> where Phi are MOs
@@ -744,11 +878,16 @@ def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None,
         tuple of np.ndarray (nbasis, nbasis, nat,3):
             Orbital derivative coupling (to be contracted with 1-trdm).
     """
-    if ao_mo_trafo is None:
-        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
-
-    if ao_mo_trafo_grad is None:
-        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+    if ao_mo_trafo is None or ao_mo_trafo_grad is None:
+        basis, basis_grad = get_ao_to_abstract_basis_with_derivative(
+            mol,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
+        if ao_mo_trafo is None:
+            ao_mo_trafo = basis
+        if ao_mo_trafo_grad is None:
+            ao_mo_trafo_grad = basis_grad
     
     if ovlp is None:
         ovlp = mol.intor("int1e_ovlp")
@@ -788,7 +927,17 @@ def get_orbital_derivative_coupling(mol,ao_mo_trafo=None, ao_mo_trafo_grad=None,
     """
     return trafo_deriv_contraction +  orb_deriv_contraction
 
-def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitian=True, return_density_matrices=False):
+def get_multistate_energy_with_grad(
+    mol,
+    one_RDM,
+    two_RDM,
+    S,
+    nroots=1,
+    hermitian=True,
+    return_density_matrices=False,
+    abstract_basis="SAO",
+    basis_kwargs=None,
+):
     """
     Calculates the potential energy and its gradient w.r.t. nuclear positions of a
     molecule from the eigenvector continuation.
@@ -816,7 +965,11 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
             A tuple containing the total potential energies and its gradients.
     """
     # Construct h1 and h2
-    ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    ao_mo_trafo, ao_mo_trafo_grad = get_ao_to_abstract_basis_with_derivative(
+        mol,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
+    )
 
     h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
@@ -825,7 +978,13 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
     
     # Get the gradient of one and two-electron integrals before contracting onto
     # rdms of different states
-    h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
+    h1_jac, h2_jac = get_one_and_two_el_grad(
+        mol,
+        ao_mo_trafo=ao_mo_trafo,
+        ao_mo_trafo_grad=ao_mo_trafo_grad,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
+    )
     
     grad_elec_all = []
     one_rdm_predicted_all = []
@@ -871,7 +1030,7 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
     if return_density_matrices:
         return (
             en.real + mol.energy_nuc(),
-            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+            grad_elec_all + grad.RHF(scf.RHF(mol)).grad_nuc(),
             one_rdm_predicted_all,
             two_rdm_predicted_all,
         )
@@ -879,12 +1038,14 @@ def get_multistate_energy_with_grad(mol, one_RDM, two_RDM, S, nroots=1, hermitia
     else:
         return (
             en.real + mol.energy_nuc(),
-            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+            grad_elec_all + grad.RHF(scf.RHF(mol)).grad_nuc(),
         )
 
 @timeit
 def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
-                                            savemem=True, hermitian=True):
+                                            savemem=True, hermitian=True,
+                                            abstract_basis="SAO",
+                                            basis_kwargs=None):
     """
     Calculates the potential energiesm its gradient w.r.t. nuclear positions of a
     molecule and nonadiabatic couplings from eigenvector continuation for both
@@ -926,7 +1087,11 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
     """
                 
     # Construct h1 and h2
-    ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
+    ao_mo_trafo, ao_mo_trafo_grad = get_ao_to_abstract_basis_with_derivative(
+        mol,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
+    )
 
     h1 = np.linalg.multi_dot((ao_mo_trafo.T, scf.hf.get_hcore(mol), ao_mo_trafo))
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, ao_mo_trafo), mol.nao)
@@ -939,10 +1104,22 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
     if not savemem:
         # Get the gradient of one and two-electron integrals before contracting onto
         # rdms and trmds of different states
-        h1_jac, h2_jac = get_one_and_two_el_grad(mol,ao_mo_trafo=ao_mo_trafo)
+        h1_jac, h2_jac = get_one_and_two_el_grad(
+            mol,
+            ao_mo_trafo=ao_mo_trafo,
+            ao_mo_trafo_grad=ao_mo_trafo_grad,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
         
     # Get the orbital derivative coupling for NACs
-    orb_deriv = get_orbital_derivative_coupling(mol,ao_mo_trafo=ao_mo_trafo)
+    orb_deriv = get_orbital_derivative_coupling(
+        mol,
+        ao_mo_trafo=ao_mo_trafo,
+        ao_mo_trafo_grad=ao_mo_trafo_grad,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
+    )
     
     # Nuclear part of the gradient
     grad_nuc = grad.RHF(scf.RHF(mol)).grad_nuc()
@@ -984,7 +1161,13 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
             # d\dR of subspace Hamiltonian
             if savemem:
                 grad_elec = get_grad_elec_OAO(
-                    mol, one_rdm_predicted, two_rdm_predicted
+                    mol,
+                    one_rdm_predicted,
+                    two_rdm_predicted,
+                    ao_mo_trafo=ao_mo_trafo,
+                    ao_mo_trafo_grad=ao_mo_trafo_grad,
+                    abstract_basis=abstract_basis,
+                    basis_kwargs=basis_kwargs,
                 )
             else:
                 grad_elec = get_grad_elec_from_gradH(
@@ -1028,7 +1211,8 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
 
 ##############################################################################
 def two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds, vec_i, vec_j,
-                        ao_mo_trafo=None, ao_mo_trafo_grad=None):
+                        ao_mo_trafo=None, ao_mo_trafo_grad=None,
+                        abstract_basis="SAO", basis_kwargs=None):
     """
     Computing the gradient of the electronic Hamiltonian wrt atomic coordinates
     using the low-rank representation of the 2-tRDM
@@ -1037,11 +1221,16 @@ def two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds, vec_i, vec_j,
     
     """
     # AO to SAO basis transformation
-    if ao_mo_trafo is None:
-        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
-    
-    if ao_mo_trafo_grad is None:
-        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+    if ao_mo_trafo is None or ao_mo_trafo_grad is None:
+        basis, basis_grad = get_ao_to_abstract_basis_with_derivative(
+            mol,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
+        if ao_mo_trafo is None:
+            ao_mo_trafo = basis
+        if ao_mo_trafo_grad is None:
+            ao_mo_trafo_grad = basis_grad
         
     # Preliminaries
     ntrain = vec_i.shape[0]
@@ -1152,7 +1341,9 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
                                        diag_builds=None, diagonals=None,
                                        ao_mo_trafo=None, ao_mo_trafo_grad=None,
                                        ints_SAO=None,
-                                       df_response=False):
+                                       df_response=False,
+                                       abstract_basis="SAO",
+                                       basis_kwargs=None):
     """
     Computing the gradient of the electronic Hamiltonian wrt atomic coordinates
     using the low-rank representation of the 2-tRDM
@@ -1164,11 +1355,16 @@ def state_resolved_two_el_grad_lowrank(mol, lowrank_vecs, ED_builds, SVD_builds,
     
     """
     # AO to SAO basis transformation
-    if ao_mo_trafo is None:
-        ao_mo_trafo = get_loewdin_trafo(mol.intor("int1e_ovlp"))
-    
-    if ao_mo_trafo_grad is None:
-        ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+    if ao_mo_trafo is None or ao_mo_trafo_grad is None:
+        basis, basis_grad = get_ao_to_abstract_basis_with_derivative(
+            mol,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
+        if ao_mo_trafo is None:
+            ao_mo_trafo = basis
+        if ao_mo_trafo_grad is None:
+            ao_mo_trafo_grad = basis_grad
         
     # Preliminaries
     # Get ntrain from pairloc (max index + 1) - might just make ntrain an input arg to avoid this
@@ -1404,7 +1600,9 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
                                      ao_mo_trafo=None, ao_mo_trafo_grad=None,
                                      df_response=False,
                                      hermitian=True,
-                                     lindep=1e-6):
+                                     lindep=1e-6,
+                                     abstract_basis="SAO",
+                                     basis_kwargs=None):
     """
     Construct subspace Hamiltonian using the low-rank decomposition of 
     2-transition-cumulant
@@ -1426,11 +1624,16 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
         
         # AO to SAO basis transformation
         ovlp_ao = mol.intor("int1e_ovlp")
-        if ao_mo_trafo is None:
-            ao_mo_trafo = get_loewdin_trafo(ovlp_ao)
-        
-        if ao_mo_trafo_grad is None:
-            ao_mo_trafo_grad = get_derivative_ao_mo_trafo(mol)
+        if ao_mo_trafo is None or ao_mo_trafo_grad is None:
+            basis, basis_grad = get_ao_to_abstract_basis_with_derivative(
+                mol,
+                abstract_basis=abstract_basis,
+                basis_kwargs=basis_kwargs,
+            )
+            if ao_mo_trafo is None:
+                ao_mo_trafo = basis
+            if ao_mo_trafo_grad is None:
+                ao_mo_trafo_grad = basis_grad
             
         # 1-electron integrals with DF
         h1_ao = mf.get_hcore()
@@ -1553,14 +1756,18 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
     orb_deriv = get_orbital_derivative_coupling(mol,
                                                 ao_mo_trafo=ao_mo_trafo,
                                                 ao_mo_trafo_grad=ao_mo_trafo_grad,
-                                                ovlp=ovlp_ao)
+                                                ovlp=ovlp_ao,
+                                                abstract_basis=abstract_basis,
+                                                basis_kwargs=basis_kwargs)
 
     # 1-el grad 
     h1_jac = get_one_el_grad(
         mol, 
         h1_ao=h1_ao, 
         ao_mo_trafo=ao_mo_trafo, 
-        ao_mo_trafo_grad=ao_mo_trafo_grad
+        ao_mo_trafo_grad=ao_mo_trafo_grad,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
     )
         
     # Nuclear part of the gradient
@@ -1575,7 +1782,9 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
         ao_mo_trafo_grad=ao_mo_trafo_grad,
         #sao_diag=sao_diag, 
         ints_SAO=ints_sao,
-        df_response=df_response
+        df_response=df_response,
+        abstract_basis=abstract_basis,
+        basis_kwargs=basis_kwargs,
         )
 
     grad_elec_all = []

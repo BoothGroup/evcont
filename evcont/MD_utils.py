@@ -4,7 +4,9 @@ import numpy as np
 
 from evcont.ab_initio_gradients_loewdin import get_energy_with_grad
 
-from evcont.ab_initio_eigenvector_continuation import approximate_ground_state_OAO
+from evcont.ab_initio_eigenvector_continuation import (
+    approximate_ground_state_abstract_basis,
+)
 
 from evcont.electron_integral_utils import get_basis, get_integrals
 
@@ -17,7 +19,30 @@ from threadpoolctl import threadpool_limits
 rank = MPI.COMM_WORLD.Get_rank()
 
 
-def get_scanner(mol, one_rdm, two_rdm, overlap, hermitian=True):
+def _get_evcont_basis_settings(EVCont_obj):
+    abstract_basis = getattr(EVCont_obj, "abstract_basis", "SAO")
+    basis_kwargs = dict(getattr(EVCont_obj, "abstract_basis_kwargs", {}) or {})
+    basis_ref = getattr(EVCont_obj, "abstract_basis_ref", None)
+    basis_ref_mol = getattr(EVCont_obj, "abstract_basis_ref_mol", None)
+    basis_ref_mf = getattr(EVCont_obj, "abstract_basis_ref_mf", None)
+    if basis_ref is not None:
+        basis_kwargs.setdefault("basis_ref", basis_ref)
+    if basis_ref_mol is not None:
+        basis_kwargs.setdefault("basis_ref_mol", basis_ref_mol)
+    if basis_ref_mf is not None:
+        basis_kwargs.setdefault("ref_mf", basis_ref_mf)
+    return abstract_basis, basis_kwargs
+
+
+def get_scanner(
+    mol,
+    one_rdm,
+    two_rdm,
+    overlap,
+    hermitian=True,
+    abstract_basis="SAO",
+    basis_kwargs=None,
+):
     """
     Returns a fake scanner object to compute MD trajectories with PySCF from
     an eigenvector continuation.
@@ -47,6 +72,8 @@ def get_scanner(mol, one_rdm, two_rdm, overlap, hermitian=True):
                     overlap,
                     hermitian=hermitian,
                     return_density_matrices=True,
+                    abstract_basis=abstract_basis,
+                    basis_kwargs=basis_kwargs,
                 )
                 self.base.predicted_one_rdm = rdm_o
                 self.base.predicted_two_rdm = rdm_t
@@ -66,6 +93,8 @@ def get_trajectory(
     steps=10,
     init_veloc=None,
     hermitian=True,
+    abstract_basis="SAO",
+    basis_kwargs=None,
     trajectory_output=None,
     data_output=None,
 ):
@@ -102,7 +131,13 @@ def get_trajectory(
     if rank == 0:
         with threadpool_limits(limits=num_threads):
             scanner_fun = get_scanner(
-                init_mol, one_rdm, two_rdm, overlap, hermitian=hermitian
+                init_mol,
+                one_rdm,
+                two_rdm,
+                overlap,
+                hermitian=hermitian,
+                abstract_basis=abstract_basis,
+                basis_kwargs=basis_kwargs,
             )
 
             frames = []
@@ -167,11 +202,13 @@ def converge_EVCont_MD(
     Returns:
         trajectory: The calculated trajectory as a numpy array.
     """
+    abstract_basis, basis_kwargs = _get_evcont_basis_settings(EVCont_obj)
     if len(trn_times) < 1:
         i = 0
         trn_times = [0]
 
         EVCont_obj.append_to_rdms(init_mol.copy())
+        abstract_basis, basis_kwargs = _get_evcont_basis_settings(EVCont_obj)
 
         if rank == 0:
             if prune_irrelevant_data:
@@ -197,6 +234,8 @@ def converge_EVCont_MD(
             trajectory_output=trajectory_out,
             data_output=en_out,
             dt=dt,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
         )
 
         if rank == 0:
@@ -244,10 +283,12 @@ def converge_EVCont_MD(
                 EVCont_obj.one_rdm,
                 EVCont_obj.two_rdm,
                 steps=steps,
-                trajectory_output=trajectory_out,
-                data_output=en_out,
-                dt=dt,
-            )
+            trajectory_output=trajectory_out,
+            data_output=en_out,
+            dt=dt,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
+        )
         else:
             trajectory = np.load("traj_EVCont_{}.npy".format(i))
 
@@ -264,11 +305,13 @@ def converge_EVCont_MD(
             if i > 0:
                 reference_ens = np.array(
                     [
-                        approximate_ground_state_OAO(
+                        approximate_ground_state_abstract_basis(
                             init_mol.copy().set_geom_(geometry),
                             EVCont_obj.one_rdm[:-1, :-1],
                             EVCont_obj.two_rdm[:-1, :-1],
                             EVCont_obj.overlap[:-1, :-1],
+                            abstract_basis=abstract_basis,
+                            **basis_kwargs,
                         )[0]
                         for geometry in trajectory
                     ]
@@ -288,11 +331,13 @@ def converge_EVCont_MD(
 
                         reference_ens_datapoint_removed = np.array(
                             [
-                                approximate_ground_state_OAO(
+                                approximate_ground_state_abstract_basis(
                                     init_mol.copy().set_geom_(geometry),
                                     EVCont_obj.one_rdm[test_ids],
                                     EVCont_obj.two_rdm[test_ids],
                                     EVCont_obj.overlap[test_ids],
+                                    abstract_basis=abstract_basis,
+                                    **basis_kwargs,
                                 )[0]
                                 for geometry in trajectory
                             ]
@@ -385,7 +430,10 @@ def converge_EVCont_MD(
                 )
                 for j, trn_geom in enumerate(trn_geometries):
                     mol = init_mol.copy().set_geom_(trn_geom)
-                    h1, h2 = get_integrals(mol, get_basis(mol))
+                    h1, h2 = get_integrals(
+                        mol,
+                        get_basis(mol, basis_type=abstract_basis, **basis_kwargs),
+                    )
                     h1_trn[j] = h1
                     h2_trn[j] = h2
 
@@ -393,7 +441,10 @@ def converge_EVCont_MD(
 
                 for j, geometry in enumerate(trajectory):
                     mol = init_mol.copy().set_geom_(geometry)
-                    h1, h2 = get_integrals(mol, get_basis(mol))
+                    h1, h2 = get_integrals(
+                        mol,
+                        get_basis(mol, basis_type=abstract_basis, **basis_kwargs),
+                    )
 
                     distance = np.sum(
                         abs(h1 - h1_trn) ** 2, axis=(-1, -2)
@@ -410,6 +461,7 @@ def converge_EVCont_MD(
         trn_times.append(trn_time)
 
         EVCont_obj.append_to_rdms(init_mol.copy().set_geom_(trn_geometry))
+        abstract_basis, basis_kwargs = _get_evcont_basis_settings(EVCont_obj)
 
         if rank == 0:
             if prune_irrelevant_data:
@@ -438,6 +490,8 @@ def converge_EVCont_MD(
             trajectory_output=trajectory_out,
             data_output=en_out,
             dt=dt,
+            abstract_basis=abstract_basis,
+            basis_kwargs=basis_kwargs,
         )
 
         if rank == 0:
@@ -447,11 +501,13 @@ def converge_EVCont_MD(
 
             reference_ens = np.array(
                 [
-                    approximate_ground_state_OAO(
+                    approximate_ground_state_abstract_basis(
                         init_mol.copy().set_geom_(geometry),
                         EVCont_obj.one_rdm[:-1, :-1],
                         EVCont_obj.two_rdm[:-1, :-1],
                         EVCont_obj.overlap[:-1, :-1],
+                        abstract_basis=abstract_basis,
+                        **basis_kwargs,
                     )[0]
                     for geometry in trajectory
                 ]
@@ -472,11 +528,13 @@ def converge_EVCont_MD(
 
                         reference_ens_datapoint_removed = np.array(
                             [
-                                approximate_ground_state_OAO(
+                                approximate_ground_state_abstract_basis(
                                     init_mol.copy().set_geom_(geometry),
                                     EVCont_obj.one_rdm[test_ids],
                                     EVCont_obj.two_rdm[test_ids],
                                     EVCont_obj.overlap[test_ids],
+                                    abstract_basis=abstract_basis,
+                                    **basis_kwargs,
                                 )[0]
                                 for geometry in trajectory
                             ]
