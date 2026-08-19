@@ -1,4 +1,5 @@
 import numpy as np
+from types import SimpleNamespace
 
 from ebcc import REBCC
 from ebcc.logging import NullLogger
@@ -13,6 +14,8 @@ from evcont.basis.basis_utils import (
 )
 from evcont.electron_integral_utils import get_basis
 from evcont.solver_evaluation import EVContEvaluationMixin
+from evcont.solver_persistence import EVContPersistenceMixin
+from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
 
 
 def _run_rhf(
@@ -64,7 +67,7 @@ def _rdm_energy(mol, mf, mo_coeff, rdm1, rdm2):
     return float(np.real(e_elec + mol.energy_nuc()))
 
 
-class CCSD_EVCont_obj(EVContEvaluationMixin):
+class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
     """Ground-state RCCSD eigenvector-continuation container.
 
     The object follows the SCI continuation convention of storing a reference
@@ -74,6 +77,12 @@ class CCSD_EVCont_obj(EVContEvaluationMixin):
     Procrustes bases, the same reference geometry anchors the Procrustes
     alignment.
     """
+
+    _lowrank_reduction_keys = {
+        "truncation_style", "nvecs", "eval_thr", "ham_thr", "save_diag",
+        "Jdiag_only", "relax_amp", "opt_no_diag", "relax_after", "use_svd",
+        "svd_weight", "iterative", "nit", "max_iter_time", "min_eval",
+    }
 
     def __init__(
         self,
@@ -91,6 +100,9 @@ class CCSD_EVCont_obj(EVContEvaluationMixin):
         scf_max_cycle=100,
         scf_density_fit=False,
         scf_df_basis=None,
+        lowrank=False,
+        lowrank_kwargs=None,
+        **kwargs,
     ):
         if comp_mol is None:
             raise ValueError("comp_mol must be provided for CCSD continuation")
@@ -111,6 +123,15 @@ class CCSD_EVCont_obj(EVContEvaluationMixin):
         self.scf_max_cycle = scf_max_cycle
         self.scf_density_fit = scf_density_fit
         self.scf_df_basis = scf_df_basis
+        self.lowrank = lowrank
+        self.kwargs = dict(lowrank_kwargs or {})
+        self.kwargs.update(kwargs)
+        self.lowrank_kwargs = {
+            key: value for key, value in self.kwargs.items()
+            if key in self._lowrank_reduction_keys
+        }
+        self.diagonal_lr = None
+        self.vecs_lowrank = {}
         self._basis_name = normalize_basis_type(abstract_basis)
 
         if self._basis_name == "split_procrustes" and scf_density_fit:
@@ -279,86 +300,144 @@ class CCSD_EVCont_obj(EVContEvaluationMixin):
         nao = self.comp_mol.nao
         nel = self.comp_mol.nelectron
         one_rdm = np.zeros((nstate, nstate, nao, nao))
-        two_rdm = np.zeros((nstate, nstate, nao, nao, nao, nao))
+        old_nstate = 0 if self.one_rdm is None else self.one_rdm.shape[0]
+        if old_nstate:
+            one_rdm[:old_nstate, :old_nstate] = self.one_rdm
+        two_rdm = None
+        diagonal_lr = None
+        vecs_lowrank = dict(self.vecs_lowrank)
+        if not self.lowrank:
+            two_rdm = np.zeros((nstate, nstate, nao, nao, nao, nao))
+            if old_nstate:
+                two_rdm[:old_nstate, :old_nstate] = self.two_rdm
+        elif self.diagonal_lr is not None:
+            diagonal_lr = np.zeros((nstate, nstate, 3, nao, nao))
+            diagonal_lr[:old_nstate, :old_nstate] = self.diagonal_lr
 
-        for j in range(nstate):
-            for i in range(j, nstate):
-                ccsd_i = self.states[i]
-                ccsd_j = self.states[j]
+        pairs = (
+            [(i, j) for j in range(nstate) for i in range(j, nstate)]
+            if old_nstate == 0
+            else [(nstate - 1, j) for j in range(nstate)]
+        )
+        for i, j in pairs:
+            ccsd_i = self.states[i]
+            ccsd_j = self.states[j]
 
-                rdm1 = make_rdm1_f(
-                    l1a=ccsd_i.l1,
-                    l2a=ccsd_i.l2,
-                    t1a=ccsd_i.t1,
-                    t2a=ccsd_i.t2,
-                    t1b=ccsd_j.t1,
-                    t2b=ccsd_j.t2,
+            rdm1 = make_rdm1_f(
+                l1a=ccsd_i.l1,
+                l2a=ccsd_i.l2,
+                t1a=ccsd_i.t1,
+                t2a=ccsd_i.t2,
+                t1b=ccsd_j.t1,
+                t2b=ccsd_j.t2,
+            )
+            rdm2 = make_rdm2_f(
+                l1a=ccsd_i.l1,
+                l2a=ccsd_i.l2,
+                t1a=ccsd_i.t1,
+                t2a=ccsd_i.t2,
+                t1b=ccsd_j.t1,
+                t2b=ccsd_j.t2,
+            )
+
+            rdm1_conj = make_rdm1_f(
+                l1a=ccsd_j.l1,
+                l2a=ccsd_j.l2,
+                t1a=ccsd_j.t1,
+                t2a=ccsd_j.t2,
+                t1b=ccsd_i.t1,
+                t2b=ccsd_i.t2,
+            )
+            rdm2_conj = make_rdm2_f(
+                l1a=ccsd_j.l1,
+                l2a=ccsd_j.l2,
+                t1a=ccsd_j.t1,
+                t2a=ccsd_j.t2,
+                t1b=ccsd_i.t1,
+                t2b=ccsd_i.t2,
+            )
+
+            if self.hermitise == "both":
+                rdm1 = 0.5 * (rdm1 + rdm1_conj.conj().T)
+                rdm2 = 0.5 * (rdm2 + np.einsum("ijkl->jilk", rdm2_conj.conj()))
+            elif self.hermitise != "none":
+                raise ValueError("hermitise must be 'both' or 'none'")
+
+            rdm1 = _symmetrize_rdm1(rdm1)
+            rdm2 = _symmetrize_rdm2(rdm2)
+
+            if self.use_computational_reference:
+                rdm1 = np.einsum(
+                    "...ij,ia,jb->...ab",
+                    rdm1,
+                    self.global_trafo,
+                    self.global_trafo,
+                    optimize="optimal",
                 )
-                rdm2 = make_rdm2_f(
-                    l1a=ccsd_i.l1,
-                    l2a=ccsd_i.l2,
-                    t1a=ccsd_i.t1,
-                    t2a=ccsd_i.t2,
-                    t1b=ccsd_j.t1,
-                    t2b=ccsd_j.t2,
+                rdm2 = np.einsum(
+                    "...ijkl,ia,jb,kc,ld->...abcd",
+                    rdm2,
+                    self.global_trafo,
+                    self.global_trafo,
+                    self.global_trafo,
+                    self.global_trafo,
+                    optimize="optimal",
                 )
 
-                rdm1_conj = make_rdm1_f(
-                    l1a=ccsd_j.l1,
-                    l2a=ccsd_j.l2,
-                    t1a=ccsd_j.t1,
-                    t2a=ccsd_j.t2,
-                    t1b=ccsd_i.t1,
-                    t2b=ccsd_i.t2,
-                )
-                rdm2_conj = make_rdm2_f(
-                    l1a=ccsd_j.l1,
-                    l2a=ccsd_j.l2,
-                    t1a=ccsd_j.t1,
-                    t2a=ccsd_j.t2,
-                    t1b=ccsd_i.t1,
-                    t2b=ccsd_i.t2,
-                )
-
-                if self.hermitise == "both":
-                    rdm1 = 0.5 * (rdm1 + rdm1_conj.conj().T)
-                    rdm2 = 0.5 * (rdm2 + np.einsum("ijkl->jilk", rdm2_conj.conj()))
-                elif self.hermitise != "none":
-                    raise ValueError("hermitise must be 'both' or 'none'")
-
-                rdm1 = _symmetrize_rdm1(rdm1)
-                rdm2 = _symmetrize_rdm2(rdm2)
-
-                if self.use_computational_reference:
-                    rdm1 = np.einsum(
-                        "...ij,ia,jb->...ab",
-                        rdm1,
-                        self.global_trafo,
-                        self.global_trafo,
-                        optimize="optimal",
+            one_rdm[i, j] = rdm1
+            one_rdm[j, i] = rdm1.conj().T
+            if self.lowrank:
+                basis_kwargs = dict(self.abstract_basis_kwargs)
+                if self.abstract_basis_ref_mol is not None:
+                    basis_kwargs.setdefault(
+                        "basis_ref_mol", self.abstract_basis_ref_mol
                     )
-                    rdm2 = np.einsum(
-                        "...ijkl,ia,jb,kc,ld->...abcd",
-                        rdm2,
-                        self.global_trafo,
-                        self.global_trafo,
-                        self.global_trafo,
-                        self.global_trafo,
-                        optimize="optimal",
-                    )
-
-                one_rdm[i, j] = rdm1
+                if self._basis_name == "split_procrustes":
+                    basis_kwargs.setdefault("ref_mf", self.abstract_basis_ref_mf)
+                vectors, diagonals, joint = reduce_2rdm(
+                    rdm1,
+                    rdm2,
+                    np.trace(rdm1) / nel,
+                    mol=self.mols[i],
+                    train_en=self.train_energies[i],
+                    abstract_basis=self.abstract_basis,
+                    basis_ref=self.abstract_basis_ref,
+                    basis_kwargs=basis_kwargs,
+                    **self.lowrank_kwargs,
+                )
+                values, left, right = vectors
+                vecs_lowrank[i, j] = values, left, right, joint
+                vecs_lowrank[j, i] = (
+                    values.conj(),
+                    left.conj(),
+                    right.conj(),
+                    joint,
+                )
+                if diagonals is not None:
+                    if diagonal_lr is None:
+                        diagonal_lr = np.zeros((nstate, nstate, 3, nao, nao))
+                    diagonal_lr[i, j] = diagonals
+                    diagonal_lr[j, i] = diagonals.conj()
+            else:
                 two_rdm[i, j] = rdm2
-                one_rdm[j, i] = rdm1.conj().T
                 two_rdm[j, i] = np.einsum("ijkl->jilk", rdm2.conj())
 
         self.one_rdm = one_rdm
         self.two_rdm = two_rdm
+        self.diagonal_lr = diagonal_lr
+        self.vecs_lowrank = vecs_lowrank
+        self.lowrank_vectorized = None
+        self.diagonal_vectorized = None
         self.overlap = np.einsum("abcc->ab", one_rdm, optimize="optimal") / nel
+
+    def vectorize_lowrank(self, hermitian=True):
+        vectorize_lowrank(self, hermitian=hermitian)
 
     def approximate(self, mol, nroots=1, hermitian=True):
         if nroots != 1:
             raise ValueError("CCSD continuation is currently implemented only for nroots=1")
+        if self.lowrank:
+            return self.get_en(mol, nroots=nroots, hermitian=hermitian)
         mf = _run_rhf(
             mol,
             conv_tol=self.scf_conv_tol,
@@ -394,3 +473,14 @@ class CCSD_EVCont_obj(EVContEvaluationMixin):
         if nroots != 1:
             raise ValueError("CCSD continuation is currently implemented only for nroots=1")
         return nroots
+
+    def _persistence_state(self):
+        state = dict(self.__dict__)
+        state["states"] = [
+            {name: np.asarray(getattr(ccsd, name)) for name in ("t1", "t2", "l1", "l2")}
+            for ccsd in self.states
+        ]
+        return state
+
+    def _restore_persistence_state(self):
+        self.states = [SimpleNamespace(**state) for state in self.states]
