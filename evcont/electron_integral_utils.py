@@ -136,7 +136,9 @@ def get_df_integrals(mol, basis=None, auxbasis=None, grad=False):
     
     # Transform to the specified basis if provided
     if basis is not None:
-        cd_array = np.einsum('Pij,ai,bj->Pab', cd_array, basis, basis, optimize='optimal')
+        cd_array = np.einsum(
+            "Pij,ia,jb->Pab", cd_array, basis, basis, optimize="optimal"
+        )
     
     # Full 4c integrals can be reconstructed as:
     #explicit_df_eri = np.einsum('Pij,Pkl->ijkl', cd_array, cd_array)
@@ -153,7 +155,13 @@ def get_df_integrals(mol, basis=None, auxbasis=None, grad=False):
         
         # Transform to the specified basis if provided
         if basis is not None:
-            deriv_cderi = np.einsum('Pxij,ai,bj->Pxab', deriv_cderi, basis, basis, optimize='optimal')
+            deriv_cderi = np.einsum(
+                "xijP,ia,jb->xPab",
+                deriv_cderi,
+                basis,
+                basis,
+                optimize="optimal",
+            )
         
         # Full 4c derivative integrals can be reconstructed as:
         # df_grad_4c_ints = np.einsum('xijP,Pkl->xijkl', deriv_cderi, cd_array)
