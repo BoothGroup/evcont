@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -51,9 +52,23 @@ LEAST_CHANGE_LOCAL_ALIASES = {
 }
 
 DEFAULT_RHF_CONV_TOL = 1.0e-12
-DEFAULT_RHF_CONV_TOL_GRAD = 1.0e-10
+DEFAULT_RHF_CONV_TOL_GRAD = 1.0e-8
 DEFAULT_RHF_CONV_TOL_CPSCF = 1.0e-10
 DEFAULT_RHF_MAX_CYCLE = 100
+
+
+@dataclass(frozen=True)
+class RHFConvergenceThresholds:
+    """Maximum residuals for accepting a partially converged RHF result."""
+
+    energy: float
+    gradient: float
+
+
+DEFAULT_MIN_CONVERGENCE = RHFConvergenceThresholds(
+    energy=1.0e-10,
+    gradient=1.0e-6,
+)
 
 
 @dataclass(frozen=True)
@@ -128,6 +143,7 @@ def _run_rhf(
     conv_tol_grad: float = DEFAULT_RHF_CONV_TOL_GRAD,
     conv_tol_cpscf: float = DEFAULT_RHF_CONV_TOL_CPSCF,
     max_cycle: int = DEFAULT_RHF_MAX_CYCLE,
+    min_convergence: RHFConvergenceThresholds = DEFAULT_MIN_CONVERGENCE,
 ) -> scf.hf.RHF:
     """Run a quiet RHF calculation and return the converged object."""
 
@@ -139,10 +155,75 @@ def _run_rhf(
     mf.conv_tol_grad = conv_tol_grad
     mf.conv_tol_cpscf = conv_tol_cpscf
     mf.max_cycle = max_cycle
-    with contextlib.redirect_stdout(io.StringIO()):
-        mf.kernel()
-    if not mf.converged:
-        raise RuntimeError("RHF did not converge while building an abstract basis")
+
+    last_iteration = {}
+
+    def capture_iteration(envs):
+        last_iteration.update(
+            energy_error=abs(float(envs["e_tot"] - envs["last_hf_e"])),
+            gradient_error=float(envs["norm_gorb"]),
+            e_tot=float(envs["e_tot"]),
+            mo_energy=np.array(envs["mo_energy"], copy=True),
+            mo_coeff=np.array(envs["mo_coeff"], copy=True),
+            mo_occ=np.array(envs["mo_occ"], copy=True),
+            cycles=int(envs["cycle"]) + 1,
+        )
+
+    mf.callback = capture_iteration
+    linear_algebra_error = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            mf.kernel()
+    except np.linalg.LinAlgError as error:
+        linear_algebra_error = error
+
+    energy_error = last_iteration.get("energy_error", np.inf)
+    gradient_error = last_iteration.get("gradient_error", np.inf)
+    min_energy = max(float(conv_tol), float(min_convergence.energy))
+    min_gradient = max(float(conv_tol_grad), float(min_convergence.gradient))
+    minimum_reached = energy_error <= min_energy and gradient_error <= min_gradient
+
+    if linear_algebra_error is None and mf.converged:
+        return mf
+
+    if not minimum_reached:
+        message = (
+            "RHF did not converge while building an abstract basis: "
+            f"final |delta E|={energy_error:.3e} (minimum {min_energy:.3e}), "
+            f"|gradient|={gradient_error:.3e} (minimum {min_gradient:.3e})"
+        )
+        if linear_algebra_error is not None:
+            raise RuntimeError(message) from linear_algebra_error
+        raise RuntimeError(message)
+
+    if linear_algebra_error is not None:
+        mf.e_tot = last_iteration["e_tot"]
+        mf.mo_energy = last_iteration["mo_energy"]
+        mf.mo_coeff = last_iteration["mo_coeff"]
+        mf.mo_occ = last_iteration["mo_occ"]
+        mf.cycles = last_iteration["cycles"]
+
+    mf.converged = True
+    mf._evcont_minimum_convergence = {
+        "energy_error": energy_error,
+        "gradient_error": gradient_error,
+        "energy_threshold": min_energy,
+        "gradient_threshold": min_gradient,
+    }
+    reason = (
+        f" after {type(linear_algebra_error).__name__}: {linear_algebra_error}"
+        if linear_algebra_error is not None
+        else ""
+    )
+    warnings.warn(
+        "RHF did not reach the requested convergence thresholds"
+        f"{reason}; accepting the result because the minimum convergence "
+        f"thresholds were reached (|delta E|={energy_error:.3e} <= "
+        f"{min_energy:.3e}, |gradient|={gradient_error:.3e} <= "
+        f"{min_gradient:.3e}).",
+        RuntimeWarning,
+        stacklevel=2,
+    )
     return mf
 
 
@@ -338,6 +419,7 @@ def _least_change_reference(
         "conv_tol_grad",
         "conv_tol_cpscf",
         "max_cycle",
+        "min_convergence",
     )
     rhf_options = {key: kwargs[key] for key in allowed if key in kwargs}
     mf = mf_object if mf_object is not None else _run_rhf(mol, **rhf_options)
@@ -381,6 +463,7 @@ def _least_change_basis(
         "conv_tol_grad",
         "conv_tol_cpscf",
         "max_cycle",
+        "min_convergence",
     )
     rhf_options = {key: kwargs[key] for key in allowed if key in kwargs}
     mf = mf_object if mf_object is not None else _run_rhf(mol, **rhf_options)
