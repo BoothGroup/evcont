@@ -12,7 +12,6 @@ from evcont.electron_integral_utils import (
     get_basis,
     get_basis_with_derivative,
     get_loewdin_trafo,
-    restore_electron_exchange_symmetry,
     get_df_integrals
 )
 
@@ -22,6 +21,14 @@ from evcont.low_rank_utils import (
 )
 
 from evcont.logging_utils import logger, log_time, timeit
+from evcont.rdm_inference import (
+    contract_rdm1,
+    contract_rdm2,
+    infer_rdms,
+    make_rdm_result,
+    normalize_rdm_request,
+    resolve_state_pairs,
+)
 
 import sys
 
@@ -475,6 +482,9 @@ def get_energy_with_grad(
     S,
     hermitian=True,
     return_density_matrices=False,
+    return_coefficients=False,
+    return_rdms=False,
+    rdm_basis="AO",
     abstract_basis="SAO",
     basis_kwargs=None,
 ):
@@ -514,25 +524,8 @@ def get_energy_with_grad(
 
     en, vec = approximate_ground_state(h1, h2, one_RDM, two_RDM, S, hermitian=hermitian)
 
-    one_rdm_predicted = np.tensordot(np.outer(vec, vec), one_RDM, axes=2)
-
-    if len(two_RDM.shape) == 2 or len(two_RDM.shape) == 5:
-        # symmetry in data points
-        eigenvec_mat = 2 * np.outer(vec, vec)
-
-        np.fill_diagonal(eigenvec_mat, 0.5 * np.diag(eigenvec_mat))
-
-        two_rdm_predicted = np.tensordot(
-            eigenvec_mat[np.tril_indices(len(vec))], two_RDM, axes=1
-        )
-
-    else:
-        two_rdm_predicted = np.tensordot(np.outer(vec, vec), two_RDM, axes=2)
-
-    if len(two_rdm_predicted.shape) != 4:
-        two_rdm_predicted = restore_electron_exchange_symmetry(
-            two_rdm_predicted, mol.nao
-        )
+    one_rdm_predicted = contract_rdm1(one_RDM, vec, vec)
+    two_rdm_predicted = contract_rdm2(two_RDM, vec, vec, mol.nao)
 
     grad_elec = get_grad_elec_OAO(
         mol,
@@ -544,19 +537,28 @@ def get_energy_with_grad(
         basis_kwargs=basis_kwargs,
     )
 
+    energy = en.real + mol.energy_nuc()
+    gradient = grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc()
     if return_density_matrices:
         return (
-            en.real + mol.energy_nuc(),
-            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+            energy,
+            gradient,
             one_rdm_predicted,
             two_rdm_predicted,
         )
 
-    else:
-        return (
-            en.real + mol.energy_nuc(),
-            grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
+    result = (vec, energy, gradient) if return_coefficients else (energy, gradient)
+    if return_rdms:
+        request = normalize_rdm_request(return_rdms)
+        rdms = make_rdm_result(
+            np.asarray([one_rdm_predicted]) if "1rdm" in request else None,
+            np.asarray([two_rdm_predicted]) if "2rdm" in request else None,
+            ((0, 0),),
+            basis=rdm_basis,
+            ao_basis=ao_mo_trafo,
         )
+        result += (rdms,)
+    return result
       
 def get_energy_with_grad_cpuefficient(
     mol,
@@ -565,6 +567,9 @@ def get_energy_with_grad_cpuefficient(
     S,
     hermitian=True,
     return_density_matrices=False,
+    return_coefficients=False,
+    return_rdms=False,
+    rdm_basis="AO",
     abstract_basis="SAO",
     basis_kwargs=None,
 ):
@@ -610,34 +615,28 @@ def get_energy_with_grad_cpuefficient(
         basis_kwargs=basis_kwargs,
     )
 
-    one_rdm_predicted = np.tensordot(np.outer(vec, vec), one_RDM, axes=2)
-
-    if len(two_RDM.shape) == 2 or len(two_RDM.shape) == 5:
-        # symmetry in data points
-        eigenvec_mat = 2 * np.outer(vec, vec)
-
-        np.fill_diagonal(eigenvec_mat, 0.5 * np.diag(eigenvec_mat))
-
-        two_rdm_predicted = np.tensordot(
-            eigenvec_mat[np.tril_indices(len(vec))], two_RDM, axes=1
-        )
-
-    else:
-        two_rdm_predicted = np.tensordot(np.outer(vec, vec), two_RDM, axes=2)
-
-    if len(two_rdm_predicted.shape) != 4:
-        two_rdm_predicted = restore_electron_exchange_symmetry(
-            two_rdm_predicted, mol.nao
-        )
+    one_rdm_predicted = contract_rdm1(one_RDM, vec, vec)
+    two_rdm_predicted = contract_rdm2(two_RDM, vec, vec, mol.nao)
 
     grad_elec = get_grad_elec_from_gradH(
         one_rdm_predicted, two_rdm_predicted, h1_jac, h2_jac
     )
 
-    return (
-        en.real + mol.energy_nuc(),
-        grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc(),
-    )
+    energy = en.real + mol.energy_nuc()
+    gradient = grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc()
+    if return_density_matrices:
+        return energy, gradient, one_rdm_predicted, two_rdm_predicted
+    result = (vec, energy, gradient) if return_coefficients else (energy, gradient)
+    if return_rdms:
+        request = normalize_rdm_request(return_rdms)
+        result += (make_rdm_result(
+            np.asarray([one_rdm_predicted]) if "1rdm" in request else None,
+            np.asarray([two_rdm_predicted]) if "2rdm" in request else None,
+            ((0, 0),),
+            basis=rdm_basis,
+            ao_basis=ao_mo_trafo,
+        ),)
+    return result
 
 ############################################################
 # NEW MULTISTATE - SEPERATED FROM REST FOR TESTING
@@ -935,6 +934,10 @@ def get_multistate_energy_with_grad(
     nroots=1,
     hermitian=True,
     return_density_matrices=False,
+    return_coefficients=False,
+    return_rdms=False,
+    rdm_basis="AO",
+    rdm_state_pairs="diagonal",
     abstract_basis="SAO",
     basis_kwargs=None,
 ):
@@ -997,24 +1000,8 @@ def get_multistate_energy_with_grad(
         #    "i,ijklmn,j->klmn", vec_i, two_RDM, vec_i, optimize="optimal"
         #)
         
-        one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_i), one_RDM, axes=2)
-        if len(two_RDM.shape) == 2 or len(two_RDM.shape) == 5:
-            # symmetry in data points
-            eigenvec_mat = 2 * np.outer(vec_i, vec_i)
-
-            np.fill_diagonal(eigenvec_mat, 0.5 * np.diag(eigenvec_mat))
-
-            two_rdm_predicted = np.tensordot(
-                eigenvec_mat[np.tril_indices(len(vec_i))], two_RDM, axes=1
-            )
-
-        else:
-            two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_i), two_RDM, axes=2)
-
-        if len(two_rdm_predicted.shape) != 4:
-            two_rdm_predicted = restore_electron_exchange_symmetry(
-                two_rdm_predicted, mol.nao
-            )
+        one_rdm_predicted = contract_rdm1(one_RDM, vec_i, vec_i)
+        two_rdm_predicted = contract_rdm2(two_RDM, vec_i, vec_i, mol.nao)
             
 
         grad_elec = get_grad_elec_from_gradH(
@@ -1027,23 +1014,49 @@ def get_multistate_energy_with_grad(
         
     grad_elec_all = np.array(grad_elec_all)
 
+    energies = en.real + mol.energy_nuc()
+    gradients = grad_elec_all + grad.RHF(scf.RHF(mol)).grad_nuc()
     if return_density_matrices:
         return (
-            en.real + mol.energy_nuc(),
-            grad_elec_all + grad.RHF(scf.RHF(mol)).grad_nuc(),
+            energies,
+            gradients,
             one_rdm_predicted_all,
             two_rdm_predicted_all,
         )
 
-    else:
-        return (
-            en.real + mol.energy_nuc(),
-            grad_elec_all + grad.RHF(scf.RHF(mol)).grad_nuc(),
-        )
+    result = (vec, energies, gradients) if return_coefficients else (energies, gradients)
+    if return_rdms:
+        requested_pairs = resolve_state_pairs(vec, rdm_state_pairs)
+        diagonal_pairs = tuple((state, state) for state in range(nroots))
+        request = normalize_rdm_request(return_rdms)
+        if requested_pairs == diagonal_pairs:
+            rdms = make_rdm_result(
+                np.asarray(one_rdm_predicted_all) if "1rdm" in request else None,
+                np.asarray(two_rdm_predicted_all) if "2rdm" in request else None,
+                requested_pairs,
+                basis=rdm_basis,
+                ao_basis=ao_mo_trafo,
+            )
+        else:
+            rdms = infer_rdms(
+                vec,
+                one_RDM,
+                two_RDM,
+                return_rdms=request,
+                state_pairs=requested_pairs,
+                basis=rdm_basis,
+                ao_basis=ao_mo_trafo,
+            )
+        result += (rdms,)
+    return result
 
 @timeit
-def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1, 
+def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
                                             savemem=True, hermitian=True,
+                                            return_coefficients=True,
+                                            return_rdms=False,
+                                            rdm_basis="AO",
+                                            rdm_state_pairs="diagonal",
                                             abstract_basis="SAO",
                                             basis_kwargs=None):
     """
@@ -1127,6 +1140,11 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
     grad_elec_all = []
     nac_all = {}
     nac_all_hfonly = {}
+    rdm_request = normalize_rdm_request(return_rdms)
+    requested_pairs = resolve_state_pairs(vec, rdm_state_pairs) if rdm_request else ()
+    requested_pair_set = set(requested_pairs)
+    one_rdms = {}
+    two_rdms = {}
     # Iterate over pairs of eigenstates
     for i_state in range(nroots):
         vec_i = vec[i_state,:]
@@ -1139,24 +1157,14 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
             #two_rdm_predicted = lib.einsum(
             #    "i,ijklmn,j->klmn", vec_i, two_RDM, vec_j, optimize="optimal"
             #)
-            one_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), one_RDM, axes=2)
-            if len(two_RDM.shape) == 2 or len(two_RDM.shape) == 5:
-                # symmetry in data points
-                eigenvec_mat = 2 * np.outer(vec_i, vec_j)
-
-                np.fill_diagonal(eigenvec_mat, 0.5 * np.diag(eigenvec_mat))
-
-                two_rdm_predicted = np.tensordot(
-                    eigenvec_mat[np.tril_indices(len(vec_i))], two_RDM, axes=1
-                )
-
-            else:
-                two_rdm_predicted = np.tensordot(np.outer(vec_i, vec_j), two_RDM, axes=2)
-
-            if len(two_rdm_predicted.shape) != 4:
-                two_rdm_predicted = restore_electron_exchange_symmetry(
-                    two_rdm_predicted, mol.nao
-                )
+            one_rdm_predicted = contract_rdm1(one_RDM, vec_i, vec_j)
+            two_rdm_predicted = contract_rdm2(two_RDM, vec_i, vec_j, mol.nao)
+            pair = (i_state, j_state)
+            if pair in requested_pair_set:
+                if "1rdm" in rdm_request:
+                    one_rdms[pair] = one_rdm_predicted
+                if "2rdm" in rdm_request:
+                    two_rdms[pair] = two_rdm_predicted
             
             # d\dR of subspace Hamiltonian
             if savemem:
@@ -1200,13 +1208,22 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
     # Add the nuclear contribution to gradient
     grad_all = np.array(grad_elec_all) + grad_nuc
 
-    return (
-        vec,
-        en.real + mol.energy_nuc(),
-        grad_all,
-        nac_all,
-        nac_all_hfonly
+    core_result = (
+        en.real + mol.energy_nuc(), grad_all, nac_all, nac_all_hfonly
     )
+    result = (vec,) + core_result if return_coefficients else core_result
+    if rdm_request:
+        rdms = make_rdm_result(
+            np.stack([one_rdms[pair] for pair in requested_pairs])
+            if "1rdm" in rdm_request else None,
+            np.stack([two_rdms[pair] for pair in requested_pairs])
+            if "2rdm" in rdm_request else None,
+            requested_pairs,
+            basis=rdm_basis,
+            ao_basis=ao_mo_trafo,
+        )
+        result += (rdms,)
+    return result
 
 
 ##############################################################################
@@ -1601,6 +1618,10 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
                                      df_response=False,
                                      hermitian=True,
                                      lindep=1e-6,
+                                     return_coefficients=True,
+                                     return_rdms=False,
+                                     rdm_basis="AO",
+                                     rdm_state_pairs="diagonal",
                                      abstract_basis="SAO",
                                      basis_kwargs=None):
     """
@@ -1839,13 +1860,21 @@ def get_lowrank_en_with_grad_and_NAC(mol, one_RDM, S, lowrank_vecs,
     # Add the nuclear contribution to gradient
     grad_all = np.array(grad_elec_all) + grad_nuc
 
-    return (
-        vec,
-        en.real + mol.energy_nuc(),
-        grad_all,
-        nac_all,
-        nac_all_hfonly
+    core_result = (
+        en.real + mol.energy_nuc(), grad_all, nac_all, nac_all_hfonly
     )
+    result = (vec,) + core_result if return_coefficients else core_result
+    if return_rdms:
+        result += (infer_rdms(
+            vec,
+            one_RDM,
+            return_rdms=return_rdms,
+            state_pairs=rdm_state_pairs,
+            basis=rdm_basis,
+            ao_basis=ao_mo_trafo,
+            lowrank=True,
+        ),)
+    return result
 
 if __name__ == '__main__':
     

@@ -96,8 +96,14 @@ class EVContEvaluationMixin:
     def get_en_with_grad(self, mol, nroots=None, **kwargs):
         """Return continuation energies and nuclear gradients."""
         if getattr(self, "lowrank", False):
+            return_coefficients = kwargs.get("return_coefficients", False)
+            kwargs["return_coefficients"] = return_coefficients
+            return_rdms = kwargs.get("return_rdms", False)
             result = self.get_en_with_grad_and_NAC(mol, nroots=nroots, **kwargs)
-            return result[1], result[2]
+            output = result[:3] if return_coefficients else result[:2]
+            if return_rdms:
+                output += (result[-1],)
+            return output
 
         return get_multistate_energy_with_grad(
             mol,

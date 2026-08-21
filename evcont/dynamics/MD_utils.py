@@ -44,7 +44,28 @@ except ImportError:
 rank = MPI.COMM_WORLD.Get_rank()
 
 
-def get_scanner(mol, continuation):
+def save_rdm_trajectory(filename, results):
+    """Save a sequence of :class:`RDMResult` objects to one NPZ file."""
+    if not results:
+        return
+    payload = {
+        "basis": np.asarray(results[0].basis),
+        "state_pairs": np.asarray(results[0].state_pairs),
+    }
+    if results[0].one is not None:
+        payload["one"] = np.stack([result.one for result in results])
+    if results[0].two is not None:
+        payload["two"] = np.stack([result.two for result in results])
+    np.savez(filename, **payload)
+
+
+def get_scanner(
+    mol,
+    continuation,
+    return_rdms=False,
+    rdm_basis="AO",
+    collect_coefficients=False,
+):
     """Return a PySCF gradient scanner backed by a continuation object."""
 
     class Base:
@@ -54,10 +75,25 @@ def get_scanner(mol, continuation):
         def __init__(self):
             self.mol = mol
             self.base = Base()
+            self.coefficients = []
+            self.rdm_results = []
 
         def __call__(self, mol):
             self.mol = mol
-            energies, gradients = continuation.get_en_with_grad(mol, nroots=1)
+            result = continuation.get_en_with_grad(
+                mol,
+                nroots=1,
+                return_coefficients=collect_coefficients,
+                return_rdms=return_rdms,
+                rdm_basis=rdm_basis,
+            )
+            if collect_coefficients:
+                coefficients, energies, gradients = result[:3]
+                self.coefficients.append(coefficients)
+            else:
+                energies, gradients = result[:2]
+            if return_rdms:
+                self.rdm_results.append(result[-1])
             return energies[0], gradients[0]
 
     return Scanner()
@@ -71,6 +107,10 @@ def get_trajectory(
     init_veloc=None,
     trajectory_output=None,
     data_output=None,
+    return_rdms=False,
+    rdm_basis="AO",
+    rdm_output=None,
+    coefficients_output=None,
 ):
     """Compute a ground-state MD trajectory from a continuation object."""
     trajectory = np.zeros((steps, init_mol.natm, 3))
@@ -80,8 +120,15 @@ def get_trajectory(
     if rank == 0:
         with threadpool_limits(limits=num_threads):
             frames = []
+            scanner = get_scanner(
+                init_mol,
+                continuation,
+                return_rdms=return_rdms,
+                rdm_basis=rdm_basis,
+                collect_coefficients=coefficients_output is not None,
+            )
             integrator = md.NVE(
-                get_scanner(init_mol, continuation),
+                scanner,
                 dt=dt,
                 steps=steps,
                 veloc=init_veloc,
@@ -93,6 +140,10 @@ def get_trajectory(
             )
             integrator.run()
             trajectory = np.asarray([frame.coord for frame in frames])
+            if rdm_output is not None:
+                save_rdm_trajectory(rdm_output, scanner.rdm_results)
+            if coefficients_output is not None:
+                np.save(coefficients_output, np.asarray(scanner.coefficients))
 
     trajectory = MPI.COMM_WORLD.bcast(trajectory, root=0)
     return trajectory
@@ -124,9 +175,24 @@ def _ground_energies(continuation, init_mol, trajectory):
     ])
 
 
-def _trajectory_iteration(continuation, init_mol, iteration, steps, dt):
+def _trajectory_iteration(
+    continuation,
+    init_mol,
+    iteration,
+    steps,
+    dt,
+    return_rdms=False,
+    rdm_basis="AO",
+    save_coefficients=False,
+):
     trajectory_file = Path(f"traj_EVCont_{iteration}.npy")
-    if trajectory_file.exists():
+    rdm_file = Path(f"rdms_EVCont_{iteration}.npz")
+    coefficients_file = Path(f"coefficients_EVCont_{iteration}.npy")
+    outputs_exist = (
+        (not return_rdms or rdm_file.exists())
+        and (not save_coefficients or coefficients_file.exists())
+    )
+    if trajectory_file.exists() and outputs_exist:
         return np.load(trajectory_file)
 
     trajectory_handle = energy_handle = None
@@ -141,6 +207,10 @@ def _trajectory_iteration(continuation, init_mol, iteration, steps, dt):
             dt=dt,
             trajectory_output=trajectory_handle,
             data_output=energy_handle,
+            return_rdms=return_rdms,
+            rdm_basis=rdm_basis,
+            rdm_output=rdm_file if return_rdms else None,
+            coefficients_output=coefficients_file if save_coefficients else None,
         )
     finally:
         if rank == 0:
@@ -200,6 +270,9 @@ def converge_EVCont_MD(
     learning_exponent=2.0,
     restart=True,
     model_dir="iterative-models",
+    return_rdms=False,
+    rdm_basis="AO",
+    save_coefficients=False,
 ):
     """Active-learn a ground-state MD trajectory with model checkpoints."""
     model_dir = Path(model_dir)
@@ -229,7 +302,14 @@ def converge_EVCont_MD(
     trajectory = None
     while iteration < max_iter:
         trajectory = _trajectory_iteration(
-            EVCont_obj, init_mol, iteration, steps, dt
+            EVCont_obj,
+            init_mol,
+            iteration,
+            steps,
+            dt,
+            return_rdms=return_rdms,
+            rdm_basis=rdm_basis,
+            save_coefficients=save_coefficients,
         )
         updated_ens = _trajectory_energies(iteration, trajectory)
 
