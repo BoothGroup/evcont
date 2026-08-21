@@ -14,14 +14,14 @@ full-rank occupied and virtual matching matrix are supported.
 
 from __future__ import annotations
 
-import contextlib
-import io
 import warnings
 from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
 from pyscf import gto, scf
+
+from evcont.basis.basis_utils import run_hf
 
 
 class ProcrustesDerivativeError(ValueError):
@@ -69,33 +69,6 @@ class SplitProcrustesDerivativeInfo:
     vrt_overlap_derivative: np.ndarray
     occ_rotation_derivative: np.ndarray
     vrt_rotation_derivative: np.ndarray
-
-
-def run_rhf(
-    mol: gto.Mole,
-    *,
-    dm0: np.ndarray | None = None,
-    density_fit: bool = False,
-    df_basis: str | None = None,
-    conv_tol: float = 1e-12,
-    conv_tol_grad: float = 1e-10,
-    conv_tol_cpscf: float = 1e-10,
-    max_cycle: int = 100,
-) -> scf.hf.RHF:
-    """Run a quiet, tightly converged molecular RHF calculation."""
-    mf = scf.RHF(mol)
-    if density_fit:
-        mf = mf.density_fit(auxbasis=df_basis)
-    mf.verbose = 0
-    mf.conv_tol = conv_tol
-    mf.conv_tol_grad = conv_tol_grad
-    mf.conv_tol_cpscf = conv_tol_cpscf
-    mf.max_cycle = max_cycle
-    with contextlib.redirect_stdout(io.StringIO()):
-        mf.kernel(dm0=dm0)
-    if not mf.converged:
-        raise RuntimeError("RHF did not converge")
-    return mf
 
 
 def _validate_square_real(name: str, array: np.ndarray) -> np.ndarray:
@@ -318,7 +291,7 @@ def split_procrustes_basis_none(
     RHF occupation as the test molecule.  Coordinates may differ.
     """
     if mf is None:
-        mf = run_rhf(
+        mf = run_hf(
             mol,
             density_fit=density_fit,
             df_basis=df_basis,
@@ -328,7 +301,7 @@ def split_procrustes_basis_none(
             max_cycle=max_cycle,
         )
     if ref_mf is None:
-        ref_mf = run_rhf(
+        ref_mf = run_hf(
             ref_mol,
             density_fit=density_fit,
             df_basis=df_basis,
@@ -526,13 +499,15 @@ def split_procrustes_basis_none_derivative(
             Conventional RHF and PySCF density-fitted RHF objects are
             supported.  For a density-fitted object, ``mf.Hessian()`` selects
             PySCF's DF Hessian and DF J/K response automatically.  If omitted,
-            :func:`run_rhf` performs a conventional (non-density-fitted) RHF
+            :func:`evcont.basis.basis_utils.run_hf` performs a conventional
+            (non-density-fitted) RHF
             calculation.
         ref_mf:
             Optional converged, real-valued RHF object for ``ref_mol``.  Its MO
             coefficients define the fixed reference occupied and virtual sets.
             It must have the same number of occupied orbitals as ``mf``.  If
-            omitted, :func:`run_rhf` performs a conventional RHF calculation.
+            omitted, :func:`evcont.basis.basis_utils.run_hf` performs a
+            conventional RHF calculation.
         atmlst:
             Optional sequence of zero-based test-molecule atom indices to
             differentiate.  ``None`` selects every atom.  The leading return
@@ -623,7 +598,7 @@ def split_procrustes_basis_none_derivative(
     if derivative_rcond < rcond:
         raise ValueError("derivative_rcond must be greater than or equal to rcond")
     if mf is None:
-        mf = run_rhf(
+        mf = run_hf(
             mol,
             density_fit=density_fit,
             df_basis=df_basis,
@@ -633,7 +608,7 @@ def split_procrustes_basis_none_derivative(
             max_cycle=max_cycle,
         )
     if ref_mf is None:
-        ref_mf = run_rhf(
+        ref_mf = run_hf(
             ref_mol,
             density_fit=density_fit,
             df_basis=df_basis,

@@ -3,13 +3,9 @@ import sys
 import itertools
 
 from evcont.electron_integral_utils import get_basis, get_integrals
-from evcont.basis.basis_utils import (
-    basis_requires_reference,
-    get_basis_reference,
-    normalize_basis_type,
-)
+from evcont.basis.basis_utils import AbstractBasisMixin, normalize_basis_type
 
-from pyscf import scf, ao2mo, fci, symm
+from pyscf import fci, symm
 
 from pyscf.fci.addons import transform_ci
 
@@ -19,7 +15,9 @@ from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank, unpack_vectori
 from evcont.solver_evaluation import EVContEvaluationMixin
 from evcont.solver_persistence import EVContPersistenceMixin
 
-class FCI_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
+class FCI_EVCont_obj(
+    AbstractBasisMixin, EVContEvaluationMixin, EVContPersistenceMixin
+):
     """
     FCI_EVCont_obj holds the data structure for the continuation from FCI states.
     """
@@ -106,31 +104,6 @@ class FCI_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         #                         'vecs': np.array([nbra, nket, nvec, nao, nao])]
         
         self.vecs_lowrank = {}
-
-    def _ensure_abstract_basis_reference(self, mol, mf_object=None):
-        if not basis_requires_reference(self.abstract_basis):
-            return
-        if self.abstract_basis_ref is None:
-            self.abstract_basis_ref = get_basis_reference(
-                mol,
-                basis_type=self.abstract_basis,
-                mf_object=mf_object,
-                **self.abstract_basis_kwargs,
-            )
-            self.abstract_basis_ref_mol = mol.copy()
-
-    def get_abstract_basis(self, mol, mf_object=None):
-        """Return the AO-to-abstract-basis coefficients for ``mol``."""
-
-        self._ensure_abstract_basis_reference(mol, mf_object=mf_object)
-        return get_basis(
-            mol,
-            basis_type=self.abstract_basis,
-            basis_ref=self.abstract_basis_ref,
-            basis_ref_mol=self.abstract_basis_ref_mol,
-            mf_object=mf_object,
-            **self.abstract_basis_kwargs,
-        )
 
     def approximate_multistate(self, mol, nroots=None, hermitian=True, lindep=1e-12):
         """Evaluate this FCI continuation object at ``mol``."""

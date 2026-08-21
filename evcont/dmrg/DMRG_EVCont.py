@@ -3,7 +3,7 @@ import numpy as np
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
 from evcont.electron_integral_utils import get_basis, get_integrals, transform_integrals
-from evcont.basis.basis_utils import basis_requires_reference, get_basis_reference
+from evcont.basis.basis_utils import AbstractBasisMixin
 from evcont.dmrg.converge_dmrg import converge_dmrg
 
 from evcont.dmrg.MPS_orb_rotation import converge_orbital_rotation_mps
@@ -520,7 +520,9 @@ def append_to_rdms_orbital_rotation(
     return overlap_new, one_rdm_new, two_rdm_new
 
 
-class DMRG_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
+class DMRG_EVCont_obj(
+    AbstractBasisMixin, EVContEvaluationMixin, EVContPersistenceMixin
+):
     """
     DMRG_EVCont_obj holds the data structure for the continuation from MPS (optimized
     with DMRG).
@@ -568,17 +570,6 @@ class DMRG_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         self.abstract_basis_ref = abstract_basis_ref
         self.abstract_basis_ref_mol = None
         self.abstract_basis_kwargs = dict(abstract_basis_kwargs or {})
-
-    def _ensure_abstract_basis_reference(self, mol):
-        if not basis_requires_reference(self.abstract_basis):
-            return
-        if self.abstract_basis_ref is None:
-            self.abstract_basis_ref = get_basis_reference(
-                mol,
-                basis_type=self.abstract_basis,
-                **self.abstract_basis_kwargs,
-            )
-            self.abstract_basis_ref_mol = mol.copy()
 
     def append_to_rdms(self, mol):
         """

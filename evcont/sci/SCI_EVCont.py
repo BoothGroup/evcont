@@ -12,7 +12,7 @@ import PostProcessStates
 import shci
 
 from evcont.electron_integral_utils import get_basis
-from evcont.basis.basis_utils import basis_requires_reference, get_basis_reference
+from evcont.basis.basis_utils import AbstractBasisMixin
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank, unpack_vectorized_lowrank
 from evcont.solver_evaluation import EVContEvaluationMixin
 from evcont.solver_persistence import EVContPersistenceMixin
@@ -95,7 +95,9 @@ def cache_transition_rdms(run_prefix_i, run_prefix_j, mol, nroots, run_i, run_j,
         os.chdir(prev_cwd)
 
 # Main selected CI continuation class.
-class SCI_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
+class SCI_EVCont_obj(
+    AbstractBasisMixin, EVContEvaluationMixin, EVContPersistenceMixin
+):
     """SCI continuation container that mirrors the FCI EVCont layout."""
 
     def __init__(
@@ -180,27 +182,6 @@ class SCI_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
 
         self.diagonal_lr = None
         self.vecs_lowrank = {}
-
-    def _ensure_abstract_basis_reference(self, mol):
-        if not basis_requires_reference(self.abstract_basis):
-            return
-        if self.abstract_basis_ref is None:
-            self.abstract_basis_ref = get_basis_reference(
-                mol,
-                basis_type=self.abstract_basis,
-                **self.abstract_basis_kwargs,
-            )
-            self.abstract_basis_ref_mol = mol.copy()
-
-    def get_abstract_basis(self, mol):
-        self._ensure_abstract_basis_reference(mol)
-        return get_basis(
-            mol,
-            basis_type=self.abstract_basis,
-            basis_ref=self.abstract_basis_ref,
-            basis_ref_mol=self.abstract_basis_ref_mol,
-            **self.abstract_basis_kwargs,
-        )
 
     def vectorize_lowrank(self, hermitian=True):
         vectorize_lowrank(self, hermitian=hermitian)

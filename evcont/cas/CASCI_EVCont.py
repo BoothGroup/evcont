@@ -2,7 +2,7 @@ import numpy as np
 import pickle
 
 from evcont.electron_integral_utils import get_basis, get_integrals
-from evcont.basis.basis_utils import basis_requires_reference, get_basis_reference
+from evcont.basis.basis_utils import AbstractBasisMixin, run_hf
 
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
 from evcont.solver_evaluation import EVContEvaluationMixin
@@ -11,7 +11,7 @@ from evcont.solver_persistence import EVContPersistenceMixin
 from pygnme import wick, utils
 
 #from pyscf.mcscf.casci import CASCI
-from pyscf import scf, mcscf, gto
+from pyscf import mcscf, gto
 
 from mpi4py import MPI
 
@@ -112,7 +112,9 @@ def owndata(x):
 #     return overlap_new, one_rdm_new, two_rdm_new
 
 
-class CAS_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
+class CAS_EVCont_obj(
+    AbstractBasisMixin, EVContEvaluationMixin, EVContPersistenceMixin
+):
     """
     CAS_EVCont_obj holds the data structure for the continuation from CAS states.
     """
@@ -211,31 +213,6 @@ class CAS_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         self.mb_all = None
         self.occ_strings_all = []
 
-    def _ensure_abstract_basis_reference(self, mol, mf_object=None):
-        if not basis_requires_reference(self.abstract_basis):
-            return
-        if self.abstract_basis_ref is None:
-            self.abstract_basis_ref = get_basis_reference(
-                mol,
-                basis_type=self.abstract_basis,
-                mf_object=mf_object,
-                **self.abstract_basis_kwargs,
-            )
-            self.abstract_basis_ref_mol = mol.copy()
-
-    def get_abstract_basis(self, mol, mf_object=None):
-        """Return the AO-to-abstract-basis coefficients for ``mol``."""
-
-        self._ensure_abstract_basis_reference(mol, mf_object=mf_object)
-        return get_basis(
-            mol,
-            basis_type=self.abstract_basis,
-            basis_ref=self.abstract_basis_ref,
-            basis_ref_mol=self.abstract_basis_ref_mol,
-            mf_object=mf_object,
-            **self.abstract_basis_kwargs,
-        )
-
     def _input_checks(self, solver, software, nroots, quantel_path, solutions_to_reconverge):
         if solver in ['CASCI','SS-CASSCF','SA-CASSCF', 'casci','ss-casscf','sa-casscf']:
             self.solver = solver
@@ -298,14 +275,7 @@ class CAS_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
     
         if self.software == 'pyscf' and state is None:
             # Run mean field calculations for the orbitals
-            #mf = mol.copy().RHF()
-            mf = scf.RHF(mol.copy())
-            #mf.level_shift = 0.5
-            #mf.damp = 0.2
-            #mf.diis_space = 12
-            mf.kernel()
-
-            assert mf.converged
+            mf = run_hf(mol.copy())
 
             #MPI.COMM_WORLD.Bcast(mf.mo_coeff)
             
@@ -744,10 +714,7 @@ class CAS_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         lowrank = self.lowrank
 
         # Run mean field calculations for the orbitals
-        mf = scf.RHF(mol.copy())
-        mf.kernel()
-
-        assert mf.converged
+        mf = run_hf(mol.copy())
 
         MPI.COMM_WORLD.Bcast(mf.mo_coeff)
 
@@ -1488,10 +1455,7 @@ class CAS_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
             sys.exit()
 
         # Run mean field calculations for the orbitals
-        mf = scf.RHF(mol.copy())
-        mf.kernel()
-
-        assert mf.converged
+        mf = run_hf(mol.copy())
 
         MPI.COMM_WORLD.Bcast(mf.mo_coeff)
 

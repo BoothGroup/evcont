@@ -126,6 +126,44 @@ def basis_requires_reference(basis_type: str) -> bool:
     }
 
 
+class AbstractBasisMixin:
+    """Share reference-anchored abstract-basis handling between solvers.
+
+    Subclasses provide ``abstract_basis``, ``abstract_basis_ref``,
+    ``abstract_basis_ref_mol``, and ``abstract_basis_kwargs``. HF-dependent
+    solvers may additionally provide ``abstract_basis_ref_mf``.
+    """
+
+    def _ensure_abstract_basis_reference(self, mol, mf_object=None):
+        if not basis_requires_reference(self.abstract_basis):
+            return
+        if self.abstract_basis_ref is None:
+            self.abstract_basis_ref = get_basis_reference(
+                mol,
+                basis_type=self.abstract_basis,
+                mf_object=mf_object,
+                **self.abstract_basis_kwargs,
+            )
+            self.abstract_basis_ref_mol = mol.copy()
+
+    def get_abstract_basis(self, mol, mf_object=None):
+        """Return the AO-to-abstract-basis coefficients for ``mol``."""
+
+        self._ensure_abstract_basis_reference(mol, mf_object=mf_object)
+        kwargs = dict(self.abstract_basis_kwargs)
+        ref_mf = getattr(self, "abstract_basis_ref_mf", None)
+        if ref_mf is not None:
+            kwargs.setdefault("ref_mf", ref_mf)
+        return get_basis(
+            mol,
+            basis_type=self.abstract_basis,
+            basis_ref=self.abstract_basis_ref,
+            basis_ref_mol=self.abstract_basis_ref_mol,
+            mf_object=mf_object,
+            **kwargs,
+        )
+
+
 def get_loewdin_trafo(overlap_mat: np.ndarray, thresh: float = 1.0e-15) -> np.ndarray:
     """Compute the symmetric Lowdin transformation ``S^{-1/2}``."""
 
@@ -134,9 +172,10 @@ def get_loewdin_trafo(overlap_mat: np.ndarray, thresh: float = 1.0e-15) -> np.nd
     return (vecs * inverse_sqrt_vals) @ vecs.conj().T
 
 
-def _run_rhf(
+def run_hf(
     mol: gto.Mole,
     *,
+    dm0: np.ndarray | None = None,
     density_fit: bool = False,
     df_basis: str | None = None,
     conv_tol: float = DEFAULT_RHF_CONV_TOL,
@@ -173,7 +212,7 @@ def _run_rhf(
     linear_algebra_error = None
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            mf.kernel()
+            mf.kernel(dm0=dm0)
     except np.linalg.LinAlgError as error:
         linear_algebra_error = error
 
@@ -298,7 +337,7 @@ def split_procrustes_basis(
             "split_procrustes currently implements only procrustes_overlap='none'"
         )
 
-    mf = mf_object if mf_object is not None else _run_rhf(
+    mf = mf_object if mf_object is not None else run_hf(
         mol,
         density_fit=procrustes_density_fit,
         df_basis=procrustes_df_basis,
@@ -323,9 +362,7 @@ def split_procrustes_basis(
             else procrustes_ref_df_basis
         )
         if ref_mf is None:
-            from evcont.basis.split_procrustes_derivatives import run_rhf as run_procrustes_rhf
-
-            ref_mf = run_procrustes_rhf(
+            ref_mf = run_hf(
                 ref_mol,
                 density_fit=ref_density_fit,
                 df_basis=ref_df_basis,
@@ -422,7 +459,7 @@ def _least_change_reference(
         "min_convergence",
     )
     rhf_options = {key: kwargs[key] for key in allowed if key in kwargs}
-    mf = mf_object if mf_object is not None else _run_rhf(mol, **rhf_options)
+    mf = mf_object if mf_object is not None else run_hf(mol, **rhf_options)
     common = {
         "rank_tolerance": kwargs.get("least_change_rank_tolerance", 1.0e-10),
         "verification_tolerance": kwargs.get(
@@ -466,7 +503,7 @@ def _least_change_basis(
         "min_convergence",
     )
     rhf_options = {key: kwargs[key] for key in allowed if key in kwargs}
-    mf = mf_object if mf_object is not None else _run_rhf(mol, **rhf_options)
+    mf = mf_object if mf_object is not None else run_hf(mol, **rhf_options)
     basis_name = normalize_basis_type(basis_type)
     options = {
         "rank_tolerance": kwargs.get("least_change_rank_tolerance", 1.0e-10),
@@ -606,7 +643,7 @@ def get_basis(
         )
 
     elif basis_name in {"canonical", "split"}:
-        mf = mf_object if mf_object is not None else _run_rhf(
+        mf = mf_object if mf_object is not None else run_hf(
             mol,
             density_fit=bool(density_fit),
             df_basis=df_basis,
@@ -694,7 +731,6 @@ def get_basis_with_derivative(
                 "basis_ref_mol must be supplied for split_procrustes derivatives"
             )
         from evcont.basis.split_procrustes_derivatives import (
-            run_rhf as run_procrustes_rhf,
             split_procrustes_basis_none,
             split_procrustes_basis_none_derivative,
         )
@@ -710,7 +746,7 @@ def get_basis_with_derivative(
             else procrustes_ref_df_basis
         )
         if ref_mf is None:
-            ref_mf = run_procrustes_rhf(
+            ref_mf = run_hf(
                 basis_ref_mol,
                 density_fit=ref_density_fit,
                 df_basis=ref_df_basis,

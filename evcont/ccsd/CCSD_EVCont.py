@@ -3,16 +3,16 @@ from types import SimpleNamespace
 
 from ebcc import REBCC
 from ebcc.logging import NullLogger
-from pyscf import ao2mo, lib, scf
+from pyscf import ao2mo, lib
 
 from evcont.ccsd.RCCSD_rdm_mixed import make_rdm1_f, make_rdm2_f
 from evcont.ab_initio_eigenvector_continuation import approximate_multistate
 from evcont.basis.basis_utils import (
-    basis_requires_reference,
-    get_basis_reference,
+    AbstractBasisMixin,
+    get_basis,
     normalize_basis_type,
+    run_hf,
 )
-from evcont.electron_integral_utils import get_basis
 from evcont.solver_evaluation import EVContEvaluationMixin
 from evcont.solver_persistence import EVContPersistenceMixin
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
@@ -26,28 +26,6 @@ _HF_BASED_ABSTRACT_BASES = {
     "least_change_frozen_mo",
     "least_change_local",
 }
-
-
-def _run_rhf(
-    mol,
-    conv_tol=1.0e-12,
-    conv_tol_grad=1.0e-10,
-    conv_tol_cpscf=1.0e-10,
-    max_cycle=100,
-    density_fit=False,
-    df_basis=None,
-):
-    mf = scf.RHF(mol)
-    if density_fit:
-        mf = mf.density_fit(auxbasis=df_basis)
-    mf.conv_tol = conv_tol
-    mf.conv_tol_grad = conv_tol_grad
-    mf.conv_tol_cpscf = conv_tol_cpscf
-    mf.max_cycle = max_cycle
-    mf.kernel()
-    if not mf.converged:
-        raise RuntimeError("RHF did not converge")
-    return mf
 
 
 def _run_ccsd_in_basis(mf, mo_coeff, solve_lambda=True, verbose=False):
@@ -69,6 +47,20 @@ def _symmetrize_rdm2(rdm2):
     return 0.5 * (rdm2 + np.einsum("ijkl->jilk", rdm2.conj()))
 
 
+def _mixed_rdms(bra, ket):
+    bra_amplitudes = {
+        "l1a": bra.l1,
+        "l2a": bra.l2,
+        "t1a": bra.t1,
+        "t2a": bra.t2,
+    }
+    ket_amplitudes = {"t1b": ket.t1, "t2b": ket.t2}
+    return (
+        make_rdm1_f(**bra_amplitudes, **ket_amplitudes),
+        make_rdm2_f(**bra_amplitudes, **ket_amplitudes),
+    )
+
+
 def _rdm_energy(mol, mf, mo_coeff, rdm1, rdm2):
     h1 = np.linalg.multi_dot((mo_coeff.T, mf.get_hcore(), mo_coeff))
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, mo_coeff), mol.nao)
@@ -88,16 +80,10 @@ def _zero_amplitude_state(nocc, nvir, dtype=float):
     )
 
 
-class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
-    """Ground-state RCCSD eigenvector-continuation container.
-
-    The object follows the SCI continuation convention of storing a reference
-    geometry.  For AO-like abstract bases such as SAO and meta-Lowdin, CCSD
-    amplitudes are solved in the reference computational MO gauge and mixed RDMs
-    are transformed back to the abstract basis.  For reference-dependent
-    Procrustes bases, the same reference geometry anchors the Procrustes
-    alignment.
-    """
+class CCSD_EVCont_obj(
+    AbstractBasisMixin, EVContEvaluationMixin, EVContPersistenceMixin
+):
+    """Ground-state RCCSD eigenvector-continuation container."""
 
     _lowrank_reduction_keys = {
         "truncation_style", "nvecs", "eval_thr", "ham_thr", "save_diag",
@@ -171,59 +157,12 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
             self.abstract_basis_kwargs.setdefault("procrustes_density_fit", True)
             self.abstract_basis_kwargs.setdefault("procrustes_df_basis", scf_df_basis)
 
-        self._procrustes_density_fit = bool(
-            self.abstract_basis_kwargs.get(
-                "procrustes_density_fit",
-                self.abstract_basis_kwargs.get("density_fit", False),
-            )
-        )
-        self._procrustes_df_basis = self.abstract_basis_kwargs.get(
-            "procrustes_df_basis",
-            self.abstract_basis_kwargs.get("df_basis", None),
-        )
-        self._procrustes_ref_density_fit = self.abstract_basis_kwargs.get(
-            "procrustes_ref_density_fit",
-            self._procrustes_density_fit,
-        )
-        self._procrustes_ref_df_basis = self.abstract_basis_kwargs.get(
-            "procrustes_ref_df_basis",
-            self._procrustes_df_basis,
-        )
-
-        comp_density_fit = scf_density_fit or (
-            self._basis_name == "split_procrustes" and self._procrustes_density_fit
-        )
-        comp_df_basis = scf_df_basis
-        if self._basis_name == "split_procrustes" and self._procrustes_density_fit:
-            comp_df_basis = self._procrustes_df_basis
-
-        self.comp_mf = _run_rhf(
-            comp_mol,
-            conv_tol=scf_conv_tol,
-            conv_tol_grad=scf_conv_tol_grad,
-            conv_tol_cpscf=scf_conv_tol_cpscf,
-            max_cycle=scf_max_cycle,
-            density_fit=comp_density_fit,
-            df_basis=comp_df_basis,
-        )
+        comp_hf_options = self._hf_options()
+        self.comp_mf = run_hf(comp_mol, **comp_hf_options)
         self.abstract_basis_ref_mf = self.comp_mf
-        if (
-            self._basis_name == "split_procrustes"
-            and self._procrustes_ref_density_fit != comp_density_fit
-        ) or (
-            self._basis_name == "split_procrustes"
-            and self._procrustes_ref_density_fit
-            and self._procrustes_ref_df_basis != comp_df_basis
-        ):
-            self.abstract_basis_ref_mf = _run_rhf(
-                comp_mol,
-                conv_tol=scf_conv_tol,
-                conv_tol_grad=scf_conv_tol_grad,
-                conv_tol_cpscf=scf_conv_tol_cpscf,
-                max_cycle=scf_max_cycle,
-                density_fit=self._procrustes_ref_density_fit,
-                df_basis=self._procrustes_ref_df_basis,
-            )
+        ref_hf_options = self._hf_options(reference=True)
+        if self._basis_name == "split_procrustes" and ref_hf_options != comp_hf_options:
+            self.abstract_basis_ref_mf = run_hf(comp_mol, **ref_hf_options)
 
         self._ensure_abstract_basis_reference(
             comp_mol,
@@ -260,6 +199,43 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         if self.include_zero_amplitude:
             self._append_zero_amplitude_state()
 
+    def _hf_options(self, reference=False):
+        options = {
+            "conv_tol": self.scf_conv_tol,
+            "conv_tol_grad": self.scf_conv_tol_grad,
+            "conv_tol_cpscf": self.scf_conv_tol_cpscf,
+            "max_cycle": self.scf_max_cycle,
+            "density_fit": self.scf_density_fit,
+            "df_basis": self.scf_df_basis,
+        }
+        if self._basis_name != "split_procrustes":
+            return options
+
+        density_fit = bool(
+            self.abstract_basis_kwargs.get(
+                "procrustes_density_fit",
+                self.abstract_basis_kwargs.get("density_fit", False),
+            )
+        )
+        df_basis = self.abstract_basis_kwargs.get(
+            "procrustes_df_basis",
+            self.abstract_basis_kwargs.get("df_basis"),
+        )
+        if reference:
+            options["density_fit"] = self.abstract_basis_kwargs.get(
+                "procrustes_ref_density_fit", density_fit
+            )
+            options["df_basis"] = self.abstract_basis_kwargs.get(
+                "procrustes_ref_df_basis", df_basis
+            )
+        elif density_fit:
+            options["density_fit"] = True
+            options["df_basis"] = df_basis
+        return options
+
+    def _run_hf(self, mol):
+        return run_hf(mol, **self._hf_options())
+
     def _append_zero_amplitude_state(self):
         """Add the geometry-independent RHF determinant to the subspace."""
 
@@ -280,30 +256,6 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         self.train_energies.append(float(self.comp_mf.e_tot))
         self.build_transition_rdms()
 
-    def _ensure_abstract_basis_reference(self, mol, mf_object=None):
-        if not basis_requires_reference(self.abstract_basis):
-            return
-        if self.abstract_basis_ref is None:
-            self.abstract_basis_ref = get_basis_reference(
-                mol,
-                basis_type=self.abstract_basis,
-                mf_object=mf_object,
-                **self.abstract_basis_kwargs,
-            )
-            self.abstract_basis_ref_mol = mol.copy()
-
-    def get_abstract_basis(self, mol, mf_object=None):
-        self._ensure_abstract_basis_reference(mol, mf_object=mf_object)
-        return get_basis(
-            mol,
-            basis_type=self.abstract_basis,
-            basis_ref=self.abstract_basis_ref,
-            basis_ref_mol=self.abstract_basis_ref_mol,
-            mf_object=mf_object,
-            ref_mf=self.abstract_basis_ref_mf,
-            **self.abstract_basis_kwargs,
-        )
-
     def transformed_basis(self, mol, mf_object=None):
         """Return the orbital basis used to solve CCSD amplitudes."""
         basis_abstract = self.get_abstract_basis(mol, mf_object=mf_object)
@@ -313,18 +265,7 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
 
     def append_to_rdms(self, mol):
         """Append one ground-state CCSD training geometry and rebuild mixed RDMs."""
-        mf = _run_rhf(
-            mol,
-            conv_tol=self.scf_conv_tol,
-            conv_tol_grad=self.scf_conv_tol_grad,
-            conv_tol_cpscf=self.scf_conv_tol_cpscf,
-            max_cycle=self.scf_max_cycle,
-            density_fit=self.scf_density_fit
-            or (self._basis_name == "split_procrustes" and self._procrustes_density_fit),
-            df_basis=self._procrustes_df_basis
-            if self._basis_name == "split_procrustes" and self._procrustes_density_fit
-            else self.scf_df_basis,
-        )
+        mf = self._run_hf(mol)
         mo_coeff = self.transformed_basis(mol, mf_object=mf)
         ccsd = _run_ccsd_in_basis(
             mf,
@@ -380,39 +321,8 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
             ccsd_i = self.states[i]
             ccsd_j = self.states[j]
 
-            rdm1 = make_rdm1_f(
-                l1a=ccsd_i.l1,
-                l2a=ccsd_i.l2,
-                t1a=ccsd_i.t1,
-                t2a=ccsd_i.t2,
-                t1b=ccsd_j.t1,
-                t2b=ccsd_j.t2,
-            )
-            rdm2 = make_rdm2_f(
-                l1a=ccsd_i.l1,
-                l2a=ccsd_i.l2,
-                t1a=ccsd_i.t1,
-                t2a=ccsd_i.t2,
-                t1b=ccsd_j.t1,
-                t2b=ccsd_j.t2,
-            )
-
-            rdm1_conj = make_rdm1_f(
-                l1a=ccsd_j.l1,
-                l2a=ccsd_j.l2,
-                t1a=ccsd_j.t1,
-                t2a=ccsd_j.t2,
-                t1b=ccsd_i.t1,
-                t2b=ccsd_i.t2,
-            )
-            rdm2_conj = make_rdm2_f(
-                l1a=ccsd_j.l1,
-                l2a=ccsd_j.l2,
-                t1a=ccsd_j.t1,
-                t2a=ccsd_j.t2,
-                t1b=ccsd_i.t1,
-                t2b=ccsd_i.t2,
-            )
+            rdm1, rdm2 = _mixed_rdms(ccsd_i, ccsd_j)
+            rdm1_conj, rdm2_conj = _mixed_rdms(ccsd_j, ccsd_i)
 
             if self.hermitise == "both":
                 rdm1 = 0.5 * (rdm1 + rdm1_conj.conj().T)
@@ -495,18 +405,7 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
             raise ValueError("CCSD continuation is currently implemented only for nroots=1")
         if self.lowrank:
             return self.get_en(mol, nroots=nroots, hermitian=hermitian)
-        mf = _run_rhf(
-            mol,
-            conv_tol=self.scf_conv_tol,
-            conv_tol_grad=self.scf_conv_tol_grad,
-            conv_tol_cpscf=self.scf_conv_tol_cpscf,
-            max_cycle=self.scf_max_cycle,
-            density_fit=self.scf_density_fit
-            or (self._basis_name == "split_procrustes" and self._procrustes_density_fit),
-            df_basis=self._procrustes_df_basis
-            if self._basis_name == "split_procrustes" and self._procrustes_density_fit
-            else self.scf_df_basis,
-        )
+        mf = self._run_hf(mol)
         basis = self.get_abstract_basis(mol, mf_object=mf)
         h1 = np.linalg.multi_dot((basis.T, mf.get_hcore(), basis))
         h2 = ao2mo.restore(1, ao2mo.kernel(mol, basis), mol.nao)
