@@ -1,4 +1,7 @@
-"""Shared active-learning geometry selection utilities."""
+"""
+Shared active-learning geometry selection utilities.
+Author: Kemal Atalar
+"""
 
 import numpy as np
 from scipy.signal import find_peaks
@@ -23,7 +26,7 @@ def hamiltonian_similarity(
     basis_getter = basis_getter or get_basis
 
     def integrals(geometry):
-        mol = init_mol.copy().set_geom_(geometry)
+        mol = init_mol.copy().set_geom_(geometry, unit="Bohr")
         return get_integrals(mol, basis_getter(mol))
 
     h1_ref, h2_ref = zip(*(integrals(geometry) for geometry in trn_geometries))
@@ -43,7 +46,7 @@ def select_active_learning_geometry(
     method="weighted_highest_peak_ham",
     en_diff=None,
     convergence_thresh=None,
-    exponent=0.5,
+    exponent=1.0,
     trajectory=None,
     trn_geometries=None,
     peak_threshold=0.01,
@@ -84,4 +87,3 @@ def select_active_learning_geometry(
 def hamiltonian_similarity_argmin(init_mol, trajectory, trn_geometries):
     """Backward-compatible alias returning distances and closest indices."""
     return hamiltonian_similarity(init_mol, trajectory, trn_geometries)
-

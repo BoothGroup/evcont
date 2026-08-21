@@ -26,7 +26,7 @@ cont = FCI_EVCont_obj(cisolver=cisolver, nroots=1)
 converge_EVCont_MD(
     cont,
     build_h2(1.6),
-    steps=6,
+    steps=20,
     dt=2.0,
     convergence_thresh=1.0e-2,
     prune_irrelevant_data=False,

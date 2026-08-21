@@ -109,10 +109,16 @@ def _latest_checkpoint(model_dir):
     return max(files, key=lambda path: int(path.stem.rsplit("-", 1)[1]))
 
 
+def _save_training_state(continuation, iteration, model_dir, geometries, times):
+    continuation.save(_checkpoint_path(iteration, model_dir))
+    np.save("trn_geometries.npy", geometries)
+    np.savetxt("trn_times.txt", times, fmt="%.18e")
+
+
 def _ground_energies(continuation, init_mol, trajectory):
     return np.asarray([
         continuation.get_en(
-            init_mol.copy().set_geom_(geometry), nroots=1
+            init_mol.copy().set_geom_(geometry, unit="Bohr"), nroots=1
         )[0][0]
         for geometry in trajectory
     ])
@@ -189,8 +195,9 @@ def converge_EVCont_MD(
     convergence_thresh=1.0e-3,
     nconv=2,
     max_iter=100,
-    prune_irrelevant_data=False,
+    prune_irrelevant_data=False, # Might not work with current updates
     data_addition="weighted_highest_peak_ham",
+    learning_exponent=2.0,
     restart=True,
     model_dir="iterative-models",
 ):
@@ -203,16 +210,21 @@ def converge_EVCont_MD(
     checkpoint = _latest_checkpoint(model_dir) if restart else None
     if checkpoint is None:
         iteration = 0
+        trn_times = [0]
         EVCont_obj.append_to_rdms(init_mol.copy())
         trn_geometries = np.asarray([init_mol.atom_coords()])
         if rank == 0:
-            EVCont_obj.save(_checkpoint_path(iteration, model_dir))
-            np.save("trn_geometries.npy", trn_geometries)
+            _save_training_state(
+                EVCont_obj, iteration, model_dir, trn_geometries, trn_times
+            )
         MPI.COMM_WORLD.Barrier()
     else:
         iteration = int(checkpoint.stem.rsplit("-", 1)[1])
         EVCont_obj = type(EVCont_obj).load(checkpoint)
         trn_geometries = np.load("trn_geometries.npy")
+        trn_times = list(
+            np.atleast_1d(np.loadtxt("trn_times.txt", dtype=int))
+        )
 
     trajectory = None
     while iteration < max_iter:
@@ -245,8 +257,9 @@ def converge_EVCont_MD(
             )
             trn_geometries = trn_geometries[keep]
             if rank == 0:
-                EVCont_obj.save(_checkpoint_path(iteration, model_dir))
-                np.save("trn_geometries.npy", trn_geometries)
+                _save_training_state(
+                    EVCont_obj, iteration, model_dir, trn_geometries, trn_times
+                )
             MPI.COMM_WORLD.Barrier()
         if iteration and _converged(
             iteration, convergence_thresh, nconv
@@ -268,6 +281,7 @@ def converge_EVCont_MD(
         trn_time = select_active_learning_geometry(
             distances,
             method=data_addition,
+            exponent=learning_exponent,
             en_diff=en_diff,
             convergence_thresh=convergence_thresh,
             trajectory=trajectory,
@@ -275,14 +289,16 @@ def converge_EVCont_MD(
         )
         new_geometry = trajectory[trn_time]
         EVCont_obj.append_to_rdms(
-            init_mol.copy().set_geom_(new_geometry)
+            init_mol.copy().set_geom_(new_geometry, unit="Bohr")
         )
         trn_geometries = np.concatenate((trn_geometries, [new_geometry]))
+        trn_times.append(int(trn_time))
         iteration += 1
 
         if rank == 0:
-            EVCont_obj.save(_checkpoint_path(iteration, model_dir))
-            np.save("trn_geometries.npy", trn_geometries)
+            _save_training_state(
+                EVCont_obj, iteration, model_dir, trn_geometries, trn_times
+            )
         MPI.COMM_WORLD.Barrier()
 
     return trajectory
