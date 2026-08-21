@@ -1,0 +1,145 @@
+import numpy as np
+import pytest
+
+from evcont.ab_initio_gradients_loewdin import (
+    fix_gauge,
+    get_grad_elec_from_gradH,
+    get_overlap_grad,
+)
+from evcont.basis.basis_utils import (
+    basis_requires_reference,
+    get_basis,
+    get_basis_with_derivative,
+    get_loewdin_trafo,
+    is_abstract_basis,
+    normalize_basis_type,
+    run_hf,
+)
+from evcont.basis.localization_derivatives import orth_ao_derivative
+from evcont.basis.split_procrustes_derivatives import (
+    ProcrustesDerivativeError,
+    procrustes_rotation,
+    procrustes_rotation_derivative,
+)
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical", "needs_reference"),
+    [
+        ("SAO", "SAO", False),
+        ("oao", "SAO", False),
+        ("meta-lowdin", "meta_lowdin", False),
+        ("canonical_split_procrustes_none", "split_procrustes", True),
+        ("least-change", "least_change_atom_coordinate", True),
+        ("least_change_reference_mo", "least_change_frozen_mo", True),
+        ("least_change_pointwise", "least_change_local", False),
+    ],
+)
+def test_basis_alias_contract(alias, canonical, needs_reference):
+    assert normalize_basis_type(alias) == canonical
+    assert is_abstract_basis(alias)
+    assert basis_requires_reference(alias) is needs_reference
+
+
+def test_unknown_basis_is_rejected(h2_molecule):
+    assert not is_abstract_basis("not-a-basis")
+    with pytest.raises(ValueError, match="Unknown basis_type"):
+        get_basis(h2_molecule(), basis_type="not-a-basis")
+
+
+@pytest.mark.parametrize("basis_name", ["SAO", "meta_lowdin", "canonical"])
+def test_core_bases_are_orthonormal_for_nontrivial_basis_set(h2_molecule, basis_name):
+    mol = h2_molecule(1.4, basis="6-31g")
+    basis = get_basis(mol, basis_type=basis_name)
+    overlap = mol.intor_symmetric("int1e_ovlp")
+
+    assert basis.shape == (mol.nao, mol.nao)
+    np.testing.assert_allclose(basis.T @ overlap @ basis, np.eye(mol.nao), atol=1e-10)
+
+
+def test_loewdin_transform_zeroes_numerically_null_eigenspace():
+    overlap = np.diag([4.0, 1.0, 1.0e-18])
+    trafo = get_loewdin_trafo(overlap)
+    np.testing.assert_allclose(trafo, np.diag([0.5, 1.0, 0.0]))
+
+
+def test_run_hf_returns_converged_reusable_mean_field(h2_molecule):
+    mol = h2_molecule(1.4, basis="6-31g")
+    mf = run_hf(mol)
+
+    assert mf.converged
+    assert np.isfinite(mf.e_tot)
+    np.testing.assert_allclose(
+        mf.mo_coeff.T @ mf.get_ovlp() @ mf.mo_coeff,
+        np.eye(mol.nao),
+        atol=1e-10,
+    )
+
+
+def test_sao_basis_derivative_satisfies_metric_orthonormality_derivative(h2_molecule):
+    mol = h2_molecule(1.4, basis="6-31g")
+    basis, derivative = get_basis_with_derivative(mol, basis_type="SAO")
+    overlap = mol.intor_symmetric("int1e_ovlp")
+    overlap_derivative = get_overlap_grad(mol)
+
+    residual = np.einsum("pi,pqAx,qj->ijAx", basis, overlap_derivative, basis)
+    residual += np.einsum("piAx,pq,qj->ijAx", derivative, overlap, basis)
+    residual += np.einsum("pi,pq,qjAx->ijAx", basis, overlap, derivative)
+
+    np.testing.assert_allclose(residual, 0.0, atol=2e-8)
+
+
+def test_lowdin_localization_derivative_matches_finite_difference_direction(h2_molecule):
+    mol = h2_molecule(1.4)
+    overlap = mol.intor_symmetric("int1e_ovlp")
+    direction = np.array([[0.2, -0.1], [-0.1, 0.3]])
+    dummy_overlap_grad = np.zeros((mol.nao, mol.nao, mol.natm, 3))
+    dummy_overlap_grad[:, :, 0, 0] = direction
+    basis, derivative = orth_ao_derivative(
+        mol, method="lowdin", pre_orth_ao=None, s=overlap, overlap_grad=dummy_overlap_grad
+    )
+    step = 1.0e-6
+    plus = get_loewdin_trafo(overlap + step * direction)
+    minus = get_loewdin_trafo(overlap - step * direction)
+
+    np.testing.assert_allclose(basis, get_loewdin_trafo(overlap), atol=1e-12)
+    np.testing.assert_allclose(derivative[:, :, 0, 0], (plus - minus) / (2 * step), rtol=2e-6, atol=2e-8)
+
+
+def test_procrustes_rotation_and_derivative_match_finite_difference(rng):
+    overlap = rng.normal(size=(5, 5)) + 3.0 * np.eye(5)
+    directions = rng.normal(size=(2, 5, 5))
+    rotation, derivative = procrustes_rotation_derivative(overlap, directions)
+    step = 1.0e-6
+
+    np.testing.assert_allclose(rotation.T @ rotation, np.eye(5), atol=1e-12)
+    for index, direction in enumerate(directions):
+        finite_difference = (
+            procrustes_rotation(overlap + step * direction)
+            - procrustes_rotation(overlap - step * direction)
+        ) / (2 * step)
+        np.testing.assert_allclose(derivative[index], finite_difference, rtol=3e-6, atol=3e-8)
+
+
+def test_procrustes_derivative_rejects_rank_deficient_matching_matrix():
+    with pytest.raises(ProcrustesDerivativeError, match="not uniquely supported"):
+        procrustes_rotation_derivative(np.diag([1.0, 0.0]), np.eye(2))
+
+
+def test_gradient_contraction_matches_direct_einsum(rng):
+    norb, natm = 4, 3
+    one = rng.normal(size=(norb, norb))
+    two = rng.normal(size=(norb, norb, norb, norb))
+    h1_jac = rng.normal(size=(norb, norb, natm, 3))
+    h2_jac = rng.normal(size=(norb, norb, norb, norb, natm, 3))
+
+    actual = get_grad_elec_from_gradH(one, two, h1_jac, h2_jac)
+    expected = np.einsum("ij,ijAx->Ax", one, h1_jac)
+    expected += 0.5 * np.einsum("ijkl,ijklAx->Ax", two, h2_jac)
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_fix_gauge_makes_largest_real_component_nonpositive():
+    vectors = np.array([[1.0, -3.0, 2.0], [-4.0, 1.0, 2.0]])
+    fix_gauge(vectors)
+    np.testing.assert_array_equal(vectors, [[1.0, -3.0, 2.0], [-4.0, 1.0, 2.0]])
