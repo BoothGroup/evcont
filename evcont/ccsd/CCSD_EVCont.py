@@ -18,6 +18,16 @@ from evcont.solver_persistence import EVContPersistenceMixin
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
 
 
+_HF_BASED_ABSTRACT_BASES = {
+    "canonical",
+    "split",
+    "split_procrustes",
+    "least_change_atom_coordinate",
+    "least_change_frozen_mo",
+    "least_change_local",
+}
+
+
 def _run_rhf(
     mol,
     conv_tol=1.0e-12,
@@ -67,6 +77,17 @@ def _rdm_energy(mol, mf, mo_coeff, rdm1, rdm2):
     return float(np.real(e_elec + mol.energy_nuc()))
 
 
+def _zero_amplitude_state(nocc, nvir, dtype=float):
+    """Return the RCCSD amplitude representation of an RHF determinant."""
+
+    return SimpleNamespace(
+        t1=np.zeros((nocc, nvir), dtype=dtype),
+        t2=np.zeros((nocc, nocc, nvir, nvir), dtype=dtype),
+        l1=np.zeros((nvir, nocc), dtype=dtype),
+        l2=np.zeros((nvir, nvir, nocc, nocc), dtype=dtype),
+    )
+
+
 class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
     """Ground-state RCCSD eigenvector-continuation container.
 
@@ -88,7 +109,7 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         self,
         comp_mol,
         nroots=1,
-        abstract_basis="SAO",
+        abstract_basis="split_procrustes",
         abstract_basis_ref=None,
         abstract_basis_ref_mol=None,
         abstract_basis_kwargs=None,
@@ -100,6 +121,7 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         scf_max_cycle=100,
         scf_density_fit=False,
         scf_df_basis=None,
+        include_zero_amplitude=False,
         lowrank=False,
         lowrank_kwargs=None,
         **kwargs,
@@ -123,6 +145,7 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         self.scf_max_cycle = scf_max_cycle
         self.scf_density_fit = scf_density_fit
         self.scf_df_basis = scf_df_basis
+        self.include_zero_amplitude = include_zero_amplitude
         self.lowrank = lowrank
         self.kwargs = dict(lowrank_kwargs or {})
         self.kwargs.update(kwargs)
@@ -133,6 +156,16 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         self.diagonal_lr = None
         self.vecs_lowrank = {}
         self._basis_name = normalize_basis_type(abstract_basis)
+
+        if (
+            self.include_zero_amplitude
+            and self._basis_name not in _HF_BASED_ABSTRACT_BASES
+        ):
+            raise ValueError(
+                "include_zero_amplitude requires an RHF-based abstract basis "
+                "that preserves the occupied/virtual split; use canonical, "
+                "split, split_procrustes, or a least_change basis"
+            )
 
         if self._basis_name == "split_procrustes" and scf_density_fit:
             self.abstract_basis_kwargs.setdefault("procrustes_density_fit", True)
@@ -218,10 +251,34 @@ class CCSD_EVCont_obj(EVContEvaluationMixin, EVContPersistenceMixin):
         self.ens_nuc = []
         self.mol_index = []
         self.train_energies = []
+        self.zero_amplitude_state_index = None
 
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
+
+        if self.include_zero_amplitude:
+            self._append_zero_amplitude_state()
+
+    def _append_zero_amplitude_state(self):
+        """Add the geometry-independent RHF determinant to the subspace."""
+
+        nocc = np.count_nonzero(np.asarray(self.comp_mf.mo_occ) > 0)
+        nvir = self.comp_mf.mo_coeff.shape[1] - nocc
+        state = _zero_amplitude_state(
+            nocc,
+            nvir,
+            dtype=np.asarray(self.comp_mf.mo_coeff).dtype,
+        )
+
+        self.zero_amplitude_state_index = len(self.states)
+        self.states.append(state)
+        self.mols.append(self.comp_mol)
+        self.ens.append(float(self.comp_mf.e_tot))
+        self.ens_nuc.append(self.comp_mol.energy_nuc())
+        self.mol_index.append(len(self.mols) - 1)
+        self.train_energies.append(float(self.comp_mf.e_tot))
+        self.build_transition_rdms()
 
     def _ensure_abstract_basis_reference(self, mol, mf_object=None):
         if not basis_requires_reference(self.abstract_basis):
