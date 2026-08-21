@@ -1366,7 +1366,12 @@ def unstack_tril(packed, hermitian=True):
     """
     # If the input already appears to be in full (n, n, ...) grid form, just
     # return it (but ensure Hermitian symmetry is enforced when requested).
-    if packed.ndim >= 2 and packed.shape[0] == packed.shape[1]:
+    # A full block grid produced by ``unstack_tril`` has at least four axes
+    # for the matrix-valued blocks used here.  A packed array can legitimately
+    # have ``m == block.shape[0]`` (for example two training states and three
+    # orbitals give shape ``(3, 3, 3)``), so comparing only the first two axes
+    # would misclassify valid triangular data.
+    if packed.ndim >= 4 and packed.shape[0] == packed.shape[1]:
         arr = packed.copy()
         if hermitian:
             n = arr.shape[0]
@@ -1655,8 +1660,6 @@ def unpack_vectorized_lowrank(self):
 
     lv = self.lowrank_vectorized
     vals = lv.get('vals')
-    vecs = lv.get('vecs')
-    rightvecs = lv.get('rightvecs', None)
     pairloc = lv.get('pairloc', {})
     pairloc_svd = lv.get('pairloc_svd', {})
     hermitian = lv.get('hermitian', True)
@@ -1664,42 +1667,56 @@ def unpack_vectorized_lowrank(self):
 
     # Basic shapes
     nbra = vals.shape[0]
-    norb = vecs.shape[-1]
+    norb = int(lv['norb'])
 
     # Reconstruct per-pair vecs_lowrank
     vecs_lowrank = {}
     for i, j in itertools.product(range(nbra), range(nbra)):
         vals_ij = vals[i, j]
-        vecs_ij = vecs[i, j]
 
         # Determine nvec for this pair: prefer explicit stored count if present
         if nvecs_per_pair is not None:
             nvec = int(nvecs_per_pair[i, j])
         else:
-            mask = np.any(np.abs(vecs_ij) > 1e-12, axis=(1, 2))
-            nvec = int(mask.sum())
+            nvec = int(np.count_nonzero(np.abs(vals_ij) > 1e-12))
 
         if nvec == 0:
             # keep zero-length arrays for consistency
             vals_i = np.zeros((0,))
             vecs_i = np.zeros((norb, norb, 0))
-            right_i = np.zeros((0, norb, norb)) if rightvecs is not None else np.zeros((0, norb, norb))
+            right_i = np.zeros((0, norb, norb))
         else:
             vals_i = vals_ij[:nvec].copy()
-            # stored in vectorize_lowrank as (nvec, norb, norb)
-            vecs_i = vecs_ij[:nvec].transpose(1, 2, 0).copy()
-            if rightvecs is not None:
-                right_i = rightvecs[i, j, :nvec].copy()
+            pair = (i, j)
+            mirror = (j, i)
+            conjugate = False
+            if pair in pairloc:
+                start, end = pairloc[pair]
+                left_i = lv['vecs_stacked'][start:end]
+                right_i = left_i.copy()
+            elif mirror in pairloc:
+                start, end = pairloc[mirror]
+                left_i = lv['vecs_stacked'][start:end]
+                right_i = left_i.copy()
+                conjugate = True
+            elif pair in pairloc_svd:
+                start, end = pairloc_svd[pair]
+                left_i = lv['vecs_svd_stacked'][start:end]
+                right_i = lv['rightvecs_stacked'][start:end]
+            elif mirror in pairloc_svd:
+                start, end = pairloc_svd[mirror]
+                left_i = lv['vecs_svd_stacked'][start:end]
+                right_i = lv['rightvecs_stacked'][start:end]
+                conjugate = True
             else:
-                # try to recover from stacked SVD/rightvecs_stacked if present
-                if 'rightvecs_stacked' in lv and (i, j) in pairloc_svd:
-                    st, en = pairloc_svd[(i, j)]
-                    right_i = lv['rightvecs_stacked'][st:en].copy()
-                elif 'rightvecs_stacked' in lv and (j, i) in pairloc_svd:
-                    st, en = pairloc_svd[(j, i)]
-                    right_i = lv['rightvecs_stacked'][st:en].copy()
-                else:
-                    right_i = np.zeros((nvec, norb, norb))
+                raise ValueError(f"No vectorized low-rank data found for pair {(i, j)}")
+            left_i = left_i[:nvec]
+            right_i = right_i[:nvec]
+            if conjugate:
+                left_i = left_i.conj()
+                right_i = right_i.conj()
+            vecs_i = left_i.transpose(1, 2, 0).copy()
+            right_i = right_i.copy()
 
         # Determine whether this pair used joint ED (present in pairloc in either order)
         use_joint = (i, j) in pairloc or (j, i) in pairloc

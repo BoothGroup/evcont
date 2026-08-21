@@ -24,8 +24,18 @@ def transform_integrals(h1, h2, trafo):
     Returns:
         tuple: Transformed h1 and h2.
     """
-    h1 = np.einsum("...ij,ai,bj->...ab", h1, trafo, optimize="optimal")
-    h2 = np.einsum("...ijkl,ai,bj,ck,dl->...abcd", h2, trafo, optimize="optimal")
+    h1 = np.einsum(
+        "...ij,ai,bj->...ab", h1, trafo, trafo, optimize="optimal"
+    )
+    h2 = np.einsum(
+        "...ijkl,ai,bj,ck,dl->...abcd",
+        h2,
+        trafo,
+        trafo,
+        trafo,
+        trafo,
+        optimize="optimal",
+    )
     return h1, h2
 
 
