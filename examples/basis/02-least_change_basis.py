@@ -32,21 +32,46 @@ basis = "sto-3g"
 train_spacings = [1.2, 1.8]
 test_spacing = 1.5
 
-# Bare "least_change" intentionally exercises the default atom-coordinate gauge.
-abstract_bases = [
-    "least_change",
-    "least_change_frozen_mo",
-    "least_change_local",
-]
+# These options apply to every least-change gauge.  They are written out here
+# so users can adjust the gauge-conditioning and verification thresholds.
+common_least_change_kwargs = {
+    "least_change_rank_tolerance": 1.0e-10,
+    "least_change_verification_tolerance": 1.0e-8,
+    "least_change_require_converged": True,
+    "least_change_emit_warnings": False,
+}
+
+# Each entry exposes the keywords specific to that least-change definition.
+# "least_change" remains an alias for "least_change_atom_coordinate".
+least_change_bases = {
+    "least_change_atom_coordinate": {
+        **common_least_change_kwargs,
+        # Moving atom-labelled frame used to freeze the reference transform.
+        "least_change_anchor": "meta_lowdin",  # or "lowdin"
+        "least_change_pre_orth_ao": "ANO",
+    },
+    "least_change_frozen_mo": {
+        **common_least_change_kwargs,
+        # No anchor keyword: the complete reference RHF MO frame is the anchor.
+    },
+    "least_change_local": {
+        **common_least_change_kwargs,
+        # Pointwise atom-labelled frame, rebuilt independently at each geometry.
+        "least_change_anchor": "meta_lowdin",  # "lowdin" and "nao" also work
+        "least_change_pre_orth_ao": "ANO",
+        # True enables the two-stage atom -> SAP -> RHF projector alignment.
+        "least_change_use_sap": False,
+    },
+}
 test_mol = build_h_chain(natom, test_spacing, basis)
 reference = fci_reference_energies(test_mol, nroots)
 
 print("basis                         state     FCI ref (Ha)     EVCont (Ha)    error (mHa)")
-for abstract_basis in abstract_bases:
+for abstract_basis, abstract_basis_kwargs in least_change_bases.items():
     cont = FCI_EVCont_obj(
         nroots=nroots,
         abstract_basis=abstract_basis,
-        abstract_basis_kwargs={"least_change_emit_warnings": False},
+        abstract_basis_kwargs=abstract_basis_kwargs,
     )
     for spacing in train_spacings:
         cont.append_to_rdms(build_h_chain(natom, spacing, basis))

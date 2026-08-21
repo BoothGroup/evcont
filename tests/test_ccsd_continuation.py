@@ -18,6 +18,12 @@ OTHER_BASIS_RESULTS = {
     "least_change_frozen_mo": (-2.1779376837211197, True),
     "least_change_local": (-2.1779373106984865, False),
 }
+DF_ABSTRACT_BASIS_RESULTS = {
+    "split_procrustes": -2.177937553642934,
+    "least_change_atom_coordinate": -2.177937553642871,
+    "least_change_frozen_mo": -2.1779375536431838,
+    "least_change_local": -2.1779371776339103,
+}
 
 
 def _water(oh_distance):
@@ -126,3 +132,80 @@ def test_ccsd_continuation_with_other_abstract_bases(abstract_basis, expected):
     np.testing.assert_allclose(
         np.ravel(energy)[0], expected_energy, rtol=1.0e-7, atol=1.0e-8
     )
+
+
+@pytest.mark.parametrize(
+    "abstract_basis, expected_energy",
+    DF_ABSTRACT_BASIS_RESULTS.items(),
+    ids=DF_ABSTRACT_BASIS_RESULTS,
+)
+def test_ccsd_continuation_with_density_fitted_abstract_basis(
+    abstract_basis, expected_energy
+):
+    basis_kwargs = {"density_fit": True, "df_basis": None}
+    if abstract_basis.startswith("least_change"):
+        basis_kwargs["least_change_emit_warnings"] = False
+
+    with pytest.warns(
+        RuntimeWarning,
+        match="enabling density fitting for the CCSD RHF calculations",
+    ):
+        continuation = CCSD_EVCont_obj(
+            _h4(1.5),
+            abstract_basis=abstract_basis,
+            abstract_basis_kwargs=basis_kwargs,
+        )
+
+    assert continuation.scf_density_fit is True
+    assert continuation.scf_df_basis is None
+    assert continuation.abstract_basis_kwargs["density_fit"] is True
+    assert continuation.abstract_basis_kwargs["df_basis"] is None
+    assert hasattr(continuation.comp_mf, "with_df")
+
+    for spacing in (1.2, 1.8):
+        continuation.append_to_rdms(_h4(spacing))
+
+    energy, _ = continuation.approximate(_h4(1.6))
+    np.testing.assert_allclose(
+        np.ravel(energy)[0], expected_energy, rtol=1.0e-7, atol=1.0e-8
+    )
+
+
+@pytest.mark.parametrize(
+    "abstract_basis", ["split_procrustes", "least_change_local"]
+)
+def test_abstract_df_basis_overrides_ccsd_df_basis_with_warnings(abstract_basis):
+    basis_kwargs = {
+        "density_fit": True,
+        "df_basis": "weigend",
+    }
+    if abstract_basis.startswith("least_change"):
+        basis_kwargs["least_change_emit_warnings"] = False
+    with pytest.warns(RuntimeWarning) as caught:
+        continuation = CCSD_EVCont_obj(
+            _h4(1.5),
+            abstract_basis=abstract_basis,
+            abstract_basis_kwargs=basis_kwargs,
+            scf_density_fit=False,
+            scf_df_basis=None,
+        )
+
+    messages = [str(item.message) for item in caught]
+    assert any("enabling density fitting" in message for message in messages)
+    assert any("different auxiliary bases" in message for message in messages)
+    assert continuation.scf_density_fit is True
+    assert continuation.scf_df_basis == "weigend"
+    assert continuation.abstract_basis_kwargs["df_basis"] == "weigend"
+
+
+def test_ccsd_df_configuration_is_propagated_to_least_change_basis():
+    continuation = CCSD_EVCont_obj(
+        _h4(1.5),
+        abstract_basis="least_change_local",
+        abstract_basis_kwargs={"least_change_emit_warnings": False},
+        scf_density_fit=True,
+        scf_df_basis=None,
+    )
+
+    assert continuation.abstract_basis_kwargs["density_fit"] is True
+    assert continuation.abstract_basis_kwargs["df_basis"] is None

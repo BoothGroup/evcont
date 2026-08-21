@@ -1,5 +1,7 @@
-import numpy as np
+import warnings
 from types import SimpleNamespace
+
+import numpy as np
 
 from ebcc import REBCC
 from ebcc.logging import NullLogger
@@ -21,6 +23,13 @@ from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
 _HF_BASED_ABSTRACT_BASES = {
     "canonical",
     "split",
+    "split_procrustes",
+    "least_change_atom_coordinate",
+    "least_change_frozen_mo",
+    "least_change_local",
+}
+
+_CONFIGURABLE_HF_ABSTRACT_BASES = {
     "split_procrustes",
     "least_change_atom_coordinate",
     "least_change_frozen_mo",
@@ -142,6 +151,7 @@ class CCSD_EVCont_obj(
         self.diagonal_lr = None
         self.vecs_lowrank = {}
         self._basis_name = normalize_basis_type(abstract_basis)
+        self._reconcile_density_fitting()
 
         if (
             self.include_zero_amplitude
@@ -152,10 +162,6 @@ class CCSD_EVCont_obj(
                 "that preserves the occupied/virtual split; use canonical, "
                 "split, split_procrustes, or a least_change basis"
             )
-
-        if self._basis_name == "split_procrustes" and scf_density_fit:
-            self.abstract_basis_kwargs.setdefault("procrustes_density_fit", True)
-            self.abstract_basis_kwargs.setdefault("procrustes_df_basis", scf_df_basis)
 
         comp_hf_options = self._hf_options()
         self.comp_mf = run_hf(comp_mol, **comp_hf_options)
@@ -199,6 +205,65 @@ class CCSD_EVCont_obj(
         if self.include_zero_amplitude:
             self._append_zero_amplitude_state()
 
+    def _reconcile_density_fitting(self):
+        """Use one consistent DF setting for CCSD and abstract-basis RHF."""
+
+        if self._basis_name not in _CONFIGURABLE_HF_ABSTRACT_BASES:
+            return
+
+        basis_options = self.abstract_basis_kwargs
+        if "density_fit" in basis_options:
+            basis_density_fit = bool(basis_options["density_fit"])
+        elif self._basis_name == "split_procrustes":
+            basis_density_fit = bool(
+                basis_options.get("procrustes_density_fit", False)
+            )
+        else:
+            basis_density_fit = False
+
+        if "df_basis" in basis_options:
+            basis_df_is_explicit = True
+            basis_df_basis = basis_options["df_basis"]
+        elif (
+            self._basis_name == "split_procrustes"
+            and "procrustes_df_basis" in basis_options
+        ):
+            basis_df_is_explicit = True
+            basis_df_basis = basis_options["procrustes_df_basis"]
+        else:
+            basis_df_is_explicit = False
+            basis_df_basis = self.scf_df_basis
+
+        if basis_density_fit:
+            if not self.scf_density_fit:
+                warnings.warn(
+                    "abstract_basis_kwargs requests density fitting while "
+                    "scf_density_fit=False; enabling density fitting for the "
+                    "CCSD RHF calculations as well.",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                self.scf_density_fit = True
+            if basis_df_is_explicit and self.scf_df_basis != basis_df_basis:
+                warnings.warn(
+                    "abstract_basis_kwargs and scf_df_basis request different "
+                    f"auxiliary bases; using {basis_df_basis!r} for the CCSD "
+                    "RHF calculations as well.",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                self.scf_df_basis = basis_df_basis
+
+            # Generic names work for split-Procrustes and every least-change
+            # basis, including later evaluation paths that build their own HF.
+            basis_options["density_fit"] = True
+            basis_options["df_basis"] = self.scf_df_basis
+        elif self.scf_density_fit:
+            # CCSD already uses DF, so record the same effective configuration
+            # for any abstract-basis construction that does not receive its MF.
+            basis_options["density_fit"] = True
+            basis_options.setdefault("df_basis", self.scf_df_basis)
+
     def _hf_options(self, reference=False):
         options = {
             "conv_tol": self.scf_conv_tol,
@@ -213,13 +278,13 @@ class CCSD_EVCont_obj(
 
         density_fit = bool(
             self.abstract_basis_kwargs.get(
-                "procrustes_density_fit",
-                self.abstract_basis_kwargs.get("density_fit", False),
+                "density_fit",
+                self.abstract_basis_kwargs.get("procrustes_density_fit", False),
             )
         )
         df_basis = self.abstract_basis_kwargs.get(
-            "procrustes_df_basis",
-            self.abstract_basis_kwargs.get("df_basis"),
+            "df_basis",
+            self.abstract_basis_kwargs.get("procrustes_df_basis"),
         )
         if reference:
             options["density_fit"] = self.abstract_basis_kwargs.get(

@@ -548,7 +548,14 @@ def get_basis_reference(
 
     basis_name = normalize_basis_type(basis_type)
     if basis_name == "split_procrustes":
-        return split_procrustes_basis(mol, mf_object=mf_object, basis_ref=None, **kwargs)
+        options = dict(kwargs)
+        if "density_fit" in options:
+            options["procrustes_density_fit"] = options.pop("density_fit")
+        if "df_basis" in options:
+            options["procrustes_df_basis"] = options.pop("df_basis")
+        return split_procrustes_basis(
+            mol, mf_object=mf_object, basis_ref=None, **options
+        )
     if basis_name in {"least_change_atom_coordinate", "least_change_frozen_mo"}:
         return _least_change_reference(
             mol,
