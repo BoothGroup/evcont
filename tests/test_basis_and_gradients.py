@@ -106,6 +106,55 @@ def test_lowdin_localization_derivative_matches_finite_difference_direction(h2_m
     np.testing.assert_allclose(derivative[:, :, 0, 0], (plus - minus) / (2 * step), rtol=2e-6, atol=2e-8)
 
 
+def test_localization_can_return_basis_without_derivatives(h2_molecule, monkeypatch):
+    mol = h2_molecule(1.4, basis="6-31g")
+    overlap = mol.intor_symmetric("int1e_ovlp")
+    basis, _ = orth_ao_derivative(mol, method="meta_lowdin", s=overlap)
+
+    original_intor = mol.intor
+
+    def reject_overlap_derivative(name, *args, **kwargs):
+        if name == "int1e_ipovlp":
+            raise AssertionError("orbital-only construction requested AO derivatives")
+        return original_intor(name, *args, **kwargs)
+
+    monkeypatch.setattr(mol, "intor", reject_overlap_derivative)
+
+    basis_only = orth_ao_derivative(
+        mol,
+        method="meta_lowdin",
+        s=overlap,
+        return_derivatives=False,
+    )
+
+    assert isinstance(basis_only, np.ndarray)
+    np.testing.assert_allclose(basis_only, basis, atol=1e-12)
+    np.testing.assert_allclose(
+        basis_only.T @ overlap @ basis_only,
+        np.eye(mol.nao),
+        atol=1e-10,
+    )
+
+
+def test_meta_lowdin_basis_does_not_use_pyscf_orth_ao(h2_molecule, monkeypatch):
+    mol = h2_molecule(1.4, basis="6-31g")
+
+    def reject_pyscf_orth_ao(*args, **kwargs):
+        raise AssertionError("PySCF orth_ao applies an artificial phase gauge")
+
+    monkeypatch.setattr(
+        "evcont.basis.basis_utils.lo.orth.orth_ao", reject_pyscf_orth_ao
+    )
+    basis = get_basis(mol, basis_type="meta_lowdin")
+    overlap = mol.intor_symmetric("int1e_ovlp")
+
+    np.testing.assert_allclose(
+        basis.T @ overlap @ basis,
+        np.eye(mol.nao),
+        atol=1e-10,
+    )
+
+
 def test_procrustes_rotation_and_derivative_match_finite_difference(rng):
     overlap = rng.normal(size=(5, 5)) + 3.0 * np.eye(5)
     directions = rng.normal(size=(2, 5, 5))

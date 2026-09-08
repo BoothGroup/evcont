@@ -18,8 +18,49 @@ def orth_ao_derivative(
     overlap_grad: np.ndarray | None = None,
     cutoff: float = 1.0e-15,
     degeneracy_tol: float = 1.0e-10,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return a PySCF AO orthogonalization matrix and its nuclear derivative."""
+    return_derivatives: bool = True,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Return a PySCF AO orthogonalization matrix and optionally its nuclear derivative.
+
+    Parameters
+    ----------
+    mol
+        PySCF molecule.
+    method
+        ``"meta_lowdin"``/``"meta-lowdin"`` for PySCF's meta-Lowdin AO
+        localization or ``"lowdin"`` for the full Lowdin transform.
+    pre_orth_ao
+        For ``meta_lowdin``, the PySCF pre-orthogonalizer. The default is
+        ``"ANO"``, matching ``lo.orth_ao(mol, "meta_lowdin")``. For
+        ``lowdin``, the default is ``None``, giving the full AO-basis
+        ``S^{-1/2}`` transform used by the reference code in this project.
+    s
+        AO overlap matrix. If omitted, it is computed from ``mol``.
+    overlap_grad
+        Optional overlap derivative with shape ``(nao, nao, natm, 3)``.
+        If omitted, it is computed from ``int1e_ipovlp``.
+    cutoff
+        Minimum eigenvalue retained in each Lowdin inverse square root, matching
+        the PySCF threshold. The derivative is only smooth when retained
+        eigenvalues remain above this threshold.
+    degeneracy_tol
+        Relative eigenvalue-difference tolerance used in the divided
+        differences of the Lowdin Frechet derivative.
+
+    Returns
+    -------
+    C, dC
+        ``C`` is the AO-to-orthogonal-AO coefficient matrix. ``dC`` has shape
+        ``(nao, nao, natm, 3)``, where ``dC[:, :, ia, xyz]`` is the derivative
+        with respect to displacement of atom ``ia`` along Cartesian component
+        ``xyz``.
+
+    Notes
+    -----
+    The Lowdin derivative is evaluated as the Frechet derivative of the matrix
+    function ``S^{-1/2}`` using spectral divided differences. This is invariant
+    to arbitrary rotations inside degenerate eigenspaces.
+    """
 
     method_key = method.lower().replace("-", "_")
     if method_key not in {"lowdin", "meta_lowdin"}:
@@ -33,14 +74,15 @@ def orth_ao_derivative(
     s = np.asarray(s)
     nao_nr = s.shape[0]
 
-    if overlap_grad is None:
-        inner_deriv = mol.intor("int1e_ipovlp", comp=3)
-        d_s = np.zeros((mol.natm, 3, nao_nr, nao_nr), dtype=s.dtype)
-        for ia, (_, _, p0, p1) in enumerate(mol.aoslice_by_atom()):
-            d_s[ia, :, p0:p1, :] -= inner_deriv[:, p0:p1, :]
-        d_s += d_s.swapaxes(-1, -2)
-    else:
-        d_s = np.asarray(overlap_grad).transpose(2, 3, 0, 1)
+    if return_derivatives:
+        if overlap_grad is None:
+            inner_deriv = mol.intor("int1e_ipovlp", comp=3)
+            d_s = np.zeros((mol.natm, 3, nao_nr, nao_nr), dtype=s.dtype)
+            for ia, (_, _, p0, p1) in enumerate(mol.aoslice_by_atom()):
+                d_s[ia, :, p0:p1, :] -= inner_deriv[:, p0:p1, :]
+            d_s += d_s.swapaxes(-1, -2)
+        else:
+            d_s = np.asarray(overlap_grad).transpose(2, 3, 0, 1)
 
     def lowdin_factor(mat):
         mat = (np.asarray(mat) + np.asarray(mat).T.conj()) * 0.5
@@ -82,6 +124,8 @@ def orth_ao_derivative(
         if pre_orth_ao is None:
             lowdin = lowdin_factor(s)
             c = lowdin["matrix"]
+            if not return_derivatives:
+                return c
             dc = np.empty((nao_nr, nao_nr, mol.natm, 3), dtype=s.dtype)
             for ia in range(mol.natm):
                 for xyz in range(3):
@@ -95,6 +139,8 @@ def orth_ao_derivative(
         lowdin = lowdin_factor(s1)
         l1 = lowdin["matrix"]
         c = p @ l1
+        if not return_derivatives:
+            return c
         dc = np.empty((nao_nr, nao_nr, mol.natm, 3), dtype=s.dtype)
         for ia in range(mol.natm):
             for xyz in range(3):
@@ -114,7 +160,6 @@ def orth_ao_derivative(
         np.asarray(x, dtype=int) for x in nao._core_val_ryd_list(mol)
     ]
     c = np.zeros((nao_nr, nao_nr), dtype=s.dtype)
-    dc = np.zeros((nao_nr, nao_nr, mol.natm, 3), dtype=s.dtype)
 
     def lowdin_block(a):
         metric = a.T.conj() @ s @ a
@@ -163,6 +208,11 @@ def orth_ao_derivative(
         lowdin_rydbg = None
         c_rydbg = np.zeros((nao_nr, 0), dtype=s.dtype)
 
+    if not return_derivatives:
+        return c
+
+    dc = np.zeros((nao_nr, nao_nr, mol.natm, 3), dtype=s.dtype)
+
     for ia in range(mol.natm):
         for xyz in range(3):
             ds = d_s[ia, xyz]
@@ -201,4 +251,3 @@ def orth_ao_derivative(
                 dc[:, rydbg_lst, ia, xyz] = dc_rydbg
 
     return c, dc
-

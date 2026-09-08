@@ -278,10 +278,15 @@ def _metalowdin_pre_orth_from_name(basis_type: str):
 
 
 def get_meta_lowdin_basis(mol: gto.Mole, pre_orth_ao="ANO") -> np.ndarray:
-    """Return PySCF's meta-Lowdin AO orthogonalization matrix."""
+    """Return the in-house meta-Lowdin AO orthogonalization matrix."""
 
-    return np.asarray(
-        lo.orth.orth_ao(mol, method="meta_lowdin", pre_orth_ao=pre_orth_ao)
+    from evcont.basis.localization_derivatives import orth_ao_derivative
+
+    return orth_ao_derivative(
+        mol,
+        method="meta_lowdin",
+        pre_orth_ao=pre_orth_ao,
+        return_derivatives=False,
     )
 
 
