@@ -6,9 +6,11 @@ import pytest
 import evcont.solver_evaluation as evaluation_module
 from evcont.ccsd.CCSD_EVCont import (
     _mixed_rdms,
-    _symmetrize_rdm1,
-    _symmetrize_rdm2,
     _zero_amplitude_state,
+)
+from evcont.rdm_orthonormalization import (
+    symmetrize_transition_rdm1,
+    symmetrize_transition_rdm2,
 )
 from evcont.solver_evaluation import EVContEvaluationMixin
 
@@ -25,11 +27,11 @@ def test_ccsd_zero_amplitude_state_has_consistent_shapes_and_reference_rdms():
     assert two.shape == (5, 5, 5, 5)
 
 
-def test_ccsd_rdm_symmetrizers_enforce_documented_permutations(rng):
+def test_transition_rdm_symmetrizers_enforce_documented_permutations(rng):
     one = rng.normal(size=(4, 4)) + 1j * rng.normal(size=(4, 4))
     two = rng.normal(size=(3, 3, 3, 3)) + 1j * rng.normal(size=(3, 3, 3, 3))
-    sym_one = _symmetrize_rdm1(one)
-    sym_two = _symmetrize_rdm2(two)
+    sym_one = symmetrize_transition_rdm1(one)
+    sym_two = symmetrize_transition_rdm2(two)
     np.testing.assert_allclose(sym_one, sym_one.T.conj())
     np.testing.assert_allclose(sym_two, sym_two.transpose(1, 0, 3, 2).conj())
 

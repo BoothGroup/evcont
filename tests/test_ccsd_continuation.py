@@ -3,6 +3,8 @@ import pytest
 from pyscf import gto
 
 from evcont.ccsd.CCSD_EVCont import CCSD_EVCont_obj
+from evcont.low_rank_utils import reconstruct_rdm2_joint
+from evcont.rdm_orthonormalization import incremental_orthonormalizer
 
 
 pytestmark = pytest.mark.filterwarnings(
@@ -211,6 +213,19 @@ def test_ccsd_df_configuration_is_propagated_to_least_change_basis():
     assert continuation.abstract_basis_kwargs["df_basis"] is None
 
 
+def test_incremental_orthonormalizer_preserves_existing_columns(rng):
+    raw_vectors = rng.normal(size=(6, 3))
+    overlap = raw_vectors.T @ raw_vectors
+    first, _, _ = incremental_orthonormalizer(overlap[:1, :1])
+    second, _, _ = incremental_orthonormalizer(overlap[:2, :2], first)
+    third, _, _ = incremental_orthonormalizer(overlap, second)
+
+    np.testing.assert_allclose(third[:2, :2], second, atol=1.0e-14)
+    np.testing.assert_allclose(
+        third.T @ overlap @ third, np.eye(3), atol=1.0e-12
+    )
+
+
 @pytest.mark.parametrize("density_fit", [False, True])
 def test_ccsd_checkpoint_round_trip_restores_reference_mean_fields(
     tmp_path, density_fit
@@ -236,3 +251,73 @@ def test_ccsd_checkpoint_round_trip_restores_reference_mean_fields(
     )
     restored.get_abstract_basis(_h4(1.6))
     restored.save(tmp_path / "ccsd-restored.pkl")
+
+
+def test_lowrank_ccsd_recompresses_in_orthonormal_state_basis():
+    molecules = [_h4(1.35), _h4(1.50)]
+    transverse = _h4(1.50)
+    transverse_coordinates = transverse.atom_coords()
+    transverse_coordinates[1, 1] += 0.25
+    transverse.set_geom_(transverse_coordinates, unit="Bohr")
+    molecules.append(transverse)
+    common = {
+        "abstract_basis": "least_change_atom_coordinate",
+        "abstract_basis_kwargs": {"least_change_emit_warnings": False},
+    }
+    dense = CCSD_EVCont_obj(molecules[0], **common)
+    lowrank = CCSD_EVCont_obj(
+        molecules[0],
+        lowrank=True,
+        lowrank_kwargs={
+            "truncation_style": "ham",
+            "ham_thr": 1.0e-12,
+            "save_diag": False,
+            "Jdiag_only": False,
+            "relax_amp": False,
+            "density_fit": False,
+            "lindep": 1.0e-14,
+            "orthonormalization_lindep": 1.0e-14,
+        },
+        **common,
+    )
+    for mol in molecules:
+        dense.append_to_rdms(mol)
+        lowrank.append_to_rdms(mol)
+
+    np.testing.assert_allclose(lowrank.overlap, np.eye(3), atol=2.0e-9)
+    np.testing.assert_allclose(
+        lowrank.state_transform.T.conj()
+        @ lowrank.raw_overlap
+        @ lowrank.state_transform,
+        np.eye(3),
+        atol=2.0e-9,
+    )
+    assert lowrank.two_rdm is None
+    assert lowrank.raw_one_rdm.shape[:2] == (3, 3)
+
+    dense_two_orthogonal = np.einsum(
+        "ia,ijpqrs,jb->abpqrs",
+        lowrank.state_transform.conj(),
+        dense.two_rdm,
+        lowrank.state_transform,
+        optimize="optimal",
+    )
+    for bra in range(3):
+        for ket in range(3):
+            values, left, right, joint = lowrank.vecs_lowrank[bra, ket]
+            assert len(values) == molecules[0].nao**2
+            actual = reconstruct_rdm2_joint(
+                (values, left, right), joint=joint
+            )
+            np.testing.assert_allclose(
+                actual, dense_two_orthogonal[bra, ket], atol=2.0e-7
+            )
+
+    probe = _h4(1.43)
+    probe_coordinates = probe.atom_coords()
+    probe_coordinates[2, 1] -= 0.15
+    probe.set_geom_(probe_coordinates, unit="Bohr")
+    dense_energy, dense_gradient = dense.get_en_with_grad(probe)
+    lowrank_energy, lowrank_gradient = lowrank.get_en_with_grad(probe)
+    np.testing.assert_allclose(lowrank_energy, dense_energy, atol=1.0e-9)
+    np.testing.assert_allclose(lowrank_gradient, dense_gradient, atol=1.0e-8)

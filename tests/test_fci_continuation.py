@@ -3,6 +3,7 @@ import copy
 import numpy as np
 
 from evcont.fci.FCI_EVCont import FCI_EVCont_obj
+from evcont.low_rank_utils import reconstruct_rdm2_joint
 
 
 def test_fci_continuation_end_to_end_regression(h2_molecule):
@@ -120,3 +121,50 @@ def test_lowrank_fci_vectorization_round_trip_retains_form_and_can_append(h2_mol
         control.get_en(h2_molecule(1.3), nroots=1)[0],
         atol=0.0,
     )
+
+
+def test_fci_uses_shared_lowrank_rdm_orthonormalization(h2_molecule):
+    molecules = [h2_molecule(0.8), h2_molecule(1.6)]
+    dense = FCI_EVCont_obj(abstract_basis="SAO")
+    lowrank_options = dict(
+        abstract_basis="SAO",
+        lowrank=True,
+        truncation_style="nvec",
+        nvecs=molecules[0].nao**2,
+        save_diag=False,
+        relax_amp=False,
+    )
+    pairwise = FCI_EVCont_obj(**lowrank_options)
+    lowrank = FCI_EVCont_obj(
+        **lowrank_options, lowrank_orthonormalize=True
+    )
+    for molecule in molecules:
+        dense.append_to_rdms(molecule)
+        pairwise.append_to_rdms(molecule)
+        lowrank.append_to_rdms(molecule)
+
+    np.testing.assert_allclose(lowrank.overlap, np.eye(2), atol=1.0e-11)
+    dense_two_orthogonal = np.einsum(
+        "ia,ijpqrs,jb->abpqrs",
+        lowrank.state_transform.conj(),
+        dense.two_rdm,
+        lowrank.state_transform,
+        optimize="optimal",
+    )
+    dense_two_orthogonal = 0.5 * (
+        dense_two_orthogonal
+        + dense_two_orthogonal.conj().transpose(0, 1, 3, 2, 5, 4)
+    )
+    for bra in range(2):
+        for ket in range(2):
+            values, left, right, joint = lowrank.vecs_lowrank[bra, ket]
+            actual = reconstruct_rdm2_joint((values, left, right), joint=joint)
+            np.testing.assert_allclose(
+                actual, dense_two_orthogonal[bra, ket], atol=1.0e-9
+            )
+
+    for distance in (1.0, 1.2, 1.4):
+        molecule = h2_molecule(distance)
+        np.testing.assert_allclose(
+            lowrank.get_en(molecule)[0], pairwise.get_en(molecule)[0], atol=1.0e-11
+        )

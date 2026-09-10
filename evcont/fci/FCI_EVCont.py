@@ -2,21 +2,23 @@ import numpy as np
 import sys
 import itertools
 
-from evcont.electron_integral_utils import get_basis, get_integrals
-from evcont.basis.basis_utils import AbstractBasisMixin, normalize_basis_type
-
 from pyscf import fci, symm
 
 from pyscf.fci.addons import transform_ci
 
-from evcont.ab_initio_gradients_loewdin import get_loewdin_trafo
+from evcont.electron_integral_utils import get_basis, get_integrals
+from evcont.basis.basis_utils import AbstractBasisMixin, normalize_basis_type
 
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank, unpack_vectorized_lowrank
 from evcont.solver_evaluation import EVContEvaluationMixin, maintain_two_rdm_compression
 from evcont.solver_persistence import EVContPersistenceMixin
+from evcont.rdm_orthonormalization import RDMOrthonormalizationMixin
 
 class FCI_EVCont_obj(
-    AbstractBasisMixin, EVContEvaluationMixin, EVContPersistenceMixin
+    RDMOrthonormalizationMixin,
+    AbstractBasisMixin,
+    EVContEvaluationMixin,
+    EVContPersistenceMixin,
 ):
     """
     FCI_EVCont_obj holds the data structure for the continuation from FCI states.
@@ -30,10 +32,11 @@ class FCI_EVCont_obj(
         roots_train=None,
         irrep_name=None,
         lowrank=False,
-        abstract_basis="SAO",
+        abstract_basis="meta-lowdin",
         abstract_basis_ref=None,
         abstract_basis_ref_mol=None,
         abstract_basis_kwargs=None,
+        lowrank_orthonormalize=False,
         compress_two_rdm=False,
         **kwargs
     ):
@@ -91,12 +94,21 @@ class FCI_EVCont_obj(
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
+
+        # Quick fix for compatibility with old versions of the code
+        # Can rewrite in the future (e.g. to replace all instances of 'fcivecs' with 'states')
+        self.states = self.fcivecs
+        self.train_energies = self.ens
         
         ### Initialize low-rank attributes
         self.lowrank = lowrank
-        if lowrank:
-            #self.truncation_style = kwargs['truncation_style']
-            self.kwargs = kwargs
+        self.lowrank_orthonormalize = bool(lowrank_orthonormalize)
+        self.hermitise = "both"
+        self.kwargs = kwargs
+        self.lowrank_kwargs = kwargs
+        self._basis_name = normalize_basis_type(abstract_basis)
+        # FCI vectors are transformed to the abstract basis before storage.
+        self.use_computational_reference = False
             
         # Diagonals of 2-cumulants ([nbra, nket, 3, norb, norb])
         self.diagonal_lr = None 
@@ -106,6 +118,7 @@ class FCI_EVCont_obj(
         #                         'vecs': np.array([nbra, nket, nvec, nao, nao])]
         
         self.vecs_lowrank = {}
+        self._initialize_rdm_orthonormalization()
 
     def approximate_multistate(self, mol, nroots=None, hermitian=True, lindep=1e-12):
         """Evaluate this FCI continuation object at ``mol``."""
@@ -207,6 +220,10 @@ class FCI_EVCont_obj(
                 self.ens.append(e)
                 self.ens_nuc.append(mol.energy_nuc())
                 self.mol_index.append(mindex)
+
+                if self.lowrank and self.lowrank_orthonormalize:
+                    self.build_transition_rdms(mol)
+                    continue
                             
                 new_ntrain = len(self.fcivecs)
                 
@@ -294,6 +311,11 @@ class FCI_EVCont_obj(
                 else:
                     self.diagonal_lr = diagonal_lr_new
 
+    def _raw_transition_rdms(self, bra, ket, mol):
+        return self.cisolver.trans_rdm12(
+            self.fcivecs[bra], self.fcivecs[ket], mol.nao, mol.nelec
+        )
+
     def prune_datapoints(self, keep_ids):
         """
         Prunes training points from the continuation object based on the given keep_ids.
@@ -315,5 +337,5 @@ class FCI_EVCont_obj(
             self.one_rdm = self.one_rdm[np.ix_(keep_ids, keep_ids)]
         if self.two_rdm is not None:
             self.two_rdm = self.two_rdm[np.ix_(keep_ids, keep_ids)]
-        self.fcivecs = [self.fcivecs[i] for i in keep_ids]
-        self.ens = [self.ens[i] for i in keep_ids]
+        self.fcivecs[:] = [self.fcivecs[i] for i in keep_ids]
+        self.ens[:] = [self.ens[i] for i in keep_ids]

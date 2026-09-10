@@ -3,8 +3,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from ebcc import REBCC
-from ebcc.logging import NullLogger
+from ebcc import NullLogger, REBCC
 from pyscf import ao2mo, lib, scf
 
 from evcont.ccsd.RCCSD_rdm_mixed import make_rdm1_f, make_rdm2_f
@@ -18,6 +17,7 @@ from evcont.basis.basis_utils import (
 from evcont.solver_evaluation import EVContEvaluationMixin
 from evcont.solver_persistence import EVContPersistenceMixin
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
+from evcont.rdm_orthonormalization import RDMOrthonormalizationMixin
 
 
 _HF_BASED_ABSTRACT_BASES = {
@@ -38,6 +38,8 @@ _CONFIGURABLE_HF_ABSTRACT_BASES = {
 
 
 def _run_ccsd_in_basis(mf, mo_coeff, solve_lambda=True, verbose=False):
+    """Solve CCSD using the given molecular orbitals."""
+
     log = None if verbose else NullLogger()
     mf_basis = mf.copy()
     mf_basis.mo_coeff = mo_coeff
@@ -48,15 +50,9 @@ def _run_ccsd_in_basis(mf, mo_coeff, solve_lambda=True, verbose=False):
     return ccsd
 
 
-def _symmetrize_rdm1(rdm1):
-    return 0.5 * (rdm1 + rdm1.conj().T)
-
-
-def _symmetrize_rdm2(rdm2):
-    return 0.5 * (rdm2 + np.einsum("ijkl->jilk", rdm2.conj()))
-
-
 def _mixed_rdms(bra, ket):
+    """Construct transition RDMs between two CCSD states."""
+
     bra_amplitudes = {
         "l1a": bra.l1,
         "l2a": bra.l2,
@@ -71,6 +67,8 @@ def _mixed_rdms(bra, ket):
 
 
 def _rdm_energy(mol, mf, mo_coeff, rdm1, rdm2):
+    """Compute the energy corresponding to the CCSD RDMs."""
+
     h1 = np.linalg.multi_dot((mo_coeff.T, mf.get_hcore(), mo_coeff))
     h2 = ao2mo.restore(1, ao2mo.kernel(mol, mo_coeff), mol.nao)
     e_elec = lib.einsum("pq,qp->", h1, rdm1, optimize="optimal")
@@ -141,9 +139,14 @@ def _unpack_rhf(state):
 
 
 class CCSD_EVCont_obj(
-    AbstractBasisMixin, EVContEvaluationMixin, EVContPersistenceMixin
+    RDMOrthonormalizationMixin,
+    AbstractBasisMixin,
+    EVContEvaluationMixin,
+    EVContPersistenceMixin,
 ):
-    """Ground-state RCCSD eigenvector-continuation container."""
+    """
+    CCSD_EVCont_obj holds the data structure for continuation from CCSD states.
+    """
 
     _lowrank_reduction_keys = {
         "truncation_style", "nvecs", "eval_thr", "ham_thr", "save_diag",
@@ -169,14 +172,36 @@ class CCSD_EVCont_obj(
         scf_df_basis=None,
         include_zero_amplitude=False,
         lowrank=False,
+        lowrank_orthonormalize=True,
         lowrank_kwargs=None,
+        compress_two_rdm=False,
         **kwargs,
     ):
+        """
+        Initializes the CCSD_EVCont_obj class.
+
+        Args:
+            comp_mol: Molecule defining the common computational basis.
+            abstract_basis: Basis used to transfer states between geometries.
+            hermitise: Hermitization used for mixed transition RDMs.
+            include_zero_amplitude: Include the RHF determinant as a state.
+            lowrank: Store the two-electron transition RDMs in low-rank form.
+            lowrank_orthonormalize: Orthonormalize states before compression.
+
+        Attributes:
+            states (list): The CCSD training states.
+            ens (list): The CCSD training energies.
+            mol_index (list): Molecule indices of the CCSD training states.
+            overlap (ndarray): Overlap matrix.
+            one_rdm (ndarray): One-electron transition RDMs.
+            two_rdm (ndarray): Two-electron transition RDMs.
+        """
         if comp_mol is None:
             raise ValueError("comp_mol must be provided for CCSD continuation")
         if nroots != 1:
             raise ValueError("CCSD continuation is currently implemented only for nroots=1")
 
+        # CCSD and basis settings
         self.comp_mol = comp_mol
         self.nroots = nroots
         self.abstract_basis = abstract_basis
@@ -192,7 +217,10 @@ class CCSD_EVCont_obj(
         self.scf_density_fit = scf_density_fit
         self.scf_df_basis = scf_df_basis
         self.include_zero_amplitude = include_zero_amplitude
+        ### Initialize low-rank attributes
         self.lowrank = lowrank
+        self.compress_two_rdm = bool(compress_two_rdm)
+        self.lowrank_orthonormalize = bool(lowrank_orthonormalize)
         self.kwargs = dict(lowrank_kwargs or {})
         self.kwargs.update(kwargs)
         self.lowrank_kwargs = {
@@ -203,7 +231,9 @@ class CCSD_EVCont_obj(
         self.vecs_lowrank = {}
         self._basis_name = normalize_basis_type(abstract_basis)
         self._reconcile_density_fitting()
+        self._initialize_rdm_orthonormalization()
 
+        # The zero-amplitude state requires an occupied/virtual basis split
         if (
             self.include_zero_amplitude
             and self._basis_name not in _HF_BASED_ABSTRACT_BASES
@@ -214,6 +244,7 @@ class CCSD_EVCont_obj(
                 "split, split_procrustes, or a least_change basis"
             )
 
+        # Build the computational and reference mean-field objects
         comp_hf_options = self._hf_options()
         self.comp_mf = run_hf(comp_mol, **comp_hf_options)
         self.abstract_basis_ref_mf = self.comp_mf
@@ -221,11 +252,13 @@ class CCSD_EVCont_obj(
         if self._basis_name == "split_procrustes" and ref_hf_options != comp_hf_options:
             self.abstract_basis_ref_mf = run_hf(comp_mol, **ref_hf_options)
 
+        # Initialize the reference used by the abstract basis
         self._ensure_abstract_basis_reference(
             comp_mol,
             mf_object=self.abstract_basis_ref_mf,
         )
 
+        # Transformation from the computational basis to the abstract basis
         self.comp_basis_abstract = self.get_abstract_basis(comp_mol, mf_object=self.comp_mf)
         self.comp_basis = get_basis(comp_mol, basis_type="canonical")
         s_comp = comp_mol.intor_symmetric("int1e_ovlp")
@@ -241,6 +274,7 @@ class CCSD_EVCont_obj(
             "meta_lowdin",
         }
 
+        # Initialize training data
         self.states = []
         self.mols = []
         self.ens = []
@@ -249,6 +283,7 @@ class CCSD_EVCont_obj(
         self.train_energies = []
         self.zero_amplitude_state_index = None
 
+        # Initialize transition RDMs
         self.overlap = None
         self.one_rdm = None
         self.two_rdm = None
@@ -257,7 +292,7 @@ class CCSD_EVCont_obj(
             self._append_zero_amplitude_state()
 
     def _reconcile_density_fitting(self):
-        """Use one consistent DF setting for CCSD and abstract-basis RHF."""
+        """Use the same density-fitting settings for CCSD and the basis RHF."""
 
         if self._basis_name not in _CONFIGURABLE_HF_ABSTRACT_BASES:
             return
@@ -316,6 +351,8 @@ class CCSD_EVCont_obj(
             basis_options.setdefault("df_basis", self.scf_df_basis)
 
     def _hf_options(self, reference=False):
+        """Collect the mean-field options for the current basis."""
+
         options = {
             "conv_tol": self.scf_conv_tol,
             "conv_tol_grad": self.scf_conv_tol_grad,
@@ -350,6 +387,8 @@ class CCSD_EVCont_obj(
         return options
 
     def _run_hf(self, mol):
+        """Run RHF using the CCSD continuation settings."""
+
         return run_hf(mol, **self._hf_options())
 
     def _append_zero_amplitude_state(self):
@@ -363,6 +402,7 @@ class CCSD_EVCont_obj(
             dtype=np.asarray(self.comp_mf.mo_coeff).dtype,
         )
 
+        # Add the RHF determinant as the first training state
         self.zero_amplitude_state_index = len(self.states)
         self.states.append(state)
         self.mols.append(self.comp_mol)
@@ -370,17 +410,24 @@ class CCSD_EVCont_obj(
         self.ens_nuc.append(self.comp_mol.energy_nuc())
         self.mol_index.append(len(self.mols) - 1)
         self.train_energies.append(float(self.comp_mf.e_tot))
-        self.build_transition_rdms()
+        self.build_transition_rdms(self.comp_mol)
 
     def transformed_basis(self, mol, mf_object=None):
-        """Return the orbital basis used to solve CCSD amplitudes."""
+        """Return the orbital basis used to solve the CCSD amplitudes."""
+
         basis_abstract = self.get_abstract_basis(mol, mf_object=mf_object)
         if self.use_computational_reference:
             return np.einsum("ij,kj->ik", basis_abstract, self.global_trafo, optimize="optimal")
         return basis_abstract
 
     def append_to_rdms(self, mol):
-        """Append one ground-state CCSD training geometry and rebuild mixed RDMs."""
+        """
+        Append a new training geometry and construct its transition RDMs.
+
+        Args:
+            mol (object): Molecular object of the training geometry.
+        """
+        # Solve CCSD in the abstract transfer basis
         mf = self._run_hf(mol)
         mo_coeff = self.transformed_basis(mol, mf_object=mf)
         ccsd = _run_ccsd_in_basis(
@@ -390,6 +437,7 @@ class CCSD_EVCont_obj(
             verbose=self.verbose_ccsd,
         )
 
+        # Add the CCSD state and training information
         self.states.append(ccsd)
         self.mols.append(mol)
         self.ens.append(ccsd.e_tot)
@@ -404,9 +452,17 @@ class CCSD_EVCont_obj(
                 ccsd.make_rdm2_f(hermitise=True),
             )
         )
-        self.build_transition_rdms()
+        # Add transition RDMs involving the new state
+        self.build_transition_rdms(mol)
 
-    def build_transition_rdms(self):
+    def _raw_transition_rdms(self, bra, ket, mol):
+        """Construct one pair of CCSD transition RDMs."""
+
+        return _mixed_rdms(self.states[bra], self.states[ket])
+
+    def _build_transition_rdms_pairwise(self, mol):
+        """Append transition RDMs without state orthonormalization."""
+
         nstate = len(self.states)
         if nstate == 0:
             raise ValueError("No CCSD states have been appended")
@@ -428,48 +484,19 @@ class CCSD_EVCont_obj(
             diagonal_lr = np.zeros((nstate, nstate, 3, nao, nao))
             diagonal_lr[:old_nstate, :old_nstate] = self.diagonal_lr
 
+        # At initialization compute every pair; later only compute the new row
         pairs = (
             [(i, j) for j in range(nstate) for i in range(j, nstate)]
             if old_nstate == 0
             else [(nstate - 1, j) for j in range(nstate)]
         )
         for i, j in pairs:
-            ccsd_i = self.states[i]
-            ccsd_j = self.states[j]
-
-            rdm1, rdm2 = _mixed_rdms(ccsd_i, ccsd_j)
-            rdm1_conj, rdm2_conj = _mixed_rdms(ccsd_j, ccsd_i)
-
-            if self.hermitise == "both":
-                rdm1 = 0.5 * (rdm1 + rdm1_conj.conj().T)
-                rdm2 = 0.5 * (rdm2 + np.einsum("ijkl->jilk", rdm2_conj.conj()))
-            elif self.hermitise != "none":
-                raise ValueError("hermitise must be 'both' or 'none'")
-
-            rdm1 = _symmetrize_rdm1(rdm1)
-            rdm2 = _symmetrize_rdm2(rdm2)
-
-            if self.use_computational_reference:
-                rdm1 = np.einsum(
-                    "...ij,ia,jb->...ab",
-                    rdm1,
-                    self.global_trafo,
-                    self.global_trafo,
-                    optimize="optimal",
-                )
-                rdm2 = np.einsum(
-                    "...ijkl,ia,jb,kc,ld->...abcd",
-                    rdm2,
-                    self.global_trafo,
-                    self.global_trafo,
-                    self.global_trafo,
-                    self.global_trafo,
-                    optimize="optimal",
-                )
+            rdm1, rdm2 = self._transition_rdms(i, j, mol)
 
             one_rdm[i, j] = rdm1
             one_rdm[j, i] = rdm1.conj().T
             if self.lowrank:
+                # Compress the two-electron transition RDM immediately
                 basis_kwargs = dict(self.abstract_basis_kwargs)
                 if self.abstract_basis_ref_mol is not None:
                     basis_kwargs.setdefault(
@@ -514,9 +541,13 @@ class CCSD_EVCont_obj(
         self.overlap = np.einsum("abcc->ab", one_rdm, optimize="optimal") / nel
 
     def vectorize_lowrank(self, hermitian=True):
+        """Pack the low-rank RDM dictionaries into arrays for evaluation."""
+
         vectorize_lowrank(self, hermitian=hermitian)
 
     def approximate(self, mol, nroots=1, hermitian=True):
+        """Evaluate the CCSD continuation object at ``mol``."""
+
         if nroots != 1:
             raise ValueError("CCSD continuation is currently implemented only for nroots=1")
         if self.lowrank:
