@@ -12,7 +12,8 @@ from evcont.electron_integral_utils import (
     get_basis,
     get_basis_with_derivative,
     get_loewdin_trafo,
-    get_df_integrals
+    get_df_integrals,
+    restore_electron_exchange_symmetry,
 )
 
 #from evcont.low_rank_utils_mpi import (
@@ -31,6 +32,24 @@ from evcont.rdm_inference import (
 )
 
 import sys
+
+
+def _restore_contracted_rdm2(two_rdm, norb):
+    if two_rdm.ndim == 1:
+        return restore_electron_exchange_symmetry(two_rdm, norb)
+    return two_rdm
+
+
+def _compress_two_el_grad(h2_jac):
+    """Pack the part of an integral derivative seen by a symmetric 2-RDM."""
+    norb = h2_jac.shape[0]
+    matrix = h2_jac.reshape(
+        norb * norb, norb * norb, *h2_jac.shape[4:]
+    )
+    rows, columns = np.tril_indices(norb * norb)
+    packed = 0.5 * (matrix[rows, columns] + matrix[columns, rows])
+    packed[rows == columns] *= 0.5
+    return packed
 
 
 def get_overlap_grad(mol):
@@ -607,16 +626,20 @@ def get_energy_with_grad_cpuefficient(
 
     # Get the gradient of one and two-electron integrals before contracting onto
     # rdms of different states
+    packed_gradient = two_RDM.ndim in (2, 3)
     h1_jac, h2_jac = get_one_and_two_el_grad(
         mol,
         ao_mo_trafo=ao_mo_trafo,
         ao_mo_trafo_grad=ao_mo_trafo_grad,
         abstract_basis=abstract_basis,
         basis_kwargs=basis_kwargs,
+        compress_h2=packed_gradient,
     )
 
     one_rdm_predicted = contract_rdm1(one_RDM, vec, vec)
-    two_rdm_predicted = contract_rdm2(two_RDM, vec, vec, mol.nao)
+    two_rdm_predicted = contract_rdm2(
+        two_RDM, vec, vec, mol.nao, restore=not packed_gradient
+    )
 
     grad_elec = get_grad_elec_from_gradH(
         one_rdm_predicted, two_rdm_predicted, h1_jac, h2_jac
@@ -625,13 +648,22 @@ def get_energy_with_grad_cpuefficient(
     energy = en.real + mol.energy_nuc()
     gradient = grad_elec + grad.RHF(scf.RHF(mol)).grad_nuc()
     if return_density_matrices:
-        return energy, gradient, one_rdm_predicted, two_rdm_predicted
+        return (
+            energy,
+            gradient,
+            one_rdm_predicted,
+            _restore_contracted_rdm2(two_rdm_predicted, mol.nao),
+        )
     result = (vec, energy, gradient) if return_coefficients else (energy, gradient)
     if return_rdms:
         request = normalize_rdm_request(return_rdms)
+        two_rdm_output = (
+            _restore_contracted_rdm2(two_rdm_predicted, mol.nao)
+            if "2rdm" in request else None
+        )
         result += (make_rdm_result(
             np.asarray([one_rdm_predicted]) if "1rdm" in request else None,
-            np.asarray([two_rdm_predicted]) if "2rdm" in request else None,
+            np.asarray([two_rdm_output]) if "2rdm" in request else None,
             ((0, 0),),
             basis=rdm_basis,
             ao_basis=ao_mo_trafo,
@@ -664,7 +696,7 @@ def get_two_el_grad(h2_ao, ao_mo_trafo, ao_mo_trafo_grad, h2_ao_deriv, atm_slice
   
     two_el_contraction_ao = lib.einsum(
         "abcd,aimn,bj,ck,dl->ijklmn",
-        h2_ao + h2_ao.transpose(1,0,3,2) 
+        h2_ao + h2_ao.transpose(1,0,3,2)
         + h2_ao.transpose(2,3,0,1) + h2_ao.transpose(3,2,0,1),
         ao_mo_trafo_grad,
         ao_mo_trafo,
@@ -762,6 +794,7 @@ def get_one_and_two_el_grad(
     ao_mo_trafo_grad=None,
     abstract_basis="SAO",
     basis_kwargs=None,
+    compress_h2=False,
 ):
     """
     Calculates the gradient of the one- and two-electron integrals
@@ -814,6 +847,9 @@ def get_one_and_two_el_grad(
         ),
     )
 
+    if compress_h2:
+        h2_jac = _compress_two_el_grad(h2_jac)
+
     
     return (h1_jac, h2_jac)
 
@@ -839,16 +875,20 @@ def get_grad_elec_from_gradH(one_rdm, two_rdm, h1_jac, h2_jac):
     """
     
     
-    two_el_gradient = lib.einsum(
-            "ijkl,ijklmn->mn",
-            two_rdm,
-            h2_jac,
-            optimize="optimal",
-            )
+    if two_rdm.ndim == 1:
+        two_el_gradient = lib.einsum(
+            "i,imn->mn", two_rdm, h2_jac, optimize="optimal"
+        )
+        two_el_factor = 1.0
+    else:
+        two_el_gradient = lib.einsum(
+            "ijkl,ijklmn->mn", two_rdm, h2_jac, optimize="optimal"
+        )
+        two_el_factor = 0.5
     
     grad_elec = (
         lib.einsum("ij,ijkl->kl", one_rdm, h1_jac, optimize="optimal")
-        + 0.5 * two_el_gradient
+        + two_el_factor * two_el_gradient
     )
     
     return grad_elec
@@ -981,12 +1021,14 @@ def get_multistate_energy_with_grad(
     
     # Get the gradient of one and two-electron integrals before contracting onto
     # rdms of different states
+    packed_gradient = two_RDM.ndim in (2, 3)
     h1_jac, h2_jac = get_one_and_two_el_grad(
         mol,
         ao_mo_trafo=ao_mo_trafo,
         ao_mo_trafo_grad=ao_mo_trafo_grad,
         abstract_basis=abstract_basis,
         basis_kwargs=basis_kwargs,
+        compress_h2=packed_gradient,
     )
     
     grad_elec_all = []
@@ -1001,7 +1043,13 @@ def get_multistate_energy_with_grad(
         #)
         
         one_rdm_predicted = contract_rdm1(one_RDM, vec_i, vec_i)
-        two_rdm_predicted = contract_rdm2(two_RDM, vec_i, vec_i, mol.nao)
+        two_rdm_predicted = contract_rdm2(
+            two_RDM,
+            vec_i,
+            vec_i,
+            mol.nao,
+            restore=not packed_gradient,
+        )
             
 
         grad_elec = get_grad_elec_from_gradH(
@@ -1021,7 +1069,10 @@ def get_multistate_energy_with_grad(
             energies,
             gradients,
             one_rdm_predicted_all,
-            two_rdm_predicted_all,
+            [
+                _restore_contracted_rdm2(two_rdm, mol.nao)
+                for two_rdm in two_rdm_predicted_all
+            ],
         )
 
     result = (vec, energies, gradients) if return_coefficients else (energies, gradients)
@@ -1030,9 +1081,16 @@ def get_multistate_energy_with_grad(
         diagonal_pairs = tuple((state, state) for state in range(nroots))
         request = normalize_rdm_request(return_rdms)
         if requested_pairs == diagonal_pairs:
+            two_rdm_output = (
+                [
+                    _restore_contracted_rdm2(two_rdm, mol.nao)
+                    for two_rdm in two_rdm_predicted_all
+                ]
+                if "2rdm" in request else None
+            )
             rdms = make_rdm_result(
                 np.asarray(one_rdm_predicted_all) if "1rdm" in request else None,
-                np.asarray(two_rdm_predicted_all) if "2rdm" in request else None,
+                np.asarray(two_rdm_output) if "2rdm" in request else None,
                 requested_pairs,
                 basis=rdm_basis,
                 ao_basis=ao_mo_trafo,
@@ -1114,6 +1172,7 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
     en, vec = approximate_multistate(h1, h2, one_RDM, two_RDM, S, nroots=nroots, hermitian=hermitian)
     fix_gauge(vec)
 
+    packed_gradient = not savemem and two_RDM.ndim in (2, 3)
     if not savemem:
         # Get the gradient of one and two-electron integrals before contracting onto
         # rdms and trmds of different states
@@ -1123,6 +1182,7 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
             ao_mo_trafo_grad=ao_mo_trafo_grad,
             abstract_basis=abstract_basis,
             basis_kwargs=basis_kwargs,
+            compress_h2=packed_gradient,
         )
         
     # Get the orbital derivative coupling for NACs
@@ -1158,13 +1218,21 @@ def get_multistate_energy_with_grad_and_NAC(mol, one_RDM, two_RDM, S, nroots=1,
             #    "i,ijklmn,j->klmn", vec_i, two_RDM, vec_j, optimize="optimal"
             #)
             one_rdm_predicted = contract_rdm1(one_RDM, vec_i, vec_j)
-            two_rdm_predicted = contract_rdm2(two_RDM, vec_i, vec_j, mol.nao)
+            two_rdm_predicted = contract_rdm2(
+                two_RDM,
+                vec_i,
+                vec_j,
+                mol.nao,
+                restore=not packed_gradient,
+            )
             pair = (i_state, j_state)
             if pair in requested_pair_set:
                 if "1rdm" in rdm_request:
                     one_rdms[pair] = one_rdm_predicted
                 if "2rdm" in rdm_request:
-                    two_rdms[pair] = two_rdm_predicted
+                    two_rdms[pair] = _restore_contracted_rdm2(
+                        two_rdm_predicted, mol.nao
+                    )
             
             # d\dR of subspace Hamiltonian
             if savemem:

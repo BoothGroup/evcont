@@ -67,7 +67,7 @@ def contract_rdm1(one_trdm, bra, ket):
     return np.einsum("a,abij,b->ij", bra.conj(), one_trdm, ket, optimize="optimal")
 
 
-def contract_rdm2(two_trdm, bra, ket, norb):
+def contract_rdm2(two_trdm, bra, ket, norb, restore=True):
     """Contract a training 2tRDM, including supported compressed forms."""
     weights = np.outer(bra.conj(), ket)
     if two_trdm.ndim in (2, 5):
@@ -80,7 +80,7 @@ def contract_rdm2(two_trdm, bra, ket, norb):
         )
     else:
         result = np.tensordot(weights, two_trdm, axes=2)
-    if result.ndim != 4:
+    if restore and result.ndim != 4:
         result = restore_electron_exchange_symmetry(result, norb)
     return result
 

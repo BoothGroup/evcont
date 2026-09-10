@@ -5,7 +5,7 @@ from evcont.electron_integral_utils import get_basis, get_integrals
 from evcont.basis.basis_utils import AbstractBasisMixin, run_hf
 
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank
-from evcont.solver_evaluation import EVContEvaluationMixin
+from evcont.solver_evaluation import EVContEvaluationMixin, maintain_two_rdm_compression
 from evcont.solver_persistence import EVContPersistenceMixin
 
 from pygnme import wick, utils
@@ -127,6 +127,7 @@ class CAS_EVCont_obj(
                 abstract_basis_ref=None,
                 abstract_basis_ref_mol=None,
                 abstract_basis_kwargs=None,
+                compress_two_rdm=False,
                 **kwargs):
         """
         Initialize the CAS_EVCont_obj.
@@ -165,6 +166,7 @@ class CAS_EVCont_obj(
         self.abstract_basis_ref = abstract_basis_ref
         self.abstract_basis_ref_mol = abstract_basis_ref_mol
         self.abstract_basis_kwargs = dict(abstract_basis_kwargs or {})
+        self.compress_two_rdm = bool(compress_two_rdm)
 
         self.overlap = None
         self.one_rdm = None
@@ -245,6 +247,7 @@ class CAS_EVCont_obj(
     def vectorize_lowrank(self,hermitian=True):        
         vectorize_lowrank(self,hermitian=hermitian)
         
+    @maintain_two_rdm_compression
     def append_to_rdms(self, mol, state=None, quantel_tag='ref', debug=False):
         """
         Append a new training geometry. See pygnme examples for more information about
@@ -693,6 +696,7 @@ class CAS_EVCont_obj(
                 self.vecs_lowrank = vecs_lowrank
 
     # Experimental: Uncontracted CAS continuation. Can be combined with append_to_rdms once tested
+    @maintain_two_rdm_compression
     def append_to_rdms_separate_determinants(self, mol, state=None, debug=False):
         """
         Append a new training geometry with each determinant as a separate state.
@@ -1481,6 +1485,7 @@ class CAS_EVCont_obj(
 
             self.cascis.append(casci_bra)
 
+    @maintain_two_rdm_compression
     def states_to_rdms(self):
         """
         Construct transition RDMs between given training states (self.cascis)
@@ -1841,6 +1846,7 @@ class CAS_EVCont_obj(
             'overlap': self.overlap,
             'one_rdm': self.one_rdm,
             'two_rdm': self.two_rdm,
+            'compress_two_rdm': self.compress_two_rdm,
             
             # Low-rank specific data (if applicable)
             'diagonal_lr': self.diagonal_lr if self.lowrank else None,
@@ -1918,6 +1924,7 @@ class CAS_EVCont_obj(
                 abstract_basis_ref=abstract_basis_ref,
                 abstract_basis_ref_mol=abstract_basis_ref_mol,
                 abstract_basis_kwargs=abstract_basis_kwargs,
+                compress_two_rdm=cas_data.get('compress_two_rdm', False),
                 **cas_data['kwargs']
             )
         else:
@@ -1934,6 +1941,7 @@ class CAS_EVCont_obj(
                 abstract_basis_ref=abstract_basis_ref,
                 abstract_basis_ref_mol=abstract_basis_ref_mol,
                 abstract_basis_kwargs=abstract_basis_kwargs,
+                compress_two_rdm=cas_data.get('compress_two_rdm', False),
             )
         
         # Restore RDM and overlap data

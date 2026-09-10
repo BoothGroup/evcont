@@ -14,7 +14,7 @@ import shci
 from evcont.electron_integral_utils import get_basis
 from evcont.basis.basis_utils import AbstractBasisMixin
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank, unpack_vectorized_lowrank
-from evcont.solver_evaluation import EVContEvaluationMixin
+from evcont.solver_evaluation import EVContEvaluationMixin, maintain_two_rdm_compression
 from evcont.solver_persistence import EVContPersistenceMixin
 
 ## Helper functions for reading SHCI transition RDMs from postprocessing outputs.
@@ -114,6 +114,7 @@ class SCI_EVCont_obj(
         abstract_basis_ref=None,
         abstract_basis_ref_mol=None,
         abstract_basis_kwargs=None,
+        compress_two_rdm=False,
         **kwargs,
     ):
         if comp_mol is None:
@@ -145,6 +146,7 @@ class SCI_EVCont_obj(
         self.abstract_basis_ref = abstract_basis_ref
         self.abstract_basis_ref_mol = abstract_basis_ref_mol
         self.abstract_basis_kwargs = dict(abstract_basis_kwargs or {})
+        self.compress_two_rdm = bool(compress_two_rdm)
         self.initial_states = initial_states
         if initial_states is None:
             self.initial_states = self._get_initial_states(comp_mol)
@@ -339,6 +341,7 @@ class SCI_EVCont_obj(
             return prefix
         return os.path.join(self.parent_dir, prefix)
 
+    @maintain_two_rdm_compression
     def append_to_rdms(
         self,
         mol,

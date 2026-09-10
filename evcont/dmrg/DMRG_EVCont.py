@@ -7,7 +7,7 @@ from evcont.basis.basis_utils import AbstractBasisMixin
 from evcont.dmrg.converge_dmrg import converge_dmrg
 
 from evcont.dmrg.MPS_orb_rotation import converge_orbital_rotation_mps
-from evcont.solver_evaluation import EVContEvaluationMixin
+from evcont.solver_evaluation import EVContEvaluationMixin, maintain_two_rdm_compression
 from evcont.solver_persistence import EVContPersistenceMixin
 
 from mpi4py import MPI
@@ -538,6 +538,7 @@ class DMRG_EVCont_obj(
         abstract_basis="SAO",
         abstract_basis_ref=None,
         abstract_basis_kwargs=None,
+        compress_two_rdm=False,
     ):
         """
         Initializes the DMRG_EVCont_obj class.
@@ -570,7 +571,9 @@ class DMRG_EVCont_obj(
         self.abstract_basis_ref = abstract_basis_ref
         self.abstract_basis_ref_mol = None
         self.abstract_basis_kwargs = dict(abstract_basis_kwargs or {})
+        self.compress_two_rdm = bool(compress_two_rdm)
 
+    @maintain_two_rdm_compression
     def append_to_rdms(self, mol):
         """
         Append a new training geometry.

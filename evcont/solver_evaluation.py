@@ -1,5 +1,7 @@
 """Common evaluation methods for eigenvector-continuation solver objects."""
 
+from functools import wraps
+
 from evcont.ab_initio_eigenvector_continuation import (
     approximate_multistate_abstract_basis,
     approximate_multistate_lowrank_OAO,
@@ -9,7 +11,35 @@ from evcont.ab_initio_gradients_loewdin import (
     get_multistate_energy_with_grad,
     get_multistate_energy_with_grad_and_NAC,
 )
+from evcont.electron_integral_utils import (
+    compress_electron_exchange_symmetry,
+    restore_electron_exchange_symmetry,
+)
 from evcont.low_rank_utils import vectorize_lowrank
+
+
+def maintain_two_rdm_compression(method):
+    """Keep optional electron-exchange packing across incremental updates."""
+
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        enabled = getattr(self, "compress_two_rdm", False)
+        if enabled and self.two_rdm is not None:
+            if self.two_rdm.ndim == 3:
+                self.two_rdm = restore_electron_exchange_symmetry(
+                    self.two_rdm, self.one_rdm.shape[-1]
+                )
+            elif self.two_rdm.ndim != 6:
+                raise ValueError(
+                    "Incremental 2-RDM storage must have rank 3 or 6"
+                )
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            if enabled and self.two_rdm is not None and self.two_rdm.ndim == 6:
+                self.two_rdm = compress_electron_exchange_symmetry(self.two_rdm)
+
+    return wrapped
 
 
 class EVContEvaluationMixin:

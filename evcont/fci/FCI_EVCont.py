@@ -12,7 +12,7 @@ from pyscf.fci.addons import transform_ci
 from evcont.ab_initio_gradients_loewdin import get_loewdin_trafo
 
 from evcont.low_rank_utils import reduce_2rdm, vectorize_lowrank, unpack_vectorized_lowrank
-from evcont.solver_evaluation import EVContEvaluationMixin
+from evcont.solver_evaluation import EVContEvaluationMixin, maintain_two_rdm_compression
 from evcont.solver_persistence import EVContPersistenceMixin
 
 class FCI_EVCont_obj(
@@ -34,6 +34,7 @@ class FCI_EVCont_obj(
         abstract_basis_ref=None,
         abstract_basis_ref_mol=None,
         abstract_basis_kwargs=None,
+        compress_two_rdm=False,
         **kwargs
     ):
         """
@@ -42,7 +43,7 @@ class FCI_EVCont_obj(
         Args:
             cisolver: The pyscf cisolver routine.
             cibasis: The basis for solving ci for each mol
-                    Note that after computation, the basis is converted to OAO
+                    Note that after computation, the basis is converted to the abstract basis.
             nroots: Number of states to be solved.  Default is 1, the ground state.
             roots_train (list): Indices of states to include in the continuation
             irrep_name (string): If not None, only include states corresponding 
@@ -62,6 +63,7 @@ class FCI_EVCont_obj(
         self.abstract_basis_ref = abstract_basis_ref
         self.abstract_basis_ref_mol = abstract_basis_ref_mol
         self.abstract_basis_kwargs = dict(abstract_basis_kwargs or {})
+        self.compress_two_rdm = bool(compress_two_rdm)
         
         self.nroots = nroots
         if roots_train == None:
@@ -132,6 +134,7 @@ class FCI_EVCont_obj(
     def unpack_vectorized_lowrank(self):
         unpack_vectorized_lowrank(self)
         
+    @maintain_two_rdm_compression
     def append_to_rdms(self, mol):
         """
         Append a new training geometry by growing the t-RDMs.

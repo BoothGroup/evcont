@@ -45,27 +45,22 @@ def compress_electron_exchange_symmetry(h2, diag_multiplier=1.0):
     electron exchange symmetries.
 
     Parameters:
-        h2 (ndarray): Two-electron quantity with four indices.
+        h2 (ndarray): Two-electron quantity with four trailing orbital indices.
         diag_multiplier (float): Multiplicative factor all elements of the diagonal
             are multiplied with (e.g. to take into account double counting in contraction).
 
     Returns:
         np.ndarray: Compressed representation.
     """
-    assert np.all(np.array(h2.shape) == h2.shape[0])
+    h2 = np.asarray(h2)
+    assert h2.ndim >= 4 and len(set(h2.shape[-4:])) == 1
 
-    norb = h2.shape[0]
+    norb = h2.shape[-1]
+    matrix = h2.reshape(h2.shape[:-4] + (norb * norb, norb * norb))
+    rows, columns = np.tril_indices(norb * norb)
+    compressed_repr = matrix[..., rows, columns].copy()
 
-    h2 = h2.reshape(norb * norb, norb * norb)
-
-    h2_diag = np.diag(h2).copy()
-
-    np.fill_diagonal(h2, diag_multiplier * h2_diag)
-
-    compressed_repr = h2[np.tril_indices(norb * norb)].copy()
-
-    # Reverse modification of diagonal to avoid confusion
-    np.fill_diagonal(h2, h2_diag)
+    compressed_repr[..., rows == columns] *= diag_multiplier
 
     return compressed_repr
 
@@ -82,14 +77,24 @@ def restore_electron_exchange_symmetry(h2, norb):
     Returns:
         np.ndarray: 4-index representation.
     """
-    h2_restored = np.zeros((norb * norb, norb * norb))
-    h2_restored[np.tril_indices(norb * norb)] = h2
+    h2 = np.asarray(h2)
+    npair = norb * norb
+    expected = npair * (npair + 1) // 2
+    if h2.shape[-1] != expected:
+        raise ValueError(
+            f"Expected a packed dimension of {expected}, got {h2.shape[-1]}"
+        )
 
-    h2_restored[np.triu_indices(norb * norb)] = (h2_restored.T)[
-        np.triu_indices(norb * norb)
+    h2_restored = np.zeros(h2.shape[:-1] + (npair, npair), dtype=h2.dtype)
+    lower = np.tril_indices(npair)
+    upper = np.triu_indices(npair)
+    h2_restored[..., lower[0], lower[1]] = h2
+
+    h2_restored[..., upper[0], upper[1]] = np.swapaxes(h2_restored, -1, -2)[
+        ..., upper[0], upper[1]
     ]
 
-    return h2_restored.reshape((norb, norb, norb, norb))
+    return h2_restored.reshape(h2.shape[:-1] + (norb, norb, norb, norb))
 
 
 def get_integrals(mol, basis):
