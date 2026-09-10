@@ -5,7 +5,7 @@ import numpy as np
 
 from ebcc import REBCC
 from ebcc.logging import NullLogger
-from pyscf import ao2mo, lib
+from pyscf import ao2mo, lib, scf
 
 from evcont.ccsd.RCCSD_rdm_mixed import make_rdm1_f, make_rdm2_f
 from evcont.ab_initio_eigenvector_continuation import approximate_multistate
@@ -87,6 +87,57 @@ def _zero_amplitude_state(nocc, nvir, dtype=float):
         l1=np.zeros((nvir, nocc), dtype=dtype),
         l2=np.zeros((nvir, nvir, nocc, nocc), dtype=dtype),
     )
+
+
+def _pack_rhf(mf):
+    """Return the pickle-safe numerical state of a PySCF RHF object."""
+
+    if mf is None:
+        return None
+    with_df = getattr(mf, "with_df", None)
+    return {
+        "mol": mf.mol,
+        "density_fitted": with_df is not None,
+        "df_auxbasis": None if with_df is None else with_df.auxbasis,
+        "mo_energy": np.array(mf.mo_energy, copy=True),
+        "mo_coeff": np.array(mf.mo_coeff, copy=True),
+        "mo_occ": np.array(mf.mo_occ, copy=True),
+        "e_tot": float(mf.e_tot),
+        "converged": bool(mf.converged),
+        "scf_summary": dict(mf.scf_summary),
+        "verbose": int(mf.verbose),
+        "max_memory": mf.max_memory,
+        "conv_tol": mf.conv_tol,
+        "conv_tol_grad": mf.conv_tol_grad,
+        "conv_tol_cpscf": mf.conv_tol_cpscf,
+        "max_cycle": mf.max_cycle,
+    }
+
+
+def _unpack_rhf(state):
+    """Rebuild a PySCF RHF wrapper from its pickle-safe numerical state."""
+
+    if state is None:
+        return None
+    mf = scf.RHF(state["mol"])
+    if state["density_fitted"]:
+        mf = mf.density_fit(auxbasis=state["df_auxbasis"])
+    for name in (
+        "mo_energy",
+        "mo_coeff",
+        "mo_occ",
+        "e_tot",
+        "converged",
+        "scf_summary",
+        "verbose",
+        "max_memory",
+        "conv_tol",
+        "conv_tol_grad",
+        "conv_tol_cpscf",
+        "max_cycle",
+    ):
+        setattr(mf, name, state[name])
+    return mf
 
 
 class CCSD_EVCont_obj(
@@ -496,7 +547,15 @@ class CCSD_EVCont_obj(
         return nroots
 
     def _persistence_state(self):
+        """Convert mean fields and CCSD states to pickle-safe data."""
+
         state = dict(self.__dict__)
+        state["_packed_comp_mf"] = _pack_rhf(self.comp_mf)
+        state["_packed_abstract_basis_ref_mf"] = _pack_rhf(
+            self.abstract_basis_ref_mf
+        )
+        state.pop("comp_mf", None)
+        state.pop("abstract_basis_ref_mf", None)
         state["states"] = [
             {name: np.asarray(getattr(ccsd, name)) for name in ("t1", "t2", "l1", "l2")}
             for ccsd in self.states
@@ -504,4 +563,12 @@ class CCSD_EVCont_obj(
         return state
 
     def _restore_persistence_state(self):
+        """Restore mean fields and CCSD states after loading."""
+
         self.states = [SimpleNamespace(**state) for state in self.states]
+        packed_comp_mf = self.__dict__.pop("_packed_comp_mf", None)
+        packed_ref_mf = self.__dict__.pop("_packed_abstract_basis_ref_mf", None)
+        if packed_comp_mf is not None:
+            self.comp_mf = _unpack_rhf(packed_comp_mf)
+        if packed_ref_mf is not None:
+            self.abstract_basis_ref_mf = _unpack_rhf(packed_ref_mf)

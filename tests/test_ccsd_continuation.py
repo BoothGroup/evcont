@@ -209,3 +209,30 @@ def test_ccsd_df_configuration_is_propagated_to_least_change_basis():
 
     assert continuation.abstract_basis_kwargs["density_fit"] is True
     assert continuation.abstract_basis_kwargs["df_basis"] is None
+
+
+@pytest.mark.parametrize("density_fit", [False, True])
+def test_ccsd_checkpoint_round_trip_restores_reference_mean_fields(
+    tmp_path, density_fit
+):
+    continuation = CCSD_EVCont_obj(
+        _h4(1.5),
+        abstract_basis="split_procrustes",
+        abstract_basis_kwargs={"density_fit": density_fit},
+    )
+    expected_comp_coeff = continuation.comp_mf.mo_coeff.copy()
+    expected_ref_coeff = continuation.abstract_basis_ref_mf.mo_coeff.copy()
+    checkpoint = tmp_path / "ccsd.pkl"
+
+    continuation.save(checkpoint)
+    restored = CCSD_EVCont_obj.load(checkpoint)
+
+    assert restored.comp_mf.converged
+    assert restored.abstract_basis_ref_mf.converged
+    assert hasattr(restored.comp_mf, "with_df") is density_fit
+    np.testing.assert_array_equal(restored.comp_mf.mo_coeff, expected_comp_coeff)
+    np.testing.assert_array_equal(
+        restored.abstract_basis_ref_mf.mo_coeff, expected_ref_coeff
+    )
+    restored.get_abstract_basis(_h4(1.6))
+    restored.save(tmp_path / "ccsd-restored.pkl")
