@@ -16,6 +16,7 @@ from evcont.basis.basis_utils import (
     run_hf,
 )
 from evcont.basis.localization_derivatives import orth_ao_derivative
+from evcont.basis.least_change_orbitals import _solve_rank_aware_krylov
 from evcont.basis.split_procrustes_derivatives import (
     ProcrustesDerivativeError,
     procrustes_rotation,
@@ -46,6 +47,37 @@ def test_unknown_basis_is_rejected(h2_molecule):
     assert not is_abstract_basis("not-a-basis")
     with pytest.raises(ValueError, match="Unknown basis_type"):
         get_basis(h2_molecule(), basis_type="not-a-basis")
+
+
+def test_rank_aware_krylov_bisects_singular_rhs_blocks():
+    right_hand_sides = np.arange(12.0).reshape(4, 3)
+
+    def singular_block_solver(_operator, values, **_options):
+        if len(values) > 1:
+            raise np.linalg.LinAlgError("singular projected system")
+        return 2.0 * values
+
+    solution, number_batches, minimum_batch_size = _solve_rank_aware_krylov(
+        singular_block_solver,
+        lambda values: values,
+        right_hand_sides,
+    )
+
+    np.testing.assert_array_equal(solution, 2.0 * right_hand_sides)
+    assert number_batches == 4
+    assert minimum_batch_size == 1
+
+
+def test_rank_aware_krylov_does_not_hide_single_rhs_failure():
+    def singular_solver(_operator, _values, **_options):
+        raise np.linalg.LinAlgError("singular operator")
+
+    with pytest.raises(np.linalg.LinAlgError, match="singular operator"):
+        _solve_rank_aware_krylov(
+            singular_solver,
+            lambda values: values,
+            np.ones((1, 3)),
+        )
 
 
 @pytest.mark.parametrize("basis_name", ["SAO", "meta_lowdin", "canonical"])

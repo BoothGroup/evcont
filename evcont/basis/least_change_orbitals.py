@@ -69,6 +69,46 @@ __all__ = [
 _CPHF_REFINEMENT_BATCH_SIZE = 16
 
 
+def _solve_rank_aware_krylov(
+    solver: Callable[..., np.ndarray],
+    operator: Callable[[np.ndarray], np.ndarray],
+    right_hand_sides: np.ndarray,
+    **solver_options: Any,
+) -> tuple[np.ndarray, int, int]:
+    """Solve a block system, bisecting RHS blocks that are rank deficient."""
+    right_hand_sides = np.asarray(right_hand_sides)
+    if right_hand_sides.ndim != 2 or right_hand_sides.shape[0] == 0:
+        raise ValueError("right_hand_sides must be a nonempty two-dimensional array")
+
+    try:
+        solution = np.asarray(
+            solver(operator, right_hand_sides, **solver_options)
+        ).reshape(right_hand_sides.shape)
+    except np.linalg.LinAlgError:
+        if right_hand_sides.shape[0] == 1:
+            raise
+        midpoint = right_hand_sides.shape[0] // 2
+        left, left_batches, left_minimum = _solve_rank_aware_krylov(
+            solver,
+            operator,
+            right_hand_sides[:midpoint],
+            **solver_options,
+        )
+        right, right_batches, right_minimum = _solve_rank_aware_krylov(
+            solver,
+            operator,
+            right_hand_sides[midpoint:],
+            **solver_options,
+        )
+        return (
+            np.concatenate((left, right), axis=0),
+            left_batches + right_batches,
+            min(left_minimum, right_minimum),
+        )
+
+    return solution, 1, right_hand_sides.shape[0]
+
+
 class GaugeConditionWarning(RuntimeWarning):
     """Warning that a pointwise orbital gauge is becoming ill-conditioned."""
 
@@ -1871,9 +1911,10 @@ def _construct_nuclear_derivatives(
 
         def apply_cphf_correction(
             residual: np.ndarray, batch_size: int
-        ) -> tuple[int, int]:
+        ) -> tuple[int, int, int]:
             number_batches = 0
             number_active_right_hand_sides = 0
+            minimum_batch_size = 0
             for start in range(0, nperturbation, batch_size):
                 stop = min(start + batch_size, nperturbation)
                 right_hand_sides = (
@@ -1908,16 +1949,19 @@ def _construct_nuclear_derivatives(
                     return result[0] if input_was_vector else result
 
                 try:
-                    normalized_correction = np.asarray(
-                        pyscf_lib.krylov(
-                            correction_operator,
-                            normalized_right_hand_sides,
-                            tol=correction_tolerance,
-                            max_cycle=cphf_max_cycle,
-                            lindep=correction_lindep,
-                            verbose=getattr(mf, "verbose", 0),
-                        )
-                    ).reshape(number_active, -1)
+                    (
+                        normalized_correction,
+                        solve_batches,
+                        solve_minimum_batch_size,
+                    ) = _solve_rank_aware_krylov(
+                        pyscf_lib.krylov,
+                        correction_operator,
+                        normalized_right_hand_sides,
+                        tol=correction_tolerance,
+                        max_cycle=cphf_max_cycle,
+                        lindep=correction_lindep,
+                        verbose=getattr(mf, "verbose", 0),
+                    )
                 except Exception as exc:
                     raise RuntimeError(
                         "PySCF block CPHF residual refinement failed for nuclear "
@@ -1939,9 +1983,19 @@ def _construct_nuclear_derivatives(
                     cphf_u[
                         start + int(local_index), canonical_vir_mask, :
                     ] += correction[correction_index]
-                number_batches += 1
+                number_batches += solve_batches
                 number_active_right_hand_sides += number_active
-            return number_batches, number_active_right_hand_sides
+                if minimum_batch_size == 0:
+                    minimum_batch_size = solve_minimum_batch_size
+                else:
+                    minimum_batch_size = min(
+                        minimum_batch_size, solve_minimum_batch_size
+                    )
+            return (
+                number_batches,
+                number_active_right_hand_sides,
+                minimum_batch_size,
+            )
 
         # PySCF's Krylov implementation can solve several right-hand sides at
         # once, but its linear-dependence screening acts on their absolute
@@ -1954,13 +2008,21 @@ def _construct_nuclear_derivatives(
         remaining_virtual_residual = virtual_residual
         current_batch_size = refinement_batch_size
         while True:
-            pass_batches, pass_active = apply_cphf_correction(
-                remaining_virtual_residual, current_batch_size
-            )
+            (
+                pass_batches,
+                pass_active,
+                pass_minimum_batch_size,
+            ) = apply_cphf_correction(remaining_virtual_residual, current_batch_size)
             refinement_passes += 1
             refinement_batches += pass_batches
             refinement_active_right_hand_sides += pass_active
-            refinement_minimum_batch_size = current_batch_size
+            if pass_minimum_batch_size:
+                if refinement_minimum_batch_size == 0:
+                    refinement_minimum_batch_size = pass_minimum_batch_size
+                else:
+                    refinement_minimum_batch_size = min(
+                        refinement_minimum_batch_size, pass_minimum_batch_size
+                    )
             cphf_residual, remaining_virtual_residual, _ = (
                 canonical_cphf_residual(cphf_u)
             )
