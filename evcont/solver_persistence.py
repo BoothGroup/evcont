@@ -1,6 +1,8 @@
 """Pickle persistence shared by continuation solver objects."""
 
+import os
 import pickle
+import tempfile
 
 
 class EVContPersistenceMixin:
@@ -10,8 +12,28 @@ class EVContPersistenceMixin:
         return self.__dict__
 
     def save(self, filename):
-        with open(filename, "wb") as handle:
-            pickle.dump(self._persistence_state(), handle, pickle.HIGHEST_PROTOCOL)
+        target = os.path.abspath(os.fspath(filename))
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=os.path.dirname(target),
+                prefix=f".{os.path.basename(target)}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary = handle.name
+                pickle.dump(
+                    self._persistence_state(), handle, pickle.HIGHEST_PROTOCOL
+                )
+            os.replace(temporary, target)
+        except Exception:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
+            raise
 
     @classmethod
     def load(cls, filename):

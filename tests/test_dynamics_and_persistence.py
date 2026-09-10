@@ -38,6 +38,22 @@ def test_persistence_round_trip_without_calling_constructor(tmp_path):
     assert loaded.restored
 
 
+def test_failed_persistence_does_not_leave_or_replace_checkpoint(tmp_path):
+    path = tmp_path / "object.pkl"
+    path.write_bytes(b"existing checkpoint")
+    original = Persisted()
+    original.unpickleable = open(__file__)
+
+    try:
+        with pytest.raises(TypeError, match="cannot pickle"):
+            original.save(path)
+    finally:
+        original.unpickleable.close()
+
+    assert path.read_bytes() == b"existing checkpoint"
+    assert list(tmp_path.iterdir()) == [path]
+
+
 def test_checkpoint_helpers_choose_numeric_latest_suffix(tmp_path):
     for index in (2, 10, 3):
         _checkpoint_path(index, tmp_path).touch()
