@@ -20,6 +20,7 @@ from evcont.basis.split_procrustes_derivatives import (
     ProcrustesDerivativeError,
     procrustes_rotation,
     procrustes_rotation_derivative,
+    rhf_mo_coefficient_derivatives,
 )
 
 
@@ -74,6 +75,16 @@ def test_run_hf_returns_converged_reusable_mean_field(h2_molecule):
         np.eye(mol.nao),
         atol=1e-10,
     )
+
+
+def test_rhf_mo_coefficient_derivative_loads_pyscf_hessian(h2_molecule):
+    mol = h2_molecule(1.4, basis="6-31g")
+    mf = run_hf(mol)
+
+    derivative = rhf_mo_coefficient_derivatives(mf, atmlst=[0])
+
+    assert derivative.shape == (1, 3, mol.nao, mol.nao)
+    assert np.all(np.isfinite(derivative))
 
 
 def test_sao_basis_derivative_satisfies_metric_orthonormality_derivative(h2_molecule):

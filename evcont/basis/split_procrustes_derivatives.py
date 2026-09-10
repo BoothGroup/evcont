@@ -20,6 +20,7 @@ from typing import Sequence
 
 import numpy as np
 from pyscf import gto, scf
+from pyscf.hessian import rhf as rhf_hessian
 
 from evcont.basis.basis_utils import run_hf
 
@@ -392,7 +393,12 @@ def rhf_mo_coefficient_derivatives(
     if nao != nmo:
         raise ValueError("A complete square AO-to-MO coefficient matrix is required")
 
-    hessian = mf.Hessian()
+    hessian_factory = getattr(mf, "Hessian", None)
+    hessian = (
+        rhf_hessian.Hessian(mf)
+        if hessian_factory is None
+        else hessian_factory()
+    )
     hessian.max_cycle = cphf_max_cycle
     hessian.level_shift = cphf_level_shift
     h1ao = hessian.make_h1(c, mo_occ, chkfile=None, atmlst=atoms)
