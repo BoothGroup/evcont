@@ -267,7 +267,7 @@ def converge_EVCont_MD(
     max_iter=100,
     prune_irrelevant_data=False, # Might not work with current updates
     data_addition="weighted_highest_peak_ham",
-    learning_exponent=2.0,
+    learning_exponent=0.5,
     restart=True,
     model_dir="iterative-models",
     return_rdms=False,

@@ -123,7 +123,7 @@ class CAS_EVCont_obj(
                 nroots=1, solver='SS-CASSCF',
                 software='pyscf', quantel_path=None, solutions_to_reconverge=None,
                 lowrank=False,
-                abstract_basis="SAO",
+                abstract_basis="meta-lowdin",
                 abstract_basis_ref=None,
                 abstract_basis_ref_mol=None,
                 abstract_basis_kwargs=None,
@@ -1897,7 +1897,7 @@ class CAS_EVCont_obj(
         software = cas_data.get('software', 'pyscf')
         quantel_path = cas_data.get('quantel_path', None)
         solutions_to_reconverge = cas_data.get('solutions_to_reconverge', None)
-        abstract_basis = cas_data.get('abstract_basis', 'SAO')
+        abstract_basis = cas_data.get('abstract_basis', 'meta-lowdin')
         abstract_basis_ref = cas_data.get('abstract_basis_ref', None)
         abstract_basis_ref_mol_data = cas_data.get('abstract_basis_ref_mol')
         abstract_basis_ref_mol = None

@@ -110,7 +110,7 @@ class SCI_EVCont_obj(
         initial_states=None,
         parent_dir=None,
         lowrank=False,
-        abstract_basis="SAO",
+        abstract_basis="meta-lowdin",
         abstract_basis_ref=None,
         abstract_basis_ref_mol=None,
         abstract_basis_kwargs=None,

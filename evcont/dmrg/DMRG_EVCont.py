@@ -27,7 +27,7 @@ def append_to_rdms_OAO_basis(
     nroots=1,
     roots_train=[1],
     mem=5,
-    abstract_basis="SAO",
+    abstract_basis="meta-lowdin",
     abstract_basis_ref=None,
     abstract_basis_kwargs=None,
 ):
@@ -159,7 +159,7 @@ def append_to_rdms_rerun(
     converge_dmrg_fun=converge_dmrg,
     enforce_symmetric=True,
     mem=5,
-    abstract_basis="SAO",
+    abstract_basis="meta-lowdin",
     abstract_basis_ref=None,
     abstract_basis_kwargs=None,
 ):
@@ -362,7 +362,7 @@ def append_to_rdms_orbital_rotation(
     converge_dmrg_fun=converge_dmrg,
     rotation_thresh=1.0e-6,
     mem=5,
-    abstract_basis="SAO",
+    abstract_basis="meta-lowdin",
     abstract_basis_ref=None,
     abstract_basis_kwargs=None,
 ):
@@ -535,7 +535,7 @@ class DMRG_EVCont_obj(
         nroots=1,
         roots_train=None,
         mem=5,
-        abstract_basis="SAO",
+        abstract_basis="meta-lowdin",
         abstract_basis_ref=None,
         abstract_basis_kwargs=None,
         compress_two_rdm=False,
